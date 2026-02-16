@@ -1,0 +1,332 @@
+"""
+Core Risk Management Engine.
+Implements prop-firm style risk rules with tamper-proof enforcement.
+
+Rules enforced:
+1. Daily max loss limit → lockout
+2. Daily profit target → lockout (optional)
+3. Profit lock (lock X% of profits once threshold hit)
+4. Trailing drawdown from realized equity high water mark
+5. Cooldown timer after losses
+6. Max consecutive losses → extended cooldown
+7. Max open positions limit
+8. Max single trade risk
+9. Max order quantity
+10. Spread-aware P&L tracking for credit/debit spreads
+"""
+
+import logging
+import time
+from datetime import datetime
+from typing import Optional
+
+from config import Config
+from state_manager import StateManager
+
+logger = logging.getLogger(__name__)
+
+
+class RiskDecision:
+    """Result of a risk check."""
+
+    def __init__(self, allowed: bool, reason: str = "", action: str = ""):
+        self.allowed = allowed
+        self.reason = reason
+        self.action = action  # "lockout", "cooldown", "block", ""
+
+    def __bool__(self):
+        return self.allowed
+
+    def __repr__(self):
+        if self.allowed:
+            return "RiskDecision(ALLOWED)"
+        return f"RiskDecision(BLOCKED: {self.reason})"
+
+
+class RiskEngine:
+    """
+    Evaluates risk rules and enforces limits.
+    This is the brain of the system - it decides whether trading can continue.
+    """
+
+    def __init__(self, state: StateManager):
+        self.state = state
+        logger.info("Risk engine initialized with limits: max_loss=%.0f, profit_target=%.0f, "
+                     "profit_lock_threshold=%.0f @ %d%%",
+                     Config.DAILY_MAX_LOSS, Config.DAILY_PROFIT_TARGET,
+                     Config.PROFIT_LOCK_THRESHOLD, Config.PROFIT_LOCK_PERCENTAGE)
+
+    # ── Main Check: Can We Trade? ──────────────────────────────────────
+
+    def can_trade(self) -> RiskDecision:
+        """
+        Master check: should trading be allowed right now?
+        Checks all rules in priority order.
+        """
+        # 1. Already locked out (cannot be reversed for the day)
+        if self.state.is_locked_out:
+            return RiskDecision(False, f"Locked out: {self.state.get('lockout_reason')}",
+                                "lockout")
+
+        # 2. Cooling down
+        if self.state.is_cooling_down:
+            remaining = self.state.cooldown_remaining
+            return RiskDecision(False,
+                                f"Cooldown active: {remaining}s remaining - "
+                                f"{self.state.get('cooldown_reason')}",
+                                "cooldown")
+
+        # 3. Daily max loss breached
+        loss_check = self._check_daily_loss()
+        if not loss_check:
+            return loss_check
+
+        # 4. Profit lock floor breached
+        profit_lock_check = self._check_profit_lock()
+        if not profit_lock_check:
+            return profit_lock_check
+
+        # 5. Trailing drawdown breached
+        drawdown_check = self._check_trailing_drawdown()
+        if not drawdown_check:
+            return drawdown_check
+
+        # 6. Daily profit target reached (optional lockout)
+        if Config.DAILY_PROFIT_TARGET > 0:
+            if self.state.realized_pnl >= Config.DAILY_PROFIT_TARGET:
+                self.state.activate_lockout(
+                    f"Profit target reached: ₹{self.state.realized_pnl:,.0f}")
+                return RiskDecision(False, "Daily profit target reached", "lockout")
+
+        return RiskDecision(True)
+
+    def check_new_order(self, order_quantity: int, num_open_positions: int,
+                        estimated_risk: float = 0) -> RiskDecision:
+        """
+        Check if a specific new order should be allowed.
+        Called before any order placement.
+        """
+        # First check general trading permission
+        trade_check = self.can_trade()
+        if not trade_check:
+            return trade_check
+
+        # Max open positions
+        if num_open_positions >= Config.MAX_OPEN_POSITIONS:
+            return RiskDecision(False,
+                                f"Max positions ({Config.MAX_OPEN_POSITIONS}) reached",
+                                "block")
+
+        # Max order quantity
+        if order_quantity > Config.MAX_ORDER_QUANTITY:
+            return RiskDecision(False,
+                                f"Order qty {order_quantity} exceeds max {Config.MAX_ORDER_QUANTITY}",
+                                "block")
+
+        # Single trade risk limit
+        if estimated_risk > 0 and estimated_risk > Config.MAX_SINGLE_TRADE_RISK:
+            return RiskDecision(False,
+                                f"Trade risk ₹{estimated_risk:,.0f} exceeds max "
+                                f"₹{Config.MAX_SINGLE_TRADE_RISK:,.0f}",
+                                "block")
+
+        return RiskDecision(True)
+
+    # ── P&L Update & Rule Evaluation ───────────────────────────────────
+
+    def evaluate_pnl(self, realized_pnl: float, unrealized_pnl: float) -> Optional[str]:
+        """
+        Called every monitor cycle with current P&L.
+        Evaluates all rules and triggers actions.
+        Returns action taken or None.
+        """
+        self.state.update_pnl(realized_pnl, unrealized_pnl)
+        total_pnl = realized_pnl + unrealized_pnl
+
+        # ── Check daily max loss ───────────────────────────────────────
+        if total_pnl <= -Config.DAILY_MAX_LOSS:
+            self.state.activate_lockout(
+                f"Daily loss limit hit: ₹{total_pnl:,.0f} "
+                f"(limit: ₹{-Config.DAILY_MAX_LOSS:,.0f})")
+            return "lockout_max_loss"
+
+        # ── Check profit lock activation ───────────────────────────────
+        if (not self.state.profit_lock_active and
+                realized_pnl >= Config.PROFIT_LOCK_THRESHOLD):
+            lock_pct = Config.PROFIT_LOCK_PERCENTAGE / 100
+            floor = realized_pnl * lock_pct
+            self.state.activate_profit_lock(realized_pnl, floor)
+            logger.info("Profit lock triggered at ₹%.0f, floor set to ₹%.0f",
+                        realized_pnl, floor)
+            return "profit_lock_activated"
+
+        # ── Check profit lock floor breach ─────────────────────────────
+        if self.state.profit_lock_active:
+            floor = self.state.profit_lock_floor
+            if realized_pnl < floor:
+                self.state.activate_lockout(
+                    f"Profit lock floor breached: P&L ₹{realized_pnl:,.0f} "
+                    f"fell below floor ₹{floor:,.0f}")
+                return "lockout_profit_lock"
+
+        # ── Check trailing drawdown ────────────────────────────────────
+        if Config.TRAILING_DRAWDOWN_ENABLED and realized_pnl > 0:
+            hwm = self.state.high_water_mark
+            if realized_pnl > hwm:
+                hwm = realized_pnl
+
+            drawdown_limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100)
+            drawdown = hwm - realized_pnl
+            self.state.update_trailing_drawdown(True, hwm, drawdown)
+
+            if drawdown >= drawdown_limit and hwm >= Config.PROFIT_LOCK_THRESHOLD:
+                self.state.activate_lockout(
+                    f"Trailing drawdown limit hit: drew down ₹{drawdown:,.0f} "
+                    f"from HWM ₹{hwm:,.0f} (limit: {Config.TRAILING_DRAWDOWN_PERCENTAGE}%)")
+                return "lockout_trailing_drawdown"
+
+        return None
+
+    def evaluate_trade_result(self, trade_pnl: float, trade_info: dict):
+        """
+        Called after each trade completes.
+        Evaluates consecutive loss rules and triggers cooldowns.
+        """
+        self.state.record_trade({**trade_info, "pnl": trade_pnl})
+
+        if trade_pnl < 0:
+            consecutive = self.state.consecutive_losses
+
+            # Single loss cooldown
+            if abs(trade_pnl) >= Config.MAX_SINGLE_TRADE_RISK * 0.8:
+                self.state.activate_cooldown(
+                    Config.COOLDOWN_AFTER_LOSS,
+                    f"Large loss: ₹{trade_pnl:,.0f}")
+
+            # Consecutive losses cooldown
+            if consecutive >= Config.CONSECUTIVE_LOSS_COUNT:
+                self.state.activate_cooldown(
+                    Config.COOLDOWN_AFTER_CONSECUTIVE_LOSSES,
+                    f"{consecutive} consecutive losses")
+
+    # ── Private Rule Checks ────────────────────────────────────────────
+
+    def _check_daily_loss(self) -> RiskDecision:
+        """Check if daily loss limit is breached."""
+        total = self.state.total_pnl
+        if total <= -Config.DAILY_MAX_LOSS:
+            self.state.activate_lockout(
+                f"Daily loss limit: ₹{total:,.0f}")
+            return RiskDecision(False, "Daily loss limit breached", "lockout")
+        return RiskDecision(True)
+
+    def _check_profit_lock(self) -> RiskDecision:
+        """Check if profit lock floor is breached."""
+        if not self.state.profit_lock_active:
+            return RiskDecision(True)
+        if self.state.realized_pnl < self.state.profit_lock_floor:
+            self.state.activate_lockout(
+                f"Profit lock floor breached: ₹{self.state.realized_pnl:,.0f} "
+                f"< floor ₹{self.state.profit_lock_floor:,.0f}")
+            return RiskDecision(False, "Profit lock floor breached", "lockout")
+        return RiskDecision(True)
+
+    def _check_trailing_drawdown(self) -> RiskDecision:
+        """Check trailing drawdown from HWM."""
+        if not Config.TRAILING_DRAWDOWN_ENABLED:
+            return RiskDecision(True)
+        if not self.state.get("trailing_drawdown_active"):
+            return RiskDecision(True)
+
+        hwm = self.state.high_water_mark
+        if hwm < Config.PROFIT_LOCK_THRESHOLD:
+            return RiskDecision(True)
+
+        drawdown = hwm - self.state.realized_pnl
+        limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100)
+        if drawdown >= limit:
+            self.state.activate_lockout(
+                f"Trailing drawdown: ₹{drawdown:,.0f} from HWM ₹{hwm:,.0f}")
+            return RiskDecision(False, "Trailing drawdown limit breached", "lockout")
+        return RiskDecision(True)
+
+    # ── Status Reporting ───────────────────────────────────────────────
+
+    def get_risk_status(self) -> dict:
+        """Get comprehensive risk status for dashboard."""
+        realized = self.state.realized_pnl
+        unrealized = self.state.unrealized_pnl
+        total = realized + unrealized
+
+        # Calculate distances to limits
+        loss_remaining = Config.DAILY_MAX_LOSS + total
+        profit_remaining = Config.DAILY_PROFIT_TARGET - realized if Config.DAILY_PROFIT_TARGET > 0 else None
+
+        # Profit lock info
+        profit_lock_info = {}
+        if self.state.profit_lock_active:
+            profit_lock_info = {
+                "active": True,
+                "lock_level": self.state.get("profit_lock_level"),
+                "floor": self.state.profit_lock_floor,
+                "buffer": realized - self.state.profit_lock_floor,
+            }
+        else:
+            distance_to_lock = Config.PROFIT_LOCK_THRESHOLD - realized
+            profit_lock_info = {
+                "active": False,
+                "threshold": Config.PROFIT_LOCK_THRESHOLD,
+                "distance": distance_to_lock,
+            }
+
+        # Trailing drawdown info
+        drawdown_info = {}
+        if Config.TRAILING_DRAWDOWN_ENABLED:
+            hwm = self.state.high_water_mark
+            drawdown = hwm - realized if hwm > 0 else 0
+            limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100) if hwm > 0 else 0
+            drawdown_info = {
+                "enabled": True,
+                "high_water_mark": hwm,
+                "current_drawdown": drawdown,
+                "drawdown_limit": limit,
+                "buffer": limit - drawdown if limit > 0 else 0,
+            }
+
+        return {
+            "can_trade": self.can_trade().allowed,
+            "lockout": {
+                "active": self.state.is_locked_out,
+                "reason": self.state.get("lockout_reason", ""),
+                "time": self.state.get("lockout_time"),
+            },
+            "cooldown": {
+                "active": self.state.is_cooling_down,
+                "remaining_seconds": self.state.cooldown_remaining,
+                "reason": self.state.get("cooldown_reason", ""),
+            },
+            "pnl": {
+                "realized": realized,
+                "unrealized": unrealized,
+                "total": total,
+                "peak": self.state.get("peak_pnl", 0),
+            },
+            "limits": {
+                "daily_max_loss": Config.DAILY_MAX_LOSS,
+                "loss_remaining": loss_remaining,
+                "loss_used_pct": (1 - loss_remaining / Config.DAILY_MAX_LOSS) * 100 if Config.DAILY_MAX_LOSS > 0 else 0,
+                "profit_target": Config.DAILY_PROFIT_TARGET,
+                "profit_remaining": profit_remaining,
+            },
+            "profit_lock": profit_lock_info,
+            "trailing_drawdown": drawdown_info,
+            "trades": {
+                "total": self.state.get("total_trades", 0),
+                "winners": self.state.get("winning_trades", 0),
+                "losers": self.state.get("losing_trades", 0),
+                "consecutive_losses": self.state.consecutive_losses,
+                "win_rate": (self.state.get("winning_trades", 0) /
+                             max(1, self.state.get("total_trades", 1))) * 100,
+            },
+            "kill_switch": self.state.get("kill_switch_activated", False),
+        }
