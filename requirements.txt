@@ -1,4 +1,4 @@
-dhanhq>=2.1.0
+dhanhq>=2.0.0,!=2.1.0
 flask>=3.0.0
 flask-socketio>=5.3.0
 apscheduler>=3.10.0

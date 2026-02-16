@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from dhanhq import DhanContext, dhanhq, MarketFeed, OrderUpdate
+from dhanhq import dhanhq, DhanFeed, OrderSocket
 
 from config import Config
 
@@ -28,11 +28,12 @@ class DhanAPI:
     BANKNIFTY_SECURITY_ID = 25
 
     def __init__(self):
-        self.context = DhanContext(Config.DHAN_CLIENT_ID, Config.DHAN_ACCESS_TOKEN)
-        self.dhan = dhanhq(self.context)
+        self.client_id = Config.DHAN_CLIENT_ID
+        self.access_token = Config.DHAN_ACCESS_TOKEN
+        self.dhan = dhanhq(self.client_id, self.access_token)
         self._order_update_client = None
         self._market_feed = None
-        logger.info("Dhan API initialized for client: %s", Config.DHAN_CLIENT_ID)
+        logger.info("Dhan API initialized for client: %s", self.client_id)
 
     # ── Order Management ───────────────────────────────────────────────
 
@@ -234,15 +235,9 @@ class DhanAPI:
             raise
 
     def get_kill_switch_status(self) -> str:
-        """Check current kill switch status."""
-        try:
-            response = self.dhan.kill_switch_status()
-            if isinstance(response, dict):
-                return response.get("killSwitchStatus", "UNKNOWN")
-            return "UNKNOWN"
-        except Exception as e:
-            logger.error("Failed to get kill switch status: %s", e)
-            return "UNKNOWN"
+        """Check current kill switch status. Not available in dhanhq 2.0.x."""
+        logger.debug("kill_switch_status not available in dhanhq 2.0.x")
+        return "UNKNOWN"
 
     # ── Options Chain & Market Data ────────────────────────────────────
 
@@ -388,19 +383,19 @@ class DhanAPI:
 
     # ── Real-time Feeds ────────────────────────────────────────────────
 
-    def start_order_updates(self, callback) -> OrderUpdate:
+    def start_order_updates(self, callback) -> OrderSocket:
         """Start receiving real-time order updates via websocket."""
-        self._order_update_client = OrderUpdate(self.context)
-        self._order_update_client.on_update = callback
+        self._order_update_client = OrderSocket(self.client_id, self.access_token)
+        self._order_update_client.handle_order_update = callback
         self._order_update_client.connect_to_dhan_websocket_sync()
         return self._order_update_client
 
-    def start_market_feed(self, instruments: list, callback) -> MarketFeed:
+    def start_market_feed(self, instruments: list, callback) -> DhanFeed:
         """
         Start real-time market feed.
         instruments: [(exchange_segment_int, "security_id", feed_type)]
         """
-        self._market_feed = MarketFeed(self.context, instruments, version="v2")
+        self._market_feed = DhanFeed(self.client_id, self.access_token, instruments, version="v2")
         self._market_feed.run_forever()
         return self._market_feed
 
