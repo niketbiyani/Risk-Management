@@ -23,7 +23,8 @@ from dhan_api import DhanAPI
 from state_manager import StateManager
 from risk_engine import RiskEngine
 from monitor import PositionMonitor
-from dashboard import run_dashboard, emit_status_update
+from dashboard import run_dashboard, emit_status_update, set_instrument_cache
+from instrument_cache import InstrumentCache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -101,6 +102,16 @@ def run_full():
         print("\nPlease configure your .env file. See .env.example for reference.")
         sys.exit(1)
 
+    # Load instrument data for search and lot size lookups
+    logger.info("Loading instrument data from Dhan...")
+    instrument_cache = InstrumentCache()
+    try:
+        instrument_cache.load()
+        logger.info("Loaded %d instruments", instrument_cache.count)
+    except Exception as e:
+        logger.warning("Failed to load instruments (search will be unavailable): %s", e)
+    set_instrument_cache(instrument_cache)
+
     monitor = PositionMonitor()
 
     # Start monitor in background thread
@@ -145,6 +156,12 @@ def main():
             for e in errors:
                 logger.error("Config error: %s", e)
             sys.exit(1)
+        instrument_cache = InstrumentCache()
+        try:
+            instrument_cache.load()
+        except Exception:
+            pass
+        set_instrument_cache(instrument_cache)
         monitor = PositionMonitor()
         logger.info("Dashboard starting on http://%s:%d", Config.DASHBOARD_HOST, Config.DASHBOARD_PORT)
         run_dashboard(monitor)

@@ -45,6 +45,14 @@ class Config:
     # Monitor
     MONITOR_INTERVAL: int = int(os.getenv("MONITOR_INTERVAL", "2"))
 
+    # Position Sizing Defaults
+    DEFAULT_RISK_AMOUNT: float = float(os.getenv("DEFAULT_RISK_AMOUNT", "2000"))
+    DEFAULT_PRODUCT_TYPE: str = os.getenv("DEFAULT_PRODUCT_TYPE", "INTRADAY")
+
+    # Quick SL/TP offsets (points, shown as buttons on positions)
+    QUICK_SL_OFFSETS: list = [50, 100, 200]
+    QUICK_TP_OFFSETS: list = [100, 200, 500]
+
     # Trading Hours (IST)
     MARKET_OPEN_HOUR: int = 9
     MARKET_OPEN_MINUTE: int = 15

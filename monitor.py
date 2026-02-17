@@ -22,6 +22,7 @@ from dhan_api import DhanAPI
 from state_manager import StateManager
 from risk_engine import RiskEngine
 from trade_manager import TradeManager
+from order_interceptor import OrderInterceptor
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class PositionMonitor:
         self.state = StateManager()
         self.risk = RiskEngine(self.state)
         self.trade_mgr = TradeManager(self.api)
+        self.interceptor = OrderInterceptor(self.api, self.risk, self.state)
 
         self._running = False
         self._lock = threading.Lock()
@@ -220,6 +222,13 @@ class PositionMonitor:
                 product_type=trigger["product_type"],
                 price=0,
             )
+
+            # Notify dashboard clients
+            try:
+                from dashboard import emit_sl_tp_trigger
+                emit_sl_tp_trigger(trigger)
+            except Exception:
+                pass  # Dashboard may not be running
         except Exception as e:
             logger.error("Failed to execute %s: %s", trigger["action"], e)
 

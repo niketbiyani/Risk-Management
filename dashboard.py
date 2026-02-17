@@ -1,7 +1,7 @@
 """
 Web Dashboard for the Trade Management Platform.
 Real-time monitoring via Flask + SocketIO with auto-refresh.
-Shows P&L, risk status, positions, spreads, and trade management controls.
+Shows P&L, risk status, positions, spreads, order placement, and trade management controls.
 """
 
 import json
@@ -20,13 +20,19 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = "risk-mgmt-dashboard"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
-# Reference to monitor instance (set at startup)
+# Reference to monitor instance and instrument cache (set at startup)
 _monitor = None
+_instrument_cache = None
 
 
 def set_monitor(monitor):
     global _monitor
     _monitor = monitor
+
+
+def set_instrument_cache(cache):
+    global _instrument_cache
+    _instrument_cache = cache
 
 
 DASHBOARD_HTML = """
@@ -203,8 +209,12 @@ DASHBOARD_HTML = """
         }
         .btn-sl { background: #da3633; color: white; }
         .btn-tp { background: #238636; color: white; }
+        .btn-buy { background: #238636; color: white; }
+        .btn-sell { background: #da3633; color: white; }
         .btn-danger { background: #da3633; color: white; }
+        .btn-neutral { background: #30363d; color: #e0e6ed; }
         .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn-xs { padding: 2px 8px; font-size: 11px; border-radius: 4px; }
 
         .trade-log {
             max-height: 300px;
@@ -217,6 +227,140 @@ DASHBOARD_HTML = """
             display: flex;
             justify-content: space-between;
         }
+
+        /* Order Panel */
+        .order-panel { margin-top: 16px; }
+        .order-panel .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            padding-bottom: 12px;
+        }
+        .order-panel .panel-header h3 { margin-bottom: 0; cursor: pointer; }
+        .order-panel .panel-body { display: none; }
+        .order-panel.open .panel-body { display: block; }
+        .order-panel .toggle-icon { color: #8b949e; font-size: 14px; transition: transform 0.2s; }
+        .order-panel.open .toggle-icon { transform: rotate(180deg); }
+
+        .form-input {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            color: #e0e6ed;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            width: 100%;
+        }
+        .form-input:focus { border-color: #58a6ff; outline: none; }
+        .form-input::placeholder { color: #484f58; }
+        .form-select {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            color: #e0e6ed;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            width: 100%;
+            cursor: pointer;
+        }
+        .form-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+
+        /* Instrument Search Dropdown */
+        .search-wrapper { position: relative; }
+        .search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 0 0 8px 8px;
+            max-height: 300px;
+            overflow-y: auto;
+            z-index: 100;
+            display: none;
+        }
+        .search-item {
+            padding: 10px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid #21262d;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .search-item:hover { background: #1c2128; }
+        .search-item .sym { font-weight: 600; font-size: 13px; }
+        .search-item .meta { color: #8b949e; font-size: 11px; }
+
+        /* Calc Results */
+        .calc-results {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 12px;
+            display: none;
+        }
+        .calc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+        .calc-item .label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+        .calc-item .val { font-size: 18px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+        /* Quick SL/TP buttons */
+        .quick-btns { display: flex; gap: 4px; flex-wrap: wrap; }
+        .quick-btns button {
+            padding: 2px 8px;
+            font-size: 11px;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        /* Inline SL/TP form row */
+        .inline-sltp {
+            background: #1c2128;
+            padding: 12px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .inline-sltp input {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            color: #e0e6ed;
+            padding: 4px 8px;
+            border-radius: 4px;
+            width: 90px;
+            font-size: 12px;
+        }
+
+        /* Toast notification */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .toast {
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            animation: slideIn 0.3s ease, fadeOut 0.3s ease 3.7s;
+            max-width: 350px;
+        }
+        .toast-success { background: #0d4429; border: 1px solid #238636; color: #3fb950; }
+        .toast-error { background: #4a1d1d; border: 1px solid #da3633; color: #f85149; }
+        .toast-warning { background: #3d2e00; border: 1px solid #9e6a03; color: #d29922; }
+        .toast-info { background: #0c2d6b; border: 1px solid #1f6feb; color: #58a6ff; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
 
         .footer {
             text-align: center;
@@ -249,17 +393,20 @@ DASHBOARD_HTML = """
         <p id="cooldown-reason" style="color:#8b949e;margin-top:8px;font-size:13px;"></p>
     </div>
 
+    <!-- Toast container -->
+    <div class="toast-container" id="toast-container"></div>
+
     <!-- Main P&L Cards -->
     <div class="grid grid-main">
         <div class="card">
             <h3>Total P&L</h3>
-            <div class="value" id="total-pnl">₹0</div>
-            <div class="sub" id="pnl-breakdown">R: ₹0 | U: ₹0</div>
+            <div class="value" id="total-pnl">&#8377;0</div>
+            <div class="sub" id="pnl-breakdown">R: &#8377;0 | U: &#8377;0</div>
         </div>
         <div class="card">
             <h3>Loss Buffer</h3>
-            <div class="value" id="loss-remaining">₹0</div>
-            <div class="sub" id="loss-limit-info">of ₹0 limit</div>
+            <div class="value" id="loss-remaining">&#8377;0</div>
+            <div class="sub" id="loss-limit-info">of &#8377;0 limit</div>
             <div class="progress-bar">
                 <div class="progress-fill" id="loss-bar" style="width:0%;background:#3fb950;"></div>
             </div>
@@ -282,11 +429,11 @@ DASHBOARD_HTML = """
             <h3>Trailing Drawdown</h3>
             <div style="display:flex;justify-content:space-between;align-items:baseline;">
                 <div>
-                    <div class="value" id="hwm-value" style="font-size:22px;">₹0</div>
+                    <div class="value" id="hwm-value" style="font-size:22px;">&#8377;0</div>
                     <div class="sub">High Water Mark</div>
                 </div>
                 <div style="text-align:right;">
-                    <div id="drawdown-value" style="font-size:22px;font-weight:700;">₹0</div>
+                    <div id="drawdown-value" style="font-size:22px;font-weight:700;">&#8377;0</div>
                     <div class="sub">Current Drawdown</div>
                 </div>
             </div>
@@ -304,10 +451,131 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
-    <!-- Positions Table -->
+    <!-- Order Placement Panel -->
     <div style="padding:0 24px;">
         <div class="card">
-            <h3>Open Positions</h3>
+            <div class="order-panel open" id="order-panel">
+                <div class="panel-header" onclick="toggleOrderPanel()">
+                    <h3 style="margin:0;">Place Order</h3>
+                    <span class="toggle-icon">&#9660;</span>
+                </div>
+                <div class="panel-body">
+                    <!-- Instrument Search -->
+                    <div class="search-wrapper" style="margin-bottom:16px;">
+                        <div class="form-label">Instrument</div>
+                        <input id="instrument-search" class="form-input" placeholder="Search... e.g. NIFTY 24000 CE" autocomplete="off">
+                        <div class="search-results" id="search-results"></div>
+                        <input type="hidden" id="order-security-id">
+                        <input type="hidden" id="order-exchange-segment">
+                        <input type="hidden" id="order-lot-size">
+                        <input type="hidden" id="order-tick-size">
+                        <div id="selected-instrument" style="margin-top:6px;font-size:12px;color:#58a6ff;display:none;"></div>
+                    </div>
+
+                    <!-- Order Fields Row -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:12px;margin-bottom:16px;">
+                        <div>
+                            <div class="form-label">Side</div>
+                            <select id="order-txn-type" class="form-select">
+                                <option value="BUY">BUY</option>
+                                <option value="SELL">SELL</option>
+                            </select>
+                        </div>
+                        <div>
+                            <div class="form-label">Order Type</div>
+                            <select id="order-type" class="form-select">
+                                <option value="LIMIT">LIMIT</option>
+                                <option value="MARKET">MARKET</option>
+                                <option value="SL">STOP LIMIT</option>
+                                <option value="SLM">STOP MARKET</option>
+                            </select>
+                        </div>
+                        <div>
+                            <div class="form-label">Product</div>
+                            <select id="order-product-type" class="form-select">
+                                <option value="INTRADAY">INTRADAY</option>
+                                <option value="MARGIN">MARGIN</option>
+                                <option value="CNC">CNC</option>
+                            </select>
+                        </div>
+                        <div>
+                            <div class="form-label">Price</div>
+                            <input id="order-price" class="form-input" type="number" step="0.05" placeholder="0.00">
+                        </div>
+                        <div>
+                            <div class="form-label">Trigger Price</div>
+                            <input id="order-trigger-price" class="form-input" type="number" step="0.05" placeholder="0.00">
+                        </div>
+                    </div>
+
+                    <!-- Position Size Calculator -->
+                    <div style="border-top:1px solid #21262d;padding-top:16px;margin-bottom:16px;">
+                        <h3 style="margin-bottom:12px;">Position Size Calculator</h3>
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:12px;align-items:end;">
+                            <div>
+                                <div class="form-label">Risk Amount (&#8377;)</div>
+                                <input id="calc-risk" class="form-input" type="number" placeholder="{{ default_risk }}" value="{{ default_risk }}">
+                            </div>
+                            <div>
+                                <div class="form-label">Entry Price</div>
+                                <input id="calc-entry" class="form-input" type="number" step="0.05" placeholder="0.00">
+                            </div>
+                            <div>
+                                <div class="form-label">Stop Loss Price</div>
+                                <input id="calc-sl" class="form-input" type="number" step="0.05" placeholder="0.00">
+                            </div>
+                            <div>
+                                <button onclick="calculateSize()" class="btn-tp" style="padding:8px 20px;height:38px;">CALCULATE</button>
+                            </div>
+                        </div>
+
+                        <div class="calc-results" id="calc-results">
+                            <div class="calc-grid">
+                                <div class="calc-item">
+                                    <div class="label">Quantity</div>
+                                    <div class="val" id="calc-qty">-</div>
+                                    <div class="sub" id="calc-lots" style="font-size:11px;color:#8b949e;"></div>
+                                </div>
+                                <div class="calc-item">
+                                    <div class="label">Risk / Unit</div>
+                                    <div class="val" id="calc-risk-unit">-</div>
+                                </div>
+                                <div class="calc-item">
+                                    <div class="label">Actual Risk</div>
+                                    <div class="val" id="calc-actual-risk">-</div>
+                                </div>
+                                <div class="calc-item">
+                                    <div class="label">Margin Req.</div>
+                                    <div class="val" id="calc-margin">-</div>
+                                </div>
+                            </div>
+                            <div id="calc-feasibility" style="margin-top:8px;font-size:12px;display:none;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Quantity + Submit -->
+                    <div style="display:flex;gap:12px;align-items:end;justify-content:space-between;">
+                        <div style="flex:1;">
+                            <div class="form-label">Quantity (auto-filled from calculator)</div>
+                            <input id="order-quantity" class="form-input" type="number" placeholder="0" style="max-width:200px;">
+                        </div>
+                        <div style="display:flex;gap:8px;">
+                            <button onclick="placeOrder('BUY')" class="btn-buy" style="padding:10px 28px;font-size:14px;font-weight:700;border:none;border-radius:6px;cursor:pointer;">BUY</button>
+                            <button onclick="placeOrder('SELL')" class="btn-sell" style="padding:10px 28px;font-size:14px;font-weight:700;border:none;border-radius:6px;cursor:pointer;">SELL</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Positions Table -->
+    <div style="padding:0 24px;margin-top:16px;">
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <h3 style="margin:0;">Open Positions</h3>
+                <button onclick="exitAllPositions()" class="btn-danger btn-sm">EXIT ALL</button>
+            </div>
             <table>
                 <thead>
                     <tr>
@@ -317,11 +585,12 @@ DASHBOARD_HTML = """
                         <th>LTP</th>
                         <th>P&L</th>
                         <th>SL / TP</th>
+                        <th>Quick Set</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="positions-body">
-                    <tr><td colspan="7" style="text-align:center;color:#484f58;">No open positions</td></tr>
+                    <tr><td colspan="8" style="text-align:center;color:#484f58;">No open positions</td></tr>
                 </tbody>
             </table>
         </div>
@@ -344,20 +613,145 @@ DASHBOARD_HTML = """
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         const socket = io();
+        const QUICK_SL_OFFSETS = {{ quick_sl_offsets }};
+        const QUICK_TP_OFFSETS = {{ quick_tp_offsets }};
 
-        function fmt(n) {
-            if (n === null || n === undefined) return '₹0';
-            const sign = n < 0 ? '-' : '';
-            return sign + '₹' + Math.abs(n).toLocaleString('en-IN', {maximumFractionDigits: 0});
+        // ── Sound Alert System ─────────────────────────────────────
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                try { audioCtx = new AudioCtx(); } catch(e) {}
+            }
+        }
+        document.addEventListener('click', initAudio, { once: true });
+
+        function playBeep(freq, dur, type) {
+            if (!audioCtx) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.frequency.value = freq;
+                osc.type = type || 'sine';
+                gain.gain.value = 0.3;
+                osc.start();
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+                osc.stop(audioCtx.currentTime + dur);
+            } catch(e) {}
         }
 
+        function playAlert(type) {
+            switch(type) {
+                case 'sl_hit':
+                    playBeep(800, 0.15); setTimeout(function(){playBeep(400, 0.3);}, 200);
+                    break;
+                case 'tp_hit':
+                    playBeep(400, 0.15); setTimeout(function(){playBeep(800, 0.3);}, 200);
+                    break;
+                case 'loss_warning':
+                    playBeep(600, 0.1); setTimeout(function(){playBeep(600, 0.1);}, 150);
+                    setTimeout(function(){playBeep(600, 0.1);}, 300);
+                    break;
+                case 'lockout':
+                    playBeep(200, 1.0, 'square');
+                    break;
+                case 'order':
+                    playBeep(1000, 0.08);
+                    break;
+                case 'error':
+                    playBeep(300, 0.3, 'sawtooth');
+                    break;
+            }
+        }
+
+        // Request browser notification permission
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+        function showBrowserNotif(title, body) {
+            if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification(title, { body: body });
+            }
+        }
+
+        // ── Toast Notifications ────────────────────────────────────
+        function showToast(msg, type) {
+            type = type || 'info';
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast toast-' + type;
+            toast.textContent = msg;
+            container.appendChild(toast);
+            setTimeout(function(){ toast.remove(); }, 4000);
+        }
+
+        // ── Helpers ────────────────────────────────────────────────
+        function fmt(n) {
+            if (n === null || n === undefined) return '\\u20B90';
+            var sign = n < 0 ? '-' : '';
+            return sign + '\\u20B9' + Math.abs(n).toLocaleString('en-IN', {maximumFractionDigits: 0});
+        }
+        function fmtDec(n) {
+            if (n === null || n === undefined) return '\\u20B90';
+            var sign = n < 0 ? '-' : '';
+            return sign + '\\u20B9' + Math.abs(n).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        }
         function fmtPct(n) {
             return (n || 0).toFixed(1) + '%';
         }
 
+        // ── Alert State Tracking ───────────────────────────────────
+        var _alertState = { lockout: false, cooldown: false, lossWarn80: false, lossWarn90: false };
+        var _lastSlTpData = {};
+
+        function checkAlerts(data) {
+            // Loss limit warnings
+            var pct = data.limits.loss_used_pct;
+            if (pct >= 90 && !_alertState.lossWarn90) {
+                playAlert('loss_warning');
+                showToast('90% of daily loss limit used!', 'error');
+                showBrowserNotif('Loss Warning', '90% of daily loss limit used!');
+                _alertState.lossWarn90 = true;
+            } else if (pct >= 80 && !_alertState.lossWarn80) {
+                playAlert('loss_warning');
+                showToast('80% of daily loss limit used!', 'warning');
+                showBrowserNotif('Loss Warning', '80% of daily loss limit used!');
+                _alertState.lossWarn80 = true;
+            }
+            // Lockout
+            if (data.lockout.active && !_alertState.lockout) {
+                playAlert('lockout');
+                showToast('ACCOUNT LOCKED: ' + data.lockout.reason, 'error');
+                showBrowserNotif('ACCOUNT LOCKED', data.lockout.reason);
+                _alertState.lockout = true;
+            }
+            // Cooldown
+            if (data.cooldown.active && !_alertState.cooldown) {
+                playAlert('loss_warning');
+                showToast('Cooldown active: ' + data.cooldown.reason, 'warning');
+                _alertState.cooldown = true;
+            }
+            if (!data.cooldown.active) _alertState.cooldown = false;
+        }
+
+        // ── SL/TP trigger from server ──────────────────────────────
+        socket.on('sl_tp_triggered', function(data) {
+            var isTP = data.action === 'TAKE_PROFIT';
+            playAlert(isTP ? 'tp_hit' : 'sl_hit');
+            var msg = data.action + ' triggered for ' + data.security_id +
+                      ' @ \\u20B9' + (data.trigger_price || 0).toFixed(2) +
+                      ' (LTP: \\u20B9' + (data.ltp || 0).toFixed(2) + ')';
+            showToast(msg, isTP ? 'success' : 'error');
+            showBrowserNotif(data.action, msg);
+        });
+
+        // ── Dashboard Update ───────────────────────────────────────
         function updateDashboard(data) {
             // Status badge
-            const badge = document.getElementById('status-badge');
+            var badge = document.getElementById('status-badge');
             if (data.lockout.active) {
                 badge.className = 'status-badge status-locked';
                 badge.textContent = 'LOCKED OUT';
@@ -373,12 +767,12 @@ DASHBOARD_HTML = """
             }
 
             // Cooldown banner
-            const cdBanner = document.getElementById('cooldown-banner');
+            var cdBanner = document.getElementById('cooldown-banner');
             if (data.cooldown.active) {
                 cdBanner.classList.add('active');
-                const secs = data.cooldown.remaining_seconds;
-                const m = Math.floor(secs / 60);
-                const s = secs % 60;
+                var secs = data.cooldown.remaining_seconds;
+                var m = Math.floor(secs / 60);
+                var s = secs % 60;
                 document.getElementById('cooldown-timer').textContent =
                     String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
                 document.getElementById('cooldown-reason').textContent = data.cooldown.reason;
@@ -387,27 +781,27 @@ DASHBOARD_HTML = """
             }
 
             // P&L cards
-            const totalPnl = data.pnl.total;
-            const totalEl = document.getElementById('total-pnl');
+            var totalPnl = data.pnl.total;
+            var totalEl = document.getElementById('total-pnl');
             totalEl.textContent = fmt(totalPnl);
             totalEl.className = 'value ' + (totalPnl >= 0 ? 'positive' : 'negative');
             document.getElementById('pnl-breakdown').textContent =
                 'R: ' + fmt(data.pnl.realized) + ' | U: ' + fmt(data.pnl.unrealized);
 
             // Loss buffer
-            const lossRemaining = data.limits.loss_remaining;
-            const lossEl = document.getElementById('loss-remaining');
+            var lossRemaining = data.limits.loss_remaining;
+            var lossEl = document.getElementById('loss-remaining');
             lossEl.textContent = fmt(lossRemaining);
             lossEl.className = 'value ' + (lossRemaining > data.limits.daily_max_loss * 0.3 ? 'positive' : lossRemaining > 0 ? 'warning' : 'negative');
             document.getElementById('loss-limit-info').textContent = 'of ' + fmt(data.limits.daily_max_loss) + ' limit';
-            const lossPct = Math.min(100, Math.max(0, data.limits.loss_used_pct));
-            const lossBar = document.getElementById('loss-bar');
+            var lossPct = Math.min(100, Math.max(0, data.limits.loss_used_pct));
+            var lossBar = document.getElementById('loss-bar');
             lossBar.style.width = lossPct + '%';
             lossBar.style.background = lossPct > 70 ? '#f85149' : lossPct > 40 ? '#d29922' : '#3fb950';
 
             // Profit lock
-            const plEl = document.getElementById('profit-lock-value');
-            const plInfo = document.getElementById('profit-lock-info');
+            var plEl = document.getElementById('profit-lock-value');
+            var plInfo = document.getElementById('profit-lock-info');
             if (data.profit_lock.active) {
                 plEl.textContent = fmt(data.profit_lock.floor);
                 plEl.className = 'value positive';
@@ -427,10 +821,10 @@ DASHBOARD_HTML = """
             if (data.trailing_drawdown.enabled) {
                 document.getElementById('hwm-value').textContent = fmt(data.trailing_drawdown.high_water_mark);
                 document.getElementById('drawdown-value').textContent = fmt(data.trailing_drawdown.current_drawdown);
-                const ddLimit = data.trailing_drawdown.drawdown_limit;
-                const ddCurrent = data.trailing_drawdown.current_drawdown;
-                const ddPct = ddLimit > 0 ? Math.min(100, (ddCurrent / ddLimit) * 100) : 0;
-                const ddBar = document.getElementById('drawdown-bar');
+                var ddLimit = data.trailing_drawdown.drawdown_limit;
+                var ddCurrent = data.trailing_drawdown.current_drawdown;
+                var ddPct = ddLimit > 0 ? Math.min(100, (ddCurrent / ddLimit) * 100) : 0;
+                var ddBar = document.getElementById('drawdown-bar');
                 ddBar.style.width = ddPct + '%';
                 ddBar.style.background = ddPct > 70 ? '#f85149' : ddPct > 40 ? '#d29922' : '#3fb950';
                 document.getElementById('drawdown-info').textContent =
@@ -438,53 +832,104 @@ DASHBOARD_HTML = """
             }
 
             // Positions table
-            updatePositions(data.positions || []);
+            updatePositions(data.positions || [], data.sl_tp_orders || {});
 
             // Spreads
             updateSpreads(data.spreads || []);
 
             // Time
             document.getElementById('market-time').textContent = new Date().toLocaleTimeString('en-IN');
+
+            // Sound/notification alerts
+            checkAlerts(data);
         }
 
-        function updatePositions(positions) {
-            const tbody = document.getElementById('positions-body');
-            const open = positions.filter(p => p.netQty !== 0);
+        // ── Positions Table with SL/TP inline ──────────────────────
+        function updatePositions(positions, slTpOrders) {
+            var tbody = document.getElementById('positions-body');
+            var open = positions.filter(function(p){ return p.netQty !== 0; });
             if (open.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#484f58;">No open positions</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#484f58;">No open positions</td></tr>';
                 return;
             }
-            let html = '';
-            for (const p of open) {
-                const pnl = (p.realizedProfit || 0) + (p.unrealizedProfit || 0);
-                const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-                const sid = p.securityId || '';
+            var html = '';
+            for (var i = 0; i < open.length; i++) {
+                var p = open[i];
+                var pnl = (p.realizedProfit || 0) + (p.unrealizedProfit || 0);
+                var pnlClass = pnl >= 0 ? 'positive' : 'negative';
+                var sid = (p.securityId || '') + '';
+                var exSeg = p.exchangeSegment || '';
+                var prodType = p.productType || '';
+                var qty = Math.abs(p.netQty || 0);
+                var dir = p.netQty > 0 ? 1 : -1;
+                var ltp = p.lastTradedPrice || 0;
+
+                // SL/TP info
+                var sltp = slTpOrders[sid];
+                var slText = '-';
+                var tpText = '-';
+                if (sltp && sltp.active) {
+                    if (sltp.current_sl || sltp.stop_loss) {
+                        slText = '<span class="negative">SL: \\u20B9' + (sltp.current_sl || sltp.stop_loss).toFixed(2) + '</span>';
+                        if (sltp.trailing) slText += ' <span style="color:#58a6ff;font-size:10px;">TSL</span>';
+                    }
+                    if (sltp.take_profit) {
+                        tpText = '<span class="positive">TP: \\u20B9' + sltp.take_profit.toFixed(2) + '</span>';
+                    }
+                }
+
                 html += '<tr>';
                 html += '<td>' + (p.tradingSymbol || sid) + '</td>';
-                html += '<td>' + (p.netQty || 0) + '</td>';
-                html += '<td>₹' + (p.avgPrice || 0).toFixed(2) + '</td>';
-                html += '<td>₹' + (p.lastTradedPrice || 0).toFixed(2) + '</td>';
+                html += '<td style="color:' + (dir > 0 ? '#3fb950' : '#f85149') + ';">' + (p.netQty || 0) + '</td>';
+                html += '<td>\\u20B9' + (p.avgPrice || 0).toFixed(2) + '</td>';
+                html += '<td>\\u20B9' + ltp.toFixed(2) + '</td>';
                 html += '<td class="' + pnlClass + '">' + fmt(pnl) + '</td>';
-                html += '<td id="sltp-' + sid + '">-</td>';
+                html += '<td style="font-size:12px;">' + slText + '<br>' + tpText + '</td>';
+
+                // Quick SL/TP buttons
+                html += '<td><div class="quick-btns">';
+                for (var si = 0; si < QUICK_SL_OFFSETS.length; si++) {
+                    html += '<button class="btn-sl btn-xs" onclick="quickSL(\'' + sid + '\',\'' + exSeg + '\',' + dir + ',' + QUICK_SL_OFFSETS[si] + ')">SL-' + QUICK_SL_OFFSETS[si] + '</button>';
+                }
+                for (var ti = 0; ti < QUICK_TP_OFFSETS.length; ti++) {
+                    html += '<button class="btn-tp btn-xs" onclick="quickTP(\'' + sid + '\',\'' + exSeg + '\',' + dir + ',' + QUICK_TP_OFFSETS[ti] + ')">TP+' + QUICK_TP_OFFSETS[ti] + '</button>';
+                }
+                html += '<button class="btn-xs" style="background:#1f6feb;color:white;" onclick="showTSLForm(\'' + sid + '\',' + ltp + ')">TSL</button>';
+                html += '</div></td>';
+
+                // Actions
                 html += '<td>';
-                html += '<button class="btn-sl btn-sm" onclick="promptSL(\'' + sid + '\', \'' + (p.exchangeSegment||'') + '\', \'' + (p.productType||'') + '\', ' + Math.abs(p.netQty||0) + ', ' + (p.netQty > 0 ? 1 : -1) + ')">SL</button> ';
-                html += '<button class="btn-tp btn-sm" onclick="promptTP(\'' + sid + '\', \'' + (p.exchangeSegment||'') + '\', \'' + (p.productType||'') + '\', ' + Math.abs(p.netQty||0) + ', ' + (p.netQty > 0 ? 1 : -1) + ')">TP</button> ';
-                html += '<button class="btn-danger btn-sm" onclick="exitPosition(\'' + sid + '\', \'' + (p.exchangeSegment||'') + '\', \'' + (p.productType||'') + '\', ' + Math.abs(p.netQty||0) + ', ' + (p.netQty > 0 ? 1 : -1) + ')">EXIT</button>';
+                html += '<button class="btn-sl btn-sm" onclick="promptSL(\'' + sid + '\')">SL</button> ';
+                html += '<button class="btn-tp btn-sm" onclick="promptTP(\'' + sid + '\')">TP</button> ';
+                html += '<button class="btn-danger btn-sm" onclick="exitPosition(\'' + sid + '\',\'' + exSeg + '\',\'' + prodType + '\',' + qty + ',' + dir + ')">EXIT</button>';
                 html += '</td>';
                 html += '</tr>';
+
+                // Trailing SL inline form row (hidden by default)
+                html += '<tr id="tsl-row-' + sid + '" style="display:none;"><td colspan="8">';
+                html += '<div class="inline-sltp">';
+                html += '<span style="font-size:12px;color:#8b949e;">Trailing SL:</span>';
+                html += '<input id="tsl-price-' + sid + '" placeholder="SL Price" type="number" step="0.05" value="' + ltp.toFixed(2) + '">';
+                html += '<input id="tsl-trail-' + sid + '" placeholder="Trail pts" type="number" step="0.05" value="10">';
+                html += '<input id="tsl-trigger-' + sid + '" placeholder="Start after" type="number" step="0.05" value="20">';
+                html += '<button class="btn-sl btn-sm" onclick="setTrailingSL(\'' + sid + '\')">Set TSL</button>';
+                html += '<button class="btn-neutral btn-sm" onclick="hideTSLForm(\'' + sid + '\')">Cancel</button>';
+                html += '</div>';
+                html += '</td></tr>';
             }
             tbody.innerHTML = html;
         }
 
         function updateSpreads(spreads) {
-            const container = document.getElementById('spreads-container');
+            var container = document.getElementById('spreads-container');
             if (spreads.length === 0) {
                 container.innerHTML = '<div style="color:#484f58;text-align:center;padding:12px;">No spreads detected</div>';
                 return;
             }
-            let html = '';
-            for (const s of spreads) {
-                const pnlClass = s.current_pnl >= 0 ? 'positive' : 'negative';
+            var html = '';
+            for (var i = 0; i < spreads.length; i++) {
+                var s = spreads[i];
+                var pnlClass = s.current_pnl >= 0 ? 'positive' : 'negative';
                 html += '<div class="spread-card">';
                 html += '<div class="spread-type">' + s.type.replace(/_/g, ' ') + '</div>';
                 html += '<div style="display:flex;gap:24px;margin-bottom:8px;">';
@@ -493,52 +938,269 @@ DASHBOARD_HTML = """
                 html += '<div><span style="color:#8b949e;">Max Loss:</span> <span class="negative">' + fmt(s.max_loss) + '</span></div>';
                 html += '<div><span style="color:#8b949e;">Premium:</span> ' + fmt(s.net_premium) + '</div>';
                 if (s.breakevens && s.breakevens.length > 0) {
-                    html += '<div><span style="color:#8b949e;">BE:</span> ' + s.breakevens.map(b => b.toFixed(0)).join(', ') + '</div>';
+                    html += '<div><span style="color:#8b949e;">BE:</span> ' + s.breakevens.map(function(b){return b.toFixed(0);}).join(', ') + '</div>';
                 }
                 html += '</div>';
                 html += '<table><thead><tr><th>Type</th><th>Strike</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&L</th></tr></thead><tbody>';
-                for (const leg of s.legs) {
-                    const legPnlClass = leg.pnl >= 0 ? 'positive' : 'negative';
-                    html += '<tr>';
-                    html += '<td>' + leg.option_type + '</td>';
-                    html += '<td>' + leg.strike + '</td>';
-                    html += '<td>' + leg.qty + '</td>';
-                    html += '<td>₹' + leg.entry.toFixed(2) + '</td>';
-                    html += '<td>₹' + leg.ltp.toFixed(2) + '</td>';
-                    html += '<td class="' + legPnlClass + '">' + fmt(leg.pnl) + '</td>';
-                    html += '</tr>';
+                for (var j = 0; j < s.legs.length; j++) {
+                    var leg = s.legs[j];
+                    var legClass = leg.pnl >= 0 ? 'positive' : 'negative';
+                    html += '<tr><td>' + leg.option_type + '</td><td>' + leg.strike + '</td><td>' + leg.qty + '</td>';
+                    html += '<td>\\u20B9' + leg.entry.toFixed(2) + '</td><td>\\u20B9' + leg.ltp.toFixed(2) + '</td>';
+                    html += '<td class="' + legClass + '">' + fmt(leg.pnl) + '</td></tr>';
                 }
                 html += '</tbody></table></div>';
             }
             container.innerHTML = html;
         }
 
-        function promptSL(sid, exSeg, prodType, qty, direction) {
-            const price = prompt('Enter Stop Loss price:');
-            if (price && !isNaN(price)) {
-                const trailing = confirm('Enable trailing stop loss?');
-                let trailPts = 0, trailTrigger = 0;
-                if (trailing) {
-                    trailPts = parseFloat(prompt('Trail by how many points?') || '0');
-                    trailTrigger = parseFloat(prompt('Start trailing after profit of (points)?') || '0');
+        // ── Order Panel Toggle ─────────────────────────────────────
+        function toggleOrderPanel() {
+            document.getElementById('order-panel').classList.toggle('open');
+        }
+
+        // ── Instrument Search ──────────────────────────────────────
+        var searchTimeout = null;
+        document.getElementById('instrument-search').addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            var q = this.value.trim();
+            if (q.length < 2) {
+                document.getElementById('search-results').style.display = 'none';
+                return;
+            }
+            searchTimeout = setTimeout(function() {
+                fetch('/api/instruments/search?q=' + encodeURIComponent(q) + '&limit=15')
+                    .then(function(r){ return r.json(); })
+                    .then(function(results) {
+                        var container = document.getElementById('search-results');
+                        if (!results || results.length === 0) {
+                            container.style.display = 'none';
+                            return;
+                        }
+                        var html = '';
+                        for (var i = 0; i < results.length; i++) {
+                            var r = results[i];
+                            var data = encodeURIComponent(JSON.stringify(r));
+                            html += '<div class="search-item" onclick="selectInstrument(decodeURIComponent(\\'' + data + '\\'))">';
+                            html += '<div><span class="sym">' + r.custom_symbol + '</span></div>';
+                            html += '<div class="meta">' + r.exchange + ' | Lot: ' + r.lot_size + ' | ' + r.instrument_type + '</div>';
+                            html += '</div>';
+                        }
+                        container.innerHTML = html;
+                        container.style.display = 'block';
+                    });
+            }, 300);
+        });
+
+        // Close search results when clicking elsewhere
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.search-wrapper')) {
+                document.getElementById('search-results').style.display = 'none';
+            }
+        });
+
+        function selectInstrument(jsonStr) {
+            var inst = JSON.parse(jsonStr);
+            document.getElementById('instrument-search').value = inst.custom_symbol;
+            document.getElementById('order-security-id').value = inst.security_id;
+            document.getElementById('order-exchange-segment').value = inst.exchange_segment;
+            document.getElementById('order-lot-size').value = inst.lot_size;
+            document.getElementById('order-tick-size').value = inst.tick_size;
+            document.getElementById('search-results').style.display = 'none';
+            document.getElementById('selected-instrument').style.display = 'block';
+            document.getElementById('selected-instrument').textContent =
+                inst.exchange + ' | ' + inst.instrument_type + ' | Lot size: ' + inst.lot_size + ' | ID: ' + inst.security_id;
+
+            // Fetch LTP
+            fetch('/api/ltp/' + inst.security_id + '?exchange_segment=' + inst.exchange_segment)
+                .then(function(r){ return r.json(); })
+                .then(function(d) {
+                    if (d.ltp) {
+                        document.getElementById('order-price').value = d.ltp;
+                        document.getElementById('calc-entry').value = d.ltp;
+                    }
+                });
+        }
+
+        // ── Position Size Calculator ───────────────────────────────
+        function calculateSize() {
+            var secId = document.getElementById('order-security-id').value;
+            if (!secId) { showToast('Select an instrument first', 'warning'); return; }
+
+            var payload = {
+                risk_amount: parseFloat(document.getElementById('calc-risk').value) || 0,
+                entry_price: parseFloat(document.getElementById('calc-entry').value) || 0,
+                sl_price: parseFloat(document.getElementById('calc-sl').value) || 0,
+                security_id: secId,
+                transaction_type: document.getElementById('order-txn-type').value,
+                product_type: document.getElementById('order-product-type').value
+            };
+
+            if (payload.risk_amount <= 0) { showToast('Enter a risk amount', 'warning'); return; }
+            if (payload.entry_price <= 0) { showToast('Enter an entry price', 'warning'); return; }
+            if (payload.sl_price <= 0) { showToast('Enter a stop loss price', 'warning'); return; }
+            if (payload.entry_price === payload.sl_price) { showToast('Entry and SL cannot be the same', 'warning'); return; }
+
+            fetch('/api/order/calculate_size', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(data) {
+                if (data.error) { showToast(data.error, 'error'); return; }
+
+                var el = document.getElementById('calc-results');
+                el.style.display = 'block';
+
+                document.getElementById('calc-qty').textContent = data.quantity;
+                document.getElementById('calc-lots').textContent = data.num_lots != null ? data.num_lots + ' lot(s) x ' + data.lot_size : '';
+                document.getElementById('calc-risk-unit').textContent = fmtDec(data.risk_per_unit);
+                document.getElementById('calc-actual-risk').textContent = fmt(data.actual_risk);
+                document.getElementById('calc-actual-risk').className = 'val negative';
+                document.getElementById('calc-margin').textContent = data.margin_required ? fmt(data.margin_required) : 'N/A';
+
+                var feas = document.getElementById('calc-feasibility');
+                if (!data.feasible) {
+                    feas.style.display = 'block';
+                    feas.innerHTML = '<span class="negative">Blocked: ' + data.feasibility_reason + '</span>';
+                } else {
+                    feas.style.display = 'block';
+                    feas.innerHTML = '<span class="positive">Risk check passed</span>';
                 }
+
+                // Auto-fill quantity
+                document.getElementById('order-quantity').value = data.quantity;
+
+                // Also set the order price to entry
+                document.getElementById('order-price').value = parseFloat(document.getElementById('calc-entry').value) || 0;
+            });
+        }
+
+        // ── Place Order ────────────────────────────────────────────
+        function placeOrder(side) {
+            var secId = document.getElementById('order-security-id').value;
+            var qty = parseInt(document.getElementById('order-quantity').value);
+            if (!secId) { showToast('Select an instrument first', 'warning'); return; }
+            if (!qty || qty <= 0) { showToast('Enter or calculate quantity first', 'warning'); return; }
+
+            var orderType = document.getElementById('order-type').value;
+            var price = parseFloat(document.getElementById('order-price').value) || 0;
+
+            if (orderType === 'LIMIT' && price <= 0) { showToast('Enter a price for limit order', 'warning'); return; }
+
+            var payload = {
+                security_id: secId,
+                exchange_segment: document.getElementById('order-exchange-segment').value,
+                transaction_type: side,
+                order_type: orderType,
+                product_type: document.getElementById('order-product-type').value,
+                quantity: qty,
+                price: price,
+                trigger_price: parseFloat(document.getElementById('order-trigger-price').value) || 0,
+                sl_price: parseFloat(document.getElementById('calc-sl').value) || 0
+            };
+
+            var label = side + ' ' + qty + ' @ ' + orderType;
+            if (!confirm('Place order: ' + label + '?')) return;
+
+            fetch('/api/order/place', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(result) {
+                if (result.status === 'BLOCKED') {
+                    playAlert('error');
+                    showToast('Order BLOCKED: ' + result.reason, 'error');
+                } else if (result.status === 'error') {
+                    playAlert('error');
+                    showToast('Order failed: ' + result.message, 'error');
+                } else {
+                    playAlert('order');
+                    showToast('Order placed: ' + label, 'success');
+                    // Clear form
+                    document.getElementById('order-quantity').value = '';
+                    document.getElementById('calc-results').style.display = 'none';
+                }
+            })
+            .catch(function(err) {
+                showToast('Network error: ' + err, 'error');
+            });
+        }
+
+        // ── SL/TP Functions ────────────────────────────────────────
+        function promptSL(sid) {
+            var price = prompt('Enter Stop Loss price:');
+            if (price && !isNaN(price)) {
                 fetch('/api/sl', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({security_id: sid, price: parseFloat(price), trailing, trail_points: trailPts, trail_trigger: trailTrigger})
-                }).then(r => r.json()).then(d => console.log('SL set:', d));
+                    body: JSON.stringify({security_id: sid, price: parseFloat(price)})
+                }).then(function(r){ return r.json(); }).then(function(d) {
+                    showToast('SL set at \\u20B9' + parseFloat(price).toFixed(2), 'success');
+                });
             }
         }
 
-        function promptTP(sid, exSeg, prodType, qty, direction) {
-            const price = prompt('Enter Take Profit price:');
+        function promptTP(sid) {
+            var price = prompt('Enter Take Profit price:');
             if (price && !isNaN(price)) {
                 fetch('/api/tp', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({security_id: sid, price: parseFloat(price)})
-                }).then(r => r.json()).then(d => console.log('TP set:', d));
+                }).then(function(r){ return r.json(); }).then(function(d) {
+                    showToast('TP set at \\u20B9' + parseFloat(price).toFixed(2), 'success');
+                });
             }
+        }
+
+        function quickSL(sid, exSeg, direction, offset) {
+            fetch('/api/sl/quick', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({security_id: sid, exchange_segment: exSeg, direction: direction, offset_points: offset, mode: 'sl'})
+            }).then(function(r){ return r.json(); }).then(function(d) {
+                if (d.error) { showToast(d.error, 'error'); return; }
+                showToast('SL set at \\u20B9' + d.price.toFixed(2) + ' (LTP: \\u20B9' + d.ltp.toFixed(2) + ')', 'success');
+            });
+        }
+
+        function quickTP(sid, exSeg, direction, offset) {
+            fetch('/api/sl/quick', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({security_id: sid, exchange_segment: exSeg, direction: direction, offset_points: offset, mode: 'tp'})
+            }).then(function(r){ return r.json(); }).then(function(d) {
+                if (d.error) { showToast(d.error, 'error'); return; }
+                showToast('TP set at \\u20B9' + d.price.toFixed(2) + ' (LTP: \\u20B9' + d.ltp.toFixed(2) + ')', 'success');
+            });
+        }
+
+        function showTSLForm(sid, ltp) {
+            var row = document.getElementById('tsl-row-' + sid);
+            if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
+        }
+        function hideTSLForm(sid) {
+            var row = document.getElementById('tsl-row-' + sid);
+            if (row) row.style.display = 'none';
+        }
+
+        function setTrailingSL(sid) {
+            var price = parseFloat(document.getElementById('tsl-price-' + sid).value) || 0;
+            var trail = parseFloat(document.getElementById('tsl-trail-' + sid).value) || 0;
+            var trigger = parseFloat(document.getElementById('tsl-trigger-' + sid).value) || 0;
+            if (price <= 0) { showToast('Enter SL price', 'warning'); return; }
+            fetch('/api/sl', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({security_id: sid, price: price, trailing: true, trail_points: trail, trail_trigger: trigger})
+            }).then(function(r){ return r.json(); }).then(function(d) {
+                showToast('Trailing SL set at \\u20B9' + price.toFixed(2) + ' (trail: ' + trail + 'pts)', 'success');
+                hideTSLForm(sid);
+            });
         }
 
         function exitPosition(sid, exSeg, prodType, qty, direction) {
@@ -547,21 +1209,44 @@ DASHBOARD_HTML = """
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({security_id: sid, exchange_segment: exSeg, product_type: prodType, quantity: qty, direction: direction})
-                }).then(r => r.json()).then(d => console.log('Exit:', d));
+                }).then(function(r){ return r.json(); }).then(function(d) {
+                    if (d.status === 'ok') {
+                        playAlert('order');
+                        showToast('Exit order placed', 'success');
+                    } else {
+                        showToast('Exit failed: ' + (d.message || ''), 'error');
+                    }
+                });
             }
         }
 
-        // Socket.IO real-time updates
+        function exitAllPositions() {
+            if (confirm('EXIT ALL POSITIONS? This will close everything at market.')) {
+                fetch('/api/exit_all', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                }).then(function(r){ return r.json(); }).then(function(d) {
+                    if (d.status === 'ok') {
+                        playAlert('order');
+                        showToast('Closed ' + d.closed_positions + ' positions, cancelled ' + d.cancelled_orders + ' orders', 'success');
+                    } else {
+                        showToast('Exit all failed: ' + (d.message || ''), 'error');
+                    }
+                });
+            }
+        }
+
+        // ── Socket.IO real-time updates ────────────────────────────
         socket.on('status_update', function(data) {
             updateDashboard(data);
         });
 
         // Initial fetch
-        fetch('/api/status').then(r => r.json()).then(updateDashboard);
+        fetch('/api/status').then(function(r){ return r.json(); }).then(updateDashboard);
 
         // Fallback polling
         setInterval(function() {
-            fetch('/api/status').then(r => r.json()).then(updateDashboard);
+            fetch('/api/status').then(function(r){ return r.json(); }).then(updateDashboard);
         }, {{ interval * 1000 }});
     </script>
 </body>
@@ -571,7 +1256,13 @@ DASHBOARD_HTML = """
 
 @app.route("/")
 def index():
-    return render_template_string(DASHBOARD_HTML, interval=Config.MONITOR_INTERVAL)
+    return render_template_string(
+        DASHBOARD_HTML,
+        interval=Config.MONITOR_INTERVAL,
+        default_risk=int(Config.DEFAULT_RISK_AMOUNT),
+        quick_sl_offsets=json.dumps(Config.QUICK_SL_OFFSETS),
+        quick_tp_offsets=json.dumps(Config.QUICK_TP_OFFSETS),
+    )
 
 
 @app.route("/api/status")
@@ -580,6 +1271,248 @@ def api_status():
         return jsonify(_monitor.get_status())
     return jsonify({"error": "Monitor not initialized"})
 
+
+# ── Instrument Search ──────────────────────────────────────────────
+
+@app.route("/api/instruments/search")
+def api_search_instruments():
+    """Search instruments by query string."""
+    if not _instrument_cache:
+        return jsonify([])
+    q = request.args.get("q", "")
+    limit = int(request.args.get("limit", 20))
+    results = _instrument_cache.search(q, limit)
+    return jsonify(results)
+
+
+@app.route("/api/instruments/reload", methods=["POST"])
+def api_reload_instruments():
+    """Force reload instrument data."""
+    if not _instrument_cache:
+        return jsonify({"error": "Instrument cache not initialized"}), 500
+    count = _instrument_cache.reload()
+    return jsonify({"status": "ok", "instruments_loaded": count})
+
+
+# ── LTP ────────────────────────────────────────────────────────────
+
+@app.route("/api/ltp/<security_id>")
+def api_get_ltp(security_id):
+    """Get last traded price for an instrument."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    exchange_segment = request.args.get("exchange_segment", "NSE_FNO")
+    try:
+        data = _monitor.api.get_ltp({exchange_segment: [security_id]})
+        # Extract LTP from Dhan response
+        ltp = None
+        if isinstance(data, dict) and "data" in data:
+            inner = data["data"]
+            if isinstance(inner, dict):
+                for key, val in inner.items():
+                    if isinstance(val, dict) and "last_price" in val:
+                        ltp = val["last_price"]
+                        break
+                    elif isinstance(val, (int, float)):
+                        ltp = val
+                        break
+        return jsonify({"ltp": ltp, "raw": data})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Order Placement ────────────────────────────────────────────────
+
+@app.route("/api/order/place", methods=["POST"])
+def api_place_order():
+    """Place an order through the risk-checked interceptor."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    data = request.json
+
+    security_id = data.get("security_id", "")
+    if not security_id:
+        return jsonify({"status": "error", "message": "No security_id"}), 400
+
+    try:
+        result = _monitor.interceptor.place_order(
+            security_id=security_id,
+            exchange_segment=data.get("exchange_segment", "NSE_FNO"),
+            transaction_type=data.get("transaction_type", "BUY"),
+            quantity=int(data.get("quantity", 0)),
+            order_type=data.get("order_type", "MARKET"),
+            product_type=data.get("product_type", "INTRADAY"),
+            price=float(data.get("price", 0)),
+            trigger_price=float(data.get("trigger_price", 0)),
+        )
+
+        # If order placed and SL specified, auto-set SL
+        if result.get("status") != "BLOCKED" and data.get("sl_price"):
+            sl_price = float(data["sl_price"])
+            if sl_price > 0:
+                _monitor.trade_mgr.set_stop_loss(
+                    security_id=security_id,
+                    sl_price=sl_price,
+                )
+                logger.info("Auto-set SL at %.2f for %s", sl_price, security_id)
+
+        return jsonify(result)
+    except Exception as e:
+        logger.error("Order placement error: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/order/calculate_size", methods=["POST"])
+def api_calculate_size():
+    """Calculate position size from risk parameters."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+
+    data = request.json
+    risk_amount = float(data.get("risk_amount", 0))
+    entry_price = float(data.get("entry_price", 0))
+    sl_price = float(data.get("sl_price", 0))
+    security_id = str(data.get("security_id", ""))
+
+    if risk_amount <= 0:
+        return jsonify({"error": "Risk amount must be positive"}), 400
+    if entry_price <= 0:
+        return jsonify({"error": "Entry price must be positive"}), 400
+
+    risk_per_unit = abs(entry_price - sl_price)
+    if risk_per_unit == 0:
+        return jsonify({"error": "Entry and SL cannot be the same"}), 400
+
+    # Get lot size from instrument cache
+    lot_size = 1
+    if _instrument_cache:
+        inst = _instrument_cache.get_by_id(security_id)
+        if inst:
+            lot_size = inst.lot_size
+
+    raw_qty = risk_amount / risk_per_unit
+    num_lots = None
+
+    if lot_size > 1:
+        num_lots = int(raw_qty // lot_size)
+        quantity = num_lots * lot_size
+    else:
+        quantity = int(raw_qty)
+
+    # Enforce max order quantity
+    quantity = min(quantity, Config.MAX_ORDER_QUANTITY)
+    if lot_size > 1:
+        num_lots = quantity // lot_size
+
+    actual_risk = risk_per_unit * quantity
+
+    # Margin calculation (best effort)
+    margin_required = None
+    try:
+        exchange_segment = data.get("exchange_segment", "")
+        if not exchange_segment and _instrument_cache:
+            exchange_segment = _instrument_cache.get_exchange_segment(security_id)
+        margin_resp = _monitor.api.get_margin_calculator(
+            security_id=security_id,
+            exchange_segment=exchange_segment or "NSE_FNO",
+            transaction_type=data.get("transaction_type", "BUY"),
+            quantity=quantity,
+            product_type=data.get("product_type", "INTRADAY"),
+            price=entry_price,
+        )
+        if isinstance(margin_resp, dict) and "data" in margin_resp:
+            margin_required = margin_resp["data"].get("totalMargin")
+    except Exception:
+        pass
+
+    # Feasibility check
+    feasible = True
+    feasibility_reason = ""
+    try:
+        exchange_segment = data.get("exchange_segment", "")
+        if not exchange_segment and _instrument_cache:
+            exchange_segment = _instrument_cache.get_exchange_segment(security_id)
+        decision = _monitor.interceptor.check_order_feasibility(
+            security_id=security_id,
+            exchange_segment=exchange_segment or "NSE_FNO",
+            transaction_type=data.get("transaction_type", "BUY"),
+            quantity=quantity,
+            price=entry_price,
+        )
+        feasible = bool(decision)
+        if not feasible:
+            feasibility_reason = decision.reason
+    except Exception:
+        pass
+
+    return jsonify({
+        "quantity": quantity,
+        "num_lots": num_lots,
+        "lot_size": lot_size,
+        "risk_per_unit": round(risk_per_unit, 2),
+        "actual_risk": round(actual_risk, 2),
+        "margin_required": margin_required,
+        "feasible": feasible,
+        "feasibility_reason": feasibility_reason,
+    })
+
+
+# ── Quick SL/TP ───────────────────────────────────────────────────
+
+@app.route("/api/sl/quick", methods=["POST"])
+def api_quick_sl():
+    """Set SL or TP at a point offset from current LTP."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+
+    data = request.json
+    security_id = data.get("security_id", "")
+    offset_points = float(data.get("offset_points", 0))
+    mode = data.get("mode", "sl")
+    direction = int(data.get("direction", 1))
+    exchange_segment = data.get("exchange_segment", "NSE_FNO")
+
+    # Get current LTP from positions (faster than API call)
+    ltp = None
+    for pos in (_monitor._last_positions or []):
+        if str(pos.get("securityId", "")) == security_id:
+            ltp = pos.get("lastTradedPrice", 0)
+            break
+
+    if ltp is None or ltp == 0:
+        # Fallback to API
+        try:
+            ltp_data = _monitor.api.get_ltp({exchange_segment: [security_id]})
+            if isinstance(ltp_data, dict) and "data" in ltp_data:
+                for key, val in ltp_data["data"].items():
+                    if isinstance(val, dict):
+                        ltp = val.get("last_price", 0)
+                    else:
+                        ltp = val
+                    break
+        except Exception:
+            pass
+
+    if not ltp:
+        return jsonify({"error": "Could not get LTP"}), 400
+
+    if mode == "sl":
+        if direction == 1:
+            price = ltp - abs(offset_points)
+        else:
+            price = ltp + abs(offset_points)
+        _monitor.trade_mgr.set_stop_loss(security_id=security_id, sl_price=price)
+    else:
+        if direction == 1:
+            price = ltp + abs(offset_points)
+        else:
+            price = ltp - abs(offset_points)
+        _monitor.trade_mgr.set_take_profit(security_id=security_id, tp_price=price)
+
+    return jsonify({"status": "ok", "price": round(price, 2), "ltp": round(ltp, 2)})
+
+
+# ── Existing Endpoints ─────────────────────────────────────────────
 
 @app.route("/api/sl", methods=["POST"])
 def api_set_sl():
@@ -666,9 +1599,16 @@ def api_projections():
     return jsonify({"projections": projections})
 
 
+# ── SocketIO Emitters ──────────────────────────────────────────────
+
 def emit_status_update(status_data: dict):
     """Push status update to all connected dashboard clients."""
     socketio.emit("status_update", status_data)
+
+
+def emit_sl_tp_trigger(trigger_data: dict):
+    """Push SL/TP trigger notification to dashboard."""
+    socketio.emit("sl_tp_triggered", trigger_data)
 
 
 def run_dashboard(monitor):
