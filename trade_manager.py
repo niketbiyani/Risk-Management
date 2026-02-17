@@ -8,6 +8,7 @@ Designed for Nifty options scalping and credit spread strategies.
 
 import logging
 import math
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -126,6 +127,26 @@ class StopLossTarget:
     is_active: bool = True
 
 
+@dataclass
+class PendingSpreadOrder:
+    """A pending spread order waiting for trigger price."""
+    spread_id: str
+    sell_security_id: str
+    sell_exchange_segment: str
+    sell_price: float
+    sell_trigger_price: float
+    sell_sl: float
+    buy_security_id: str
+    buy_exchange_segment: str
+    quantity: int
+    status: str = "PENDING"  # PENDING, TRIGGERED, FILLED, FAILED
+    created_at: float = 0.0
+    triggered_at: float = 0.0
+    hedge_order_id: str = ""
+    sell_order_id: str = ""
+    error_message: str = ""
+
+
 class TradeManager:
     """
     Manages active trades with SL/TP, spread detection, and projections.
@@ -136,6 +157,8 @@ class TradeManager:
         self.api = dhan_api
         self._sl_tp_orders: dict[str, StopLossTarget] = {}
         self._detected_spreads: list[SpreadPosition] = []
+        self._pending_spreads: dict[str, PendingSpreadOrder] = {}
+        self._spread_counter = 0
         logger.info("Trade manager initialized")
 
     # ── Spread Detection ───────────────────────────────────────────────
@@ -492,6 +515,131 @@ class TradeManager:
             })
 
         return projections
+
+    # ── Pending Spread Orders ──────────────────────────────────────
+
+    def add_pending_spread(self, spread_data: dict) -> str:
+        """Add a new pending spread order. Returns spread_id."""
+        self._spread_counter += 1
+        spread_id = f"SP{int(time.time())}-{self._spread_counter}"
+
+        spread = PendingSpreadOrder(
+            spread_id=spread_id,
+            sell_security_id=str(spread_data["sell_security_id"]),
+            sell_exchange_segment=spread_data.get("sell_exchange_segment", "NSE_FNO"),
+            sell_price=float(spread_data["sell_price"]),
+            sell_trigger_price=float(spread_data["sell_trigger_price"]),
+            sell_sl=float(spread_data.get("sell_sl", 0)),
+            buy_security_id=str(spread_data["buy_security_id"]),
+            buy_exchange_segment=spread_data.get("buy_exchange_segment", "NSE_FNO"),
+            quantity=int(spread_data["quantity"]),
+            created_at=time.time(),
+        )
+
+        self._pending_spreads[spread_id] = spread
+        logger.info(
+            "Pending spread %s: SELL %s qty=%d trigger=%.2f, hedge BUY %s @ MKT",
+            spread_id, spread.sell_security_id, spread.quantity,
+            spread.sell_trigger_price, spread.buy_security_id,
+        )
+        return spread_id
+
+    def check_pending_spreads(self) -> list[dict]:
+        """Check if any pending spread triggers are hit. Returns triggered spreads."""
+        triggered = []
+        pending = [s for s in self._pending_spreads.values() if s.status == "PENDING"]
+        if not pending:
+            return triggered
+
+        # Batch fetch LTPs for all pending sell instruments
+        by_segment: dict[str, list] = {}
+        for spread in pending:
+            seg = spread.sell_exchange_segment
+            by_segment.setdefault(seg, []).append(spread.sell_security_id)
+
+        ltps: dict[str, float] = {}
+        for seg, sec_ids in by_segment.items():
+            try:
+                ltp_data = self.api.get_ltp({seg: sec_ids})
+                if isinstance(ltp_data, dict) and "data" in ltp_data:
+                    for key, val in ltp_data["data"].items():
+                        if isinstance(val, dict):
+                            ltps[key] = val.get("last_price", 0)
+                        elif isinstance(val, (int, float)):
+                            ltps[key] = val
+            except Exception as e:
+                logger.error("Failed to fetch LTP for pending spreads: %s", e)
+
+        for spread in pending:
+            ltp = ltps.get(spread.sell_security_id, 0)
+            if ltp <= 0:
+                continue
+
+            # For sell SL trigger: LTP <= trigger_price (standard exchange behavior)
+            if ltp <= spread.sell_trigger_price:
+                spread.status = "TRIGGERED"
+                spread.triggered_at = time.time()
+                triggered.append({
+                    "spread_id": spread.spread_id,
+                    "sell_security_id": spread.sell_security_id,
+                    "sell_exchange_segment": spread.sell_exchange_segment,
+                    "sell_price": spread.sell_price,
+                    "sell_sl": spread.sell_sl,
+                    "buy_security_id": spread.buy_security_id,
+                    "buy_exchange_segment": spread.buy_exchange_segment,
+                    "quantity": spread.quantity,
+                    "ltp": ltp,
+                })
+                logger.warning(
+                    "Spread %s TRIGGERED: sell %s LTP=%.2f <= trigger=%.2f",
+                    spread.spread_id, spread.sell_security_id,
+                    ltp, spread.sell_trigger_price,
+                )
+
+        return triggered
+
+    def update_spread_status(self, spread_id: str, status: str,
+                             hedge_order_id: str = "", sell_order_id: str = "",
+                             error_message: str = ""):
+        """Update a pending spread order status after execution."""
+        spread = self._pending_spreads.get(spread_id)
+        if spread:
+            spread.status = status
+            if hedge_order_id:
+                spread.hedge_order_id = hedge_order_id
+            if sell_order_id:
+                spread.sell_order_id = sell_order_id
+            if error_message:
+                spread.error_message = error_message
+
+    def cancel_pending_spread(self, spread_id: str) -> bool:
+        """Cancel a pending spread order."""
+        spread = self._pending_spreads.get(spread_id)
+        if spread and spread.status == "PENDING":
+            spread.status = "CANCELLED"
+            logger.info("Spread %s cancelled", spread_id)
+            return True
+        return False
+
+    def get_pending_spreads_summary(self) -> list[dict]:
+        """Get summary of all pending spread orders."""
+        return [
+            {
+                "spread_id": s.spread_id,
+                "sell_security_id": s.sell_security_id,
+                "sell_price": s.sell_price,
+                "sell_trigger_price": s.sell_trigger_price,
+                "sell_sl": s.sell_sl,
+                "buy_security_id": s.buy_security_id,
+                "quantity": s.quantity,
+                "status": s.status,
+                "created_at": s.created_at,
+                "triggered_at": s.triggered_at,
+                "error_message": s.error_message,
+            }
+            for s in self._pending_spreads.values()
+            if s.status in ("PENDING", "TRIGGERED")
+        ]
 
     def get_spread_summary(self) -> list[dict]:
         """Get summary of all detected spreads."""

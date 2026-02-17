@@ -158,6 +158,11 @@ class PositionMonitor:
             for trigger in sl_tp_triggers:
                 self._execute_sl_tp(trigger)
 
+            # Check pending spread orders
+            spread_triggers = self.trade_mgr.check_pending_spreads()
+            for spread_action in spread_triggers:
+                self._execute_spread(spread_action)
+
             # Check trade results for cooldown evaluation
             self._check_new_trades()
 
@@ -232,6 +237,93 @@ class PositionMonitor:
         except Exception as e:
             logger.error("Failed to execute %s: %s", trigger["action"], e)
 
+    def _execute_spread(self, spread_action: dict):
+        """
+        Execute a triggered spread order:
+        1. Buy hedge at MARKET (immediate)
+        2. Place sell at LIMIT price
+        3. Auto-set SL on sell leg
+        """
+        spread_id = spread_action["spread_id"]
+        logger.warning(
+            "Executing spread %s: BUY hedge %s @ MKT, then SELL %s @ %.2f",
+            spread_id, spread_action["buy_security_id"],
+            spread_action["sell_security_id"], spread_action["sell_price"],
+        )
+
+        try:
+            # Step 1: Buy hedge at MARKET
+            hedge_result = self.api.place_order(
+                security_id=spread_action["buy_security_id"],
+                exchange_segment=spread_action["buy_exchange_segment"],
+                transaction_type="BUY",
+                quantity=spread_action["quantity"],
+                order_type="MARKET",
+                product_type="MARGIN",
+                price=0,
+            )
+
+            hedge_order_id = ""
+            if isinstance(hedge_result, dict):
+                hedge_order_id = str(hedge_result.get("orderId", hedge_result.get("data", {}).get("orderId", "")))
+
+            logger.info("Spread %s: hedge BUY placed (order: %s)", spread_id, hedge_order_id)
+
+            # Brief pause to let hedge fill
+            time.sleep(0.5)
+
+            # Step 2: Place sell at LIMIT price
+            sell_result = self.api.place_order(
+                security_id=spread_action["sell_security_id"],
+                exchange_segment=spread_action["sell_exchange_segment"],
+                transaction_type="SELL",
+                quantity=spread_action["quantity"],
+                order_type="LIMIT",
+                product_type="MARGIN",
+                price=spread_action["sell_price"],
+            )
+
+            sell_order_id = ""
+            if isinstance(sell_result, dict):
+                sell_order_id = str(sell_result.get("orderId", sell_result.get("data", {}).get("orderId", "")))
+
+            logger.info("Spread %s: SELL placed @ %.2f (order: %s)",
+                        spread_id, spread_action["sell_price"], sell_order_id)
+
+            # Step 3: Auto-set SL on sell leg if specified
+            if spread_action.get("sell_sl", 0) > 0:
+                self.trade_mgr.set_stop_loss(
+                    security_id=spread_action["sell_security_id"],
+                    sl_price=spread_action["sell_sl"],
+                )
+                logger.info("Spread %s: SL set at %.2f for sell leg",
+                            spread_id, spread_action["sell_sl"])
+
+            # Update spread status
+            self.trade_mgr.update_spread_status(
+                spread_id, "FILLED",
+                hedge_order_id=hedge_order_id,
+                sell_order_id=sell_order_id,
+            )
+
+            # Notify dashboard
+            try:
+                from dashboard import emit_sl_tp_trigger
+                emit_sl_tp_trigger({
+                    "action": "SPREAD_FILLED",
+                    "security_id": spread_action["sell_security_id"],
+                    "trigger_price": spread_action["sell_price"],
+                    "ltp": spread_action.get("ltp", 0),
+                })
+            except Exception:
+                pass
+
+        except Exception as e:
+            logger.error("Spread %s execution FAILED: %s", spread_id, e, exc_info=True)
+            self.trade_mgr.update_spread_status(
+                spread_id, "FAILED", error_message=str(e),
+            )
+
     def _execute_lockout(self):
         """
         Execute full lockout procedure.
@@ -294,6 +386,7 @@ class PositionMonitor:
             "positions": self._last_positions,
             "spreads": self.trade_mgr.get_spread_summary(),
             "sl_tp_orders": self.trade_mgr.get_active_sl_tp(),
+            "pending_spreads": self.trade_mgr.get_pending_spreads_summary(),
         }
 
 

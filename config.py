@@ -46,8 +46,8 @@ class Config:
     MONITOR_INTERVAL: int = int(os.getenv("MONITOR_INTERVAL", "2"))
 
     # Position Sizing Defaults
-    DEFAULT_RISK_AMOUNT: float = float(os.getenv("DEFAULT_RISK_AMOUNT", "2000"))
-    DEFAULT_PRODUCT_TYPE: str = os.getenv("DEFAULT_PRODUCT_TYPE", "INTRADAY")
+    DEFAULT_RISK_AMOUNT: float = float(os.getenv("DEFAULT_RISK_AMOUNT", "1000"))
+    DEFAULT_PRODUCT_TYPE: str = os.getenv("DEFAULT_PRODUCT_TYPE", "MARGIN")
 
     # Quick SL/TP offsets (points, shown as buttons on positions)
     QUICK_SL_OFFSETS: list = [50, 100, 200]

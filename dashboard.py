@@ -228,20 +228,9 @@ DASHBOARD_HTML = """
             justify-content: space-between;
         }
 
-        /* Order Panel */
-        .order-panel { margin-top: 16px; }
-        .order-panel .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            cursor: pointer;
-            padding-bottom: 12px;
-        }
-        .order-panel .panel-header h3 { margin-bottom: 0; cursor: pointer; }
-        .order-panel .panel-body { display: none; }
-        .order-panel.open .panel-body { display: block; }
-        .order-panel .toggle-icon { color: #8b949e; font-size: 14px; transition: transform 0.2s; }
-        .order-panel.open .toggle-icon { transform: rotate(180deg); }
+        /* Order Tabs */
+        .order-tab { transition: all 0.2s; }
+        .order-tab:hover { color: #e0e6ed !important; }
 
         .form-input {
             background: #0d1117;
@@ -454,115 +443,146 @@ DASHBOARD_HTML = """
     <!-- Order Placement Panel -->
     <div style="padding:0 24px;">
         <div class="card">
-            <div class="order-panel open" id="order-panel">
-                <div class="panel-header" onclick="toggleOrderPanel()">
-                    <h3 style="margin:0;">Place Order</h3>
-                    <span class="toggle-icon">&#9660;</span>
-                </div>
-                <div class="panel-body">
-                    <!-- Instrument Search -->
-                    <div class="search-wrapper" style="margin-bottom:16px;">
-                        <div class="form-label">Instrument</div>
-                        <input id="instrument-search" class="form-input" placeholder="Search... e.g. NIFTY 24000 CE" autocomplete="off">
-                        <div class="search-results" id="search-results"></div>
-                        <input type="hidden" id="order-security-id">
-                        <input type="hidden" id="order-exchange-segment">
-                        <input type="hidden" id="order-lot-size">
-                        <input type="hidden" id="order-tick-size">
-                        <div id="selected-instrument" style="margin-top:6px;font-size:12px;color:#58a6ff;display:none;"></div>
-                    </div>
+            <!-- Tab Headers -->
+            <div style="display:flex;gap:0;border-bottom:1px solid #21262d;margin-bottom:16px;">
+                <div class="order-tab active" data-tab="naked" onclick="switchOrderTab('naked')" style="padding:10px 20px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;">Naked Order</div>
+                <div class="order-tab" data-tab="spread" onclick="switchOrderTab('spread')" style="padding:10px 20px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;">Spread Entry</div>
+            </div>
 
-                    <!-- Order Fields Row -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:12px;margin-bottom:16px;">
+            <!-- ═══ NAKED ORDER TAB ═══ -->
+            <div id="tab-naked">
+                <!-- Instrument Search -->
+                <div class="search-wrapper" style="margin-bottom:12px;">
+                    <div class="form-label">Instrument</div>
+                    <input id="instrument-search" class="form-input" placeholder="Search... e.g. NIFTY 24000 CE" autocomplete="off">
+                    <div class="search-results" id="search-results"></div>
+                    <input type="hidden" id="order-security-id">
+                    <input type="hidden" id="order-exchange-segment">
+                    <input type="hidden" id="order-lot-size" value="1">
+                    <input type="hidden" id="order-tick-size" value="0.05">
+                    <div id="selected-instrument" style="margin-top:4px;font-size:12px;color:#58a6ff;display:none;"></div>
+                </div>
+
+                <!-- Integrated Order Form: fields + auto-sizing -->
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
+                    <div>
+                        <div class="form-label">Side</div>
+                        <select id="order-txn-type" class="form-select">
+                            <option value="BUY">BUY</option>
+                            <option value="SELL">SELL</option>
+                        </select>
+                    </div>
+                    <div>
+                        <div class="form-label">Order Type</div>
+                        <select id="order-type" class="form-select">
+                            <option value="SL">STOP LIMIT</option>
+                            <option value="SLM">STOP MARKET</option>
+                            <option value="LIMIT">LIMIT</option>
+                            <option value="MARKET">MARKET</option>
+                        </select>
+                    </div>
+                    <div>
+                        <div class="form-label">Product</div>
+                        <select id="order-product-type" class="form-select">
+                            <option value="MARGIN">MARGIN</option>
+                            <option value="INTRADAY">INTRADAY</option>
+                            <option value="CNC">CNC</option>
+                        </select>
+                    </div>
+                    <div>
+                        <div class="form-label">Price</div>
+                        <input id="order-price" class="form-input calc-trigger" type="number" step="0.05" placeholder="0.00">
+                    </div>
+                    <div>
+                        <div class="form-label">Trigger</div>
+                        <input id="order-trigger-price" class="form-input" type="number" step="0.05" placeholder="0.00">
+                    </div>
+                    <div>
+                        <div class="form-label">SL Price</div>
+                        <input id="calc-sl" class="form-input calc-trigger" type="number" step="0.05" placeholder="0.00">
+                    </div>
+                    <div>
+                        <div class="form-label">Max Loss (&#8377;)</div>
+                        <input id="calc-risk" class="form-input calc-trigger" type="number" value="{{ default_risk }}">
+                    </div>
+                </div>
+
+                <!-- Auto-calculated sizing display + submit -->
+                <div style="display:flex;gap:16px;align-items:center;justify-content:space-between;background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:12px 16px;">
+                    <div style="display:flex;gap:24px;align-items:center;font-size:13px;">
+                        <div><span class="form-label">Qty:</span> <strong id="calc-qty" style="font-size:16px;">-</strong> <span id="calc-lots" style="color:#8b949e;font-size:11px;"></span></div>
+                        <div><span class="form-label">Risk/Unit:</span> <strong id="calc-risk-unit">-</strong></div>
+                        <div><span class="form-label">Actual Risk:</span> <strong id="calc-actual-risk" class="negative">-</strong></div>
+                        <div id="calc-feasibility" style="font-size:12px;"></div>
+                    </div>
+                    <div style="display:flex;gap:8px;">
+                        <input id="order-quantity" class="form-input" type="number" placeholder="Qty" style="width:80px;text-align:center;">
+                        <button onclick="placeOrder('BUY')" class="btn-buy" style="padding:8px 24px;font-size:14px;font-weight:700;border:none;border-radius:6px;cursor:pointer;">BUY</button>
+                        <button onclick="placeOrder('SELL')" class="btn-sell" style="padding:8px 24px;font-size:14px;font-weight:700;border:none;border-radius:6px;cursor:pointer;">SELL</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ SPREAD ENTRY TAB ═══ -->
+            <div id="tab-spread" style="display:none;">
+                <div style="background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:12px;color:#8b949e;">
+                    Spread entry: when sell trigger hits, the hedge leg is bought at market first, then the sell executes at your price. This ensures margin availability.
+                </div>
+
+                <!-- Sell Leg (main) -->
+                <div style="border-left:3px solid #f85149;padding-left:12px;margin-bottom:16px;">
+                    <div class="form-label" style="color:#f85149;font-weight:600;margin-bottom:8px;">SELL LEG (main)</div>
+                    <div class="search-wrapper" style="margin-bottom:8px;">
+                        <input id="spread-sell-search" class="form-input" placeholder="Search sell instrument..." autocomplete="off">
+                        <div class="search-results" id="spread-sell-results"></div>
+                        <input type="hidden" id="spread-sell-id">
+                        <input type="hidden" id="spread-sell-exseg">
+                        <input type="hidden" id="spread-sell-lot" value="1">
+                        <div id="spread-sell-info" style="margin-top:4px;font-size:12px;color:#f85149;display:none;"></div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;">
                         <div>
-                            <div class="form-label">Side</div>
-                            <select id="order-txn-type" class="form-select">
-                                <option value="BUY">BUY</option>
-                                <option value="SELL">SELL</option>
-                            </select>
-                        </div>
-                        <div>
-                            <div class="form-label">Order Type</div>
-                            <select id="order-type" class="form-select">
-                                <option value="LIMIT">LIMIT</option>
-                                <option value="MARKET">MARKET</option>
-                                <option value="SL">STOP LIMIT</option>
-                                <option value="SLM">STOP MARKET</option>
-                            </select>
-                        </div>
-                        <div>
-                            <div class="form-label">Product</div>
-                            <select id="order-product-type" class="form-select">
-                                <option value="INTRADAY">INTRADAY</option>
-                                <option value="MARGIN">MARGIN</option>
-                                <option value="CNC">CNC</option>
-                            </select>
-                        </div>
-                        <div>
-                            <div class="form-label">Price</div>
-                            <input id="order-price" class="form-input" type="number" step="0.05" placeholder="0.00">
+                            <div class="form-label">Sell Price</div>
+                            <input id="spread-sell-price" class="form-input spread-calc" type="number" step="0.05" placeholder="0.00">
                         </div>
                         <div>
                             <div class="form-label">Trigger Price</div>
-                            <input id="order-trigger-price" class="form-input" type="number" step="0.05" placeholder="0.00">
+                            <input id="spread-sell-trigger" class="form-input" type="number" step="0.05" placeholder="0.00">
+                        </div>
+                        <div>
+                            <div class="form-label">SL Price</div>
+                            <input id="spread-sell-sl" class="form-input spread-calc" type="number" step="0.05" placeholder="0.00">
+                        </div>
+                        <div>
+                            <div class="form-label">Max Loss (&#8377;)</div>
+                            <input id="spread-risk" class="form-input spread-calc" type="number" value="{{ default_risk }}">
                         </div>
                     </div>
+                </div>
 
-                    <!-- Position Size Calculator -->
-                    <div style="border-top:1px solid #21262d;padding-top:16px;margin-bottom:16px;">
-                        <h3 style="margin-bottom:12px;">Position Size Calculator</h3>
-                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:12px;align-items:end;">
-                            <div>
-                                <div class="form-label">Risk Amount (&#8377;)</div>
-                                <input id="calc-risk" class="form-input" type="number" placeholder="{{ default_risk }}" value="{{ default_risk }}">
-                            </div>
-                            <div>
-                                <div class="form-label">Entry Price</div>
-                                <input id="calc-entry" class="form-input" type="number" step="0.05" placeholder="0.00">
-                            </div>
-                            <div>
-                                <div class="form-label">Stop Loss Price</div>
-                                <input id="calc-sl" class="form-input" type="number" step="0.05" placeholder="0.00">
-                            </div>
-                            <div>
-                                <button onclick="calculateSize()" class="btn-tp" style="padding:8px 20px;height:38px;">CALCULATE</button>
-                            </div>
-                        </div>
-
-                        <div class="calc-results" id="calc-results">
-                            <div class="calc-grid">
-                                <div class="calc-item">
-                                    <div class="label">Quantity</div>
-                                    <div class="val" id="calc-qty">-</div>
-                                    <div class="sub" id="calc-lots" style="font-size:11px;color:#8b949e;"></div>
-                                </div>
-                                <div class="calc-item">
-                                    <div class="label">Risk / Unit</div>
-                                    <div class="val" id="calc-risk-unit">-</div>
-                                </div>
-                                <div class="calc-item">
-                                    <div class="label">Actual Risk</div>
-                                    <div class="val" id="calc-actual-risk">-</div>
-                                </div>
-                                <div class="calc-item">
-                                    <div class="label">Margin Req.</div>
-                                    <div class="val" id="calc-margin">-</div>
-                                </div>
-                            </div>
-                            <div id="calc-feasibility" style="margin-top:8px;font-size:12px;display:none;"></div>
-                        </div>
+                <!-- Buy Leg (hedge) -->
+                <div style="border-left:3px solid #3fb950;padding-left:12px;margin-bottom:16px;">
+                    <div class="form-label" style="color:#3fb950;font-weight:600;margin-bottom:8px;">BUY LEG (hedge - bought at market)</div>
+                    <div class="search-wrapper" style="margin-bottom:8px;">
+                        <input id="spread-buy-search" class="form-input" placeholder="Search hedge instrument..." autocomplete="off">
+                        <div class="search-results" id="spread-buy-results"></div>
+                        <input type="hidden" id="spread-buy-id">
+                        <input type="hidden" id="spread-buy-exseg">
+                        <input type="hidden" id="spread-buy-lot" value="1">
+                        <div id="spread-buy-info" style="margin-top:4px;font-size:12px;color:#3fb950;display:none;"></div>
                     </div>
+                </div>
 
-                    <!-- Quantity + Submit -->
-                    <div style="display:flex;gap:12px;align-items:end;justify-content:space-between;">
-                        <div style="flex:1;">
-                            <div class="form-label">Quantity (auto-filled from calculator)</div>
-                            <input id="order-quantity" class="form-input" type="number" placeholder="0" style="max-width:200px;">
-                        </div>
-                        <div style="display:flex;gap:8px;">
-                            <button onclick="placeOrder('BUY')" class="btn-buy" style="padding:10px 28px;font-size:14px;font-weight:700;border:none;border-radius:6px;cursor:pointer;">BUY</button>
-                            <button onclick="placeOrder('SELL')" class="btn-sell" style="padding:10px 28px;font-size:14px;font-weight:700;border:none;border-radius:6px;cursor:pointer;">SELL</button>
-                        </div>
+                <!-- Spread sizing + submit -->
+                <div style="display:flex;gap:16px;align-items:center;justify-content:space-between;background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:12px 16px;">
+                    <div style="display:flex;gap:24px;align-items:center;font-size:13px;">
+                        <div><span class="form-label">Qty:</span> <strong id="spread-qty">-</strong> <span id="spread-lots" style="color:#8b949e;font-size:11px;"></span></div>
+                        <div><span class="form-label">Risk/Unit:</span> <strong id="spread-risk-unit">-</strong></div>
+                        <div><span class="form-label">Actual Risk:</span> <strong id="spread-actual-risk" class="negative">-</strong></div>
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <input id="spread-quantity" class="form-input" type="number" placeholder="Qty" style="width:80px;text-align:center;">
+                        <button onclick="placeSpreadOrder()" class="btn-sell" style="padding:8px 24px;font-size:14px;font-weight:700;border:none;border-radius:6px;cursor:pointer;">PLACE SPREAD</button>
                     </div>
                 </div>
             </div>
@@ -1002,9 +1022,15 @@ DASHBOARD_HTML = """
             container.innerHTML = html;
         }
 
-        // ── Order Panel Toggle ─────────────────────────────────────
-        function toggleOrderPanel() {
-            document.getElementById('order-panel').classList.toggle('open');
+        // ── Tab Switching ───────────────────────────────────────────
+        function switchOrderTab(tab) {
+            document.getElementById('tab-naked').style.display = tab === 'naked' ? '' : 'none';
+            document.getElementById('tab-spread').style.display = tab === 'spread' ? '' : 'none';
+            document.querySelectorAll('.order-tab').forEach(function(t) {
+                var isActive = t.getAttribute('data-tab') === tab;
+                t.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
+                t.style.color = isActive ? '#58a6ff' : '#8b949e';
+            });
         }
 
         // ── Instrument Search ──────────────────────────────────────
@@ -1064,10 +1090,12 @@ DASHBOARD_HTML = """
             }
         });
 
-        // Close search results when clicking elsewhere
+        // Close all search results when clicking elsewhere
         document.addEventListener('click', function(e) {
             if (!e.target.closest('.search-wrapper')) {
-                document.getElementById('search-results').style.display = 'none';
+                document.querySelectorAll('.search-results').forEach(function(el) {
+                    el.style.display = 'none';
+                });
             }
         });
 
@@ -1082,75 +1110,71 @@ DASHBOARD_HTML = """
             document.getElementById('selected-instrument').textContent =
                 inst.exchange + ' | ' + inst.instrument_type + ' | Lot size: ' + inst.lot_size + ' | ID: ' + inst.security_id;
 
-            // Fetch LTP
+            // Fetch LTP and trigger auto-calc
             fetch('/api/ltp/' + inst.security_id + '?exchange_segment=' + inst.exchange_segment)
                 .then(function(r){ return r.json(); })
                 .then(function(d) {
                     if (d.ltp) {
                         document.getElementById('order-price').value = d.ltp;
-                        document.getElementById('calc-entry').value = d.ltp;
+                        triggerAutoCalc();
                     }
                 });
         }
 
-        // ── Position Size Calculator ───────────────────────────────
-        function calculateSize() {
+        // ── Auto Position Size Calculator ────────────────────────────
+        var _calcTimeout = null;
+
+        function triggerAutoCalc() {
+            clearTimeout(_calcTimeout);
+            _calcTimeout = setTimeout(doAutoCalc, 400);
+        }
+
+        function doAutoCalc() {
             var secId = document.getElementById('order-security-id').value;
-            if (!secId) { showToast('Select an instrument first', 'warning'); return; }
+            if (!secId) return;
 
-            var payload = {
-                risk_amount: parseFloat(document.getElementById('calc-risk').value) || 0,
-                entry_price: parseFloat(document.getElementById('calc-entry').value) || 0,
-                sl_price: parseFloat(document.getElementById('calc-sl').value) || 0,
-                security_id: secId,
-                transaction_type: document.getElementById('order-txn-type').value,
-                product_type: document.getElementById('order-product-type').value
-            };
+            var price = parseFloat(document.getElementById('order-price').value) || 0;
+            var sl = parseFloat(document.getElementById('calc-sl').value) || 0;
+            var risk = parseFloat(document.getElementById('calc-risk').value) || 0;
 
-            if (payload.risk_amount <= 0) { showToast('Enter a risk amount', 'warning'); return; }
-            if (payload.entry_price <= 0) { showToast('Enter an entry price', 'warning'); return; }
-            if (payload.sl_price <= 0) { showToast('Enter a stop loss price', 'warning'); return; }
-            if (payload.entry_price === payload.sl_price) { showToast('Entry and SL cannot be the same', 'warning'); return; }
+            if (price <= 0 || sl <= 0 || risk <= 0 || price === sl) return;
 
             fetch('/api/order/calculate_size', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload)
+                body: JSON.stringify({
+                    risk_amount: risk,
+                    entry_price: price,
+                    sl_price: sl,
+                    security_id: secId,
+                    transaction_type: document.getElementById('order-txn-type').value,
+                    product_type: document.getElementById('order-product-type').value
+                })
             })
             .then(function(r){ return r.json(); })
             .then(function(data) {
-                if (data.error) { showToast(data.error, 'error'); return; }
-
-                var el = document.getElementById('calc-results');
-                el.style.display = 'block';
-
+                if (data.error) return;
                 document.getElementById('calc-qty').textContent = data.quantity;
                 document.getElementById('calc-lots').textContent = data.num_lots != null ? data.num_lots + ' lot(s) x ' + data.lot_size : '';
                 document.getElementById('calc-risk-unit').textContent = fmtDec(data.risk_per_unit);
                 document.getElementById('calc-actual-risk').textContent = fmt(data.actual_risk);
-                document.getElementById('calc-actual-risk').className = 'val negative';
-                document.getElementById('calc-margin').textContent = data.margin_required ? fmt(data.margin_required) : 'N/A';
-
                 var feas = document.getElementById('calc-feasibility');
                 if (!data.feasible) {
-                    feas.style.display = 'block';
                     feas.innerHTML = '<span class="negative">Blocked: ' + data.feasibility_reason + '</span>';
                 } else {
-                    feas.style.display = 'block';
-                    feas.innerHTML = '<span class="positive">Risk check passed</span>';
+                    feas.innerHTML = '<span class="positive">Risk OK</span>';
                 }
-
-                // Auto-fill quantity
                 document.getElementById('order-quantity').value = data.quantity;
-
-                // Also set the order price to entry
-                document.getElementById('order-price').value = parseFloat(document.getElementById('calc-entry').value) || 0;
             })
-            .catch(function(err) {
-                showToast('Calculator error: ' + err, 'error');
-                console.error('Calculate size error:', err);
-            });
+            .catch(function(err) { console.error('Auto-calc error:', err); });
         }
+
+        // Attach auto-calc listeners to all .calc-trigger inputs
+        document.querySelectorAll('.calc-trigger').forEach(function(el) {
+            el.addEventListener('input', triggerAutoCalc);
+        });
+        document.getElementById('order-txn-type').addEventListener('change', triggerAutoCalc);
+        document.getElementById('order-product-type').addEventListener('change', triggerAutoCalc);
 
         // ── Place Order ────────────────────────────────────────────
         function placeOrder(side) {
@@ -1197,7 +1221,6 @@ DASHBOARD_HTML = """
                     showToast('Order placed: ' + label, 'success');
                     // Clear form
                     document.getElementById('order-quantity').value = '';
-                    document.getElementById('calc-results').style.display = 'none';
                 }
             })
             .catch(function(err) {
@@ -1309,6 +1332,183 @@ DASHBOARD_HTML = """
                     }
                 });
             }
+        }
+
+        // ── Spread Instrument Search ─────────────────────────────────
+        var _spreadSellResults = [];
+        var _spreadBuyResults = [];
+
+        function setupSpreadSearch(inputId, resultsId, resultsArr, setterFn) {
+            var input = document.getElementById(inputId);
+            var container = document.getElementById(resultsId);
+            if (!input || !container) return;
+
+            var timeout = null;
+            input.addEventListener('input', function() {
+                clearTimeout(timeout);
+                var q = this.value.trim();
+                if (q.length < 2) { container.style.display = 'none'; return; }
+                timeout = setTimeout(function() {
+                    fetch('/api/instruments/search?q=' + encodeURIComponent(q) + '&limit=15')
+                        .then(function(r){ return r.json(); })
+                        .then(function(results) {
+                            if (!results || results.length === 0) {
+                                container.innerHTML = '<div class="search-item"><div class="meta">No results</div></div>';
+                                container.style.display = 'block';
+                                return;
+                            }
+                            resultsArr.length = 0;
+                            for (var i = 0; i < results.length; i++) resultsArr.push(results[i]);
+                            var html = '';
+                            for (var i = 0; i < results.length; i++) {
+                                var r = results[i];
+                                html += '<div class="search-item" data-idx="' + i + '">';
+                                html += '<div><span class="sym">' + r.custom_symbol + '</span></div>';
+                                html += '<div class="meta">' + r.exchange + ' | Lot: ' + r.lot_size + ' | ' + r.instrument_type + '</div>';
+                                html += '</div>';
+                            }
+                            container.innerHTML = html;
+                            container.style.display = 'block';
+                        })
+                        .catch(function(err) { console.error('Search error:', err); });
+                }, 300);
+            });
+
+            container.addEventListener('click', function(e) {
+                var item = e.target.closest('.search-item');
+                if (!item) return;
+                var idx = parseInt(item.getAttribute('data-idx'));
+                if (idx >= 0 && idx < resultsArr.length) {
+                    setterFn(resultsArr[idx]);
+                    container.style.display = 'none';
+                }
+            });
+        }
+
+        function selectSellInstrument(inst) {
+            document.getElementById('spread-sell-search').value = inst.custom_symbol;
+            document.getElementById('spread-sell-id').value = inst.security_id;
+            document.getElementById('spread-sell-exseg').value = inst.exchange_segment;
+            document.getElementById('spread-sell-lot').value = inst.lot_size;
+            var info = document.getElementById('spread-sell-info');
+            info.style.display = 'block';
+            info.textContent = inst.exchange + ' | ' + inst.instrument_type + ' | Lot: ' + inst.lot_size + ' | ID: ' + inst.security_id;
+            fetch('/api/ltp/' + inst.security_id + '?exchange_segment=' + inst.exchange_segment)
+                .then(function(r){ return r.json(); })
+                .then(function(d) {
+                    if (d.ltp) {
+                        document.getElementById('spread-sell-price').value = d.ltp;
+                        triggerSpreadCalc();
+                    }
+                });
+        }
+
+        function selectBuyInstrument(inst) {
+            document.getElementById('spread-buy-search').value = inst.custom_symbol;
+            document.getElementById('spread-buy-id').value = inst.security_id;
+            document.getElementById('spread-buy-exseg').value = inst.exchange_segment;
+            document.getElementById('spread-buy-lot').value = inst.lot_size;
+            var info = document.getElementById('spread-buy-info');
+            info.style.display = 'block';
+            info.textContent = inst.exchange + ' | ' + inst.instrument_type + ' | Lot: ' + inst.lot_size + ' | ID: ' + inst.security_id;
+        }
+
+        setupSpreadSearch('spread-sell-search', 'spread-sell-results', _spreadSellResults, selectSellInstrument);
+        setupSpreadSearch('spread-buy-search', 'spread-buy-results', _spreadBuyResults, selectBuyInstrument);
+
+        // ── Spread Auto-Calc ─────────────────────────────────────────
+        var _spreadCalcTimeout = null;
+
+        function triggerSpreadCalc() {
+            clearTimeout(_spreadCalcTimeout);
+            _spreadCalcTimeout = setTimeout(doSpreadCalc, 400);
+        }
+
+        function doSpreadCalc() {
+            var secId = document.getElementById('spread-sell-id').value;
+            if (!secId) return;
+
+            var price = parseFloat(document.getElementById('spread-sell-price').value) || 0;
+            var sl = parseFloat(document.getElementById('spread-sell-sl').value) || 0;
+            var risk = parseFloat(document.getElementById('spread-risk').value) || 0;
+
+            if (price <= 0 || sl <= 0 || risk <= 0 || price === sl) return;
+
+            fetch('/api/order/calculate_size', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    risk_amount: risk,
+                    entry_price: price,
+                    sl_price: sl,
+                    security_id: secId,
+                    transaction_type: 'SELL',
+                    product_type: 'MARGIN'
+                })
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(data) {
+                if (data.error) return;
+                document.getElementById('spread-qty').textContent = data.quantity;
+                document.getElementById('spread-lots').textContent = data.num_lots != null ? data.num_lots + ' lot(s) x ' + data.lot_size : '';
+                document.getElementById('spread-risk-unit').textContent = fmtDec(data.risk_per_unit);
+                document.getElementById('spread-actual-risk').textContent = fmt(data.actual_risk);
+                document.getElementById('spread-quantity').value = data.quantity;
+            })
+            .catch(function(err) { console.error('Spread calc error:', err); });
+        }
+
+        document.querySelectorAll('.spread-calc').forEach(function(el) {
+            el.addEventListener('input', triggerSpreadCalc);
+        });
+
+        // ── Place Spread Order ───────────────────────────────────────
+        function placeSpreadOrder() {
+            var sellId = document.getElementById('spread-sell-id').value;
+            var buyId = document.getElementById('spread-buy-id').value;
+            var qty = parseInt(document.getElementById('spread-quantity').value);
+
+            if (!sellId) { showToast('Select sell instrument', 'warning'); return; }
+            if (!buyId) { showToast('Select hedge (buy) instrument', 'warning'); return; }
+            if (!qty || qty <= 0) { showToast('Enter quantity or fill pricing for auto-calc', 'warning'); return; }
+
+            var payload = {
+                sell_security_id: sellId,
+                sell_exchange_segment: document.getElementById('spread-sell-exseg').value,
+                sell_price: parseFloat(document.getElementById('spread-sell-price').value) || 0,
+                sell_trigger_price: parseFloat(document.getElementById('spread-sell-trigger').value) || 0,
+                sell_sl: parseFloat(document.getElementById('spread-sell-sl').value) || 0,
+                buy_security_id: buyId,
+                buy_exchange_segment: document.getElementById('spread-buy-exseg').value,
+                quantity: qty
+            };
+
+            if (payload.sell_price <= 0) { showToast('Enter sell price', 'warning'); return; }
+            if (payload.sell_trigger_price <= 0) { showToast('Enter trigger price for sell', 'warning'); return; }
+
+            var sellName = document.getElementById('spread-sell-search').value;
+            var buyName = document.getElementById('spread-buy-search').value;
+            var label = 'SELL ' + qty + ' ' + sellName + ' @ ' + payload.sell_price +
+                        ' (hedge: BUY ' + buyName + ' @ MKT)';
+
+            if (!confirm('Place spread order?\\n' + label)) return;
+
+            fetch('/api/order/place_spread', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(result) {
+                if (result.status === 'error') {
+                    playAlert('error');
+                    showToast('Spread order failed: ' + result.message, 'error');
+                } else {
+                    playAlert('order');
+                    showToast('Spread order queued - monitoring trigger @ \\u20B9' + payload.sell_trigger_price, 'success');
+                }
+            })
+            .catch(function(err) { showToast('Network error: ' + err, 'error'); });
         }
 
         // ── Socket.IO real-time updates ────────────────────────────
@@ -1545,6 +1745,52 @@ def api_calculate_size():
         "feasible": feasible,
         "feasibility_reason": feasibility_reason,
     })
+
+
+# ── Spread Orders ──────────────────────────────────────────────────
+
+@app.route("/api/order/place_spread", methods=["POST"])
+def api_place_spread():
+    """Queue a pending spread order (hedge buy at market + sell at limit)."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    data = request.json
+
+    required = ["sell_security_id", "buy_security_id", "sell_price",
+                 "sell_trigger_price", "quantity"]
+    for field in required:
+        if not data.get(field):
+            return jsonify({"status": "error", "message": f"Missing {field}"}), 400
+
+    try:
+        spread_id = _monitor.trade_mgr.add_pending_spread(data)
+        return jsonify({"status": "ok", "spread_id": spread_id})
+    except Exception as e:
+        logger.error("Failed to create spread order: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/order/pending_spreads")
+def api_pending_spreads():
+    """Get all pending/active spread orders."""
+    if not _monitor:
+        return jsonify([])
+    return jsonify(_monitor.trade_mgr.get_pending_spreads_summary())
+
+
+@app.route("/api/order/cancel_spread", methods=["POST"])
+def api_cancel_spread():
+    """Cancel a pending spread order."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    data = request.json
+    spread_id = data.get("spread_id", "")
+    if not spread_id:
+        return jsonify({"status": "error", "message": "Missing spread_id"}), 400
+    ok = _monitor.trade_mgr.cancel_pending_spread(spread_id)
+    if ok:
+        return jsonify({"status": "ok"})
+    return jsonify({"status": "error", "message": "Spread not found or not pending"}), 404
 
 
 # ── Quick SL/TP ───────────────────────────────────────────────────
