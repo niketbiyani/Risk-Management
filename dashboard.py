@@ -612,7 +612,18 @@ DASHBOARD_HTML = """
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        const socket = io();
+        // Socket.IO - graceful fallback if CDN fails to load
+        var socket = null;
+        try {
+            if (typeof io !== 'undefined') {
+                socket = io();
+            } else {
+                console.warn('Socket.IO not loaded - using polling only');
+            }
+        } catch(e) {
+            console.warn('Socket.IO connection failed:', e);
+        }
+
         const QUICK_SL_OFFSETS = {{ quick_sl_offsets }};
         const QUICK_TP_OFFSETS = {{ quick_tp_offsets }};
 
@@ -738,7 +749,7 @@ DASHBOARD_HTML = """
         }
 
         // ── SL/TP trigger from server ──────────────────────────────
-        socket.on('sl_tp_triggered', function(data) {
+        if (socket) socket.on('sl_tp_triggered', function(data) {
             var isTP = data.action === 'TAKE_PROFIT';
             playAlert(isTP ? 'tp_hit' : 'sl_hit');
             var msg = data.action + ' triggered for ' + data.security_id +
@@ -845,9 +856,13 @@ DASHBOARD_HTML = """
         }
 
         // ── Positions Table with SL/TP inline ──────────────────────
+        // Store position data so buttons can reference by index
+        var _openPositions = [];
+
         function updatePositions(positions, slTpOrders) {
             var tbody = document.getElementById('positions-body');
             var open = positions.filter(function(p){ return p.netQty !== 0; });
+            _openPositions = open;
             if (open.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#484f58;">No open positions</td></tr>';
                 return;
@@ -859,10 +874,9 @@ DASHBOARD_HTML = """
                 var pnlClass = pnl >= 0 ? 'positive' : 'negative';
                 var sid = (p.securityId || '') + '';
                 var exSeg = p.exchangeSegment || '';
-                var prodType = p.productType || '';
-                var qty = Math.abs(p.netQty || 0);
                 var dir = p.netQty > 0 ? 1 : -1;
                 var ltp = p.lastTradedPrice || 0;
+                var qty = Math.abs(p.netQty || 0);
 
                 // SL/TP info
                 var sltp = slTpOrders[sid];
@@ -870,38 +884,38 @@ DASHBOARD_HTML = """
                 var tpText = '-';
                 if (sltp && sltp.active) {
                     if (sltp.current_sl || sltp.stop_loss) {
-                        slText = '<span class="negative">SL: \\u20B9' + (sltp.current_sl || sltp.stop_loss).toFixed(2) + '</span>';
+                        slText = '<span class="negative">SL: ' + fmtDec(sltp.current_sl || sltp.stop_loss) + '</span>';
                         if (sltp.trailing) slText += ' <span style="color:#58a6ff;font-size:10px;">TSL</span>';
                     }
                     if (sltp.take_profit) {
-                        tpText = '<span class="positive">TP: \\u20B9' + sltp.take_profit.toFixed(2) + '</span>';
+                        tpText = '<span class="positive">TP: ' + fmtDec(sltp.take_profit) + '</span>';
                     }
                 }
 
-                html += '<tr>';
+                html += '<tr data-pos-idx="' + i + '">';
                 html += '<td>' + (p.tradingSymbol || sid) + '</td>';
                 html += '<td style="color:' + (dir > 0 ? '#3fb950' : '#f85149') + ';">' + (p.netQty || 0) + '</td>';
-                html += '<td>\\u20B9' + (p.avgPrice || 0).toFixed(2) + '</td>';
-                html += '<td>\\u20B9' + ltp.toFixed(2) + '</td>';
+                html += '<td>' + fmtDec(p.avgPrice || 0) + '</td>';
+                html += '<td>' + fmtDec(ltp) + '</td>';
                 html += '<td class="' + pnlClass + '">' + fmt(pnl) + '</td>';
                 html += '<td style="font-size:12px;">' + slText + '<br>' + tpText + '</td>';
 
-                // Quick SL/TP buttons
+                // Quick SL/TP buttons - use data attributes, no inline handlers
                 html += '<td><div class="quick-btns">';
                 for (var si = 0; si < QUICK_SL_OFFSETS.length; si++) {
-                    html += '<button class="btn-sl btn-xs" onclick="quickSL(\'' + sid + '\',\'' + exSeg + '\',' + dir + ',' + QUICK_SL_OFFSETS[si] + ')">SL-' + QUICK_SL_OFFSETS[si] + '</button>';
+                    html += '<button class="btn-sl btn-xs" data-action="qsl" data-idx="' + i + '" data-offset="' + QUICK_SL_OFFSETS[si] + '">SL-' + QUICK_SL_OFFSETS[si] + '</button>';
                 }
                 for (var ti = 0; ti < QUICK_TP_OFFSETS.length; ti++) {
-                    html += '<button class="btn-tp btn-xs" onclick="quickTP(\'' + sid + '\',\'' + exSeg + '\',' + dir + ',' + QUICK_TP_OFFSETS[ti] + ')">TP+' + QUICK_TP_OFFSETS[ti] + '</button>';
+                    html += '<button class="btn-tp btn-xs" data-action="qtp" data-idx="' + i + '" data-offset="' + QUICK_TP_OFFSETS[ti] + '">TP+' + QUICK_TP_OFFSETS[ti] + '</button>';
                 }
-                html += '<button class="btn-xs" style="background:#1f6feb;color:white;" onclick="showTSLForm(\'' + sid + '\',' + ltp + ')">TSL</button>';
+                html += '<button class="btn-xs" style="background:#1f6feb;color:white;" data-action="tsl" data-idx="' + i + '">TSL</button>';
                 html += '</div></td>';
 
                 // Actions
                 html += '<td>';
-                html += '<button class="btn-sl btn-sm" onclick="promptSL(\'' + sid + '\')">SL</button> ';
-                html += '<button class="btn-tp btn-sm" onclick="promptTP(\'' + sid + '\')">TP</button> ';
-                html += '<button class="btn-danger btn-sm" onclick="exitPosition(\'' + sid + '\',\'' + exSeg + '\',\'' + prodType + '\',' + qty + ',' + dir + ')">EXIT</button>';
+                html += '<button class="btn-sl btn-sm" data-action="set-sl" data-idx="' + i + '">SL</button> ';
+                html += '<button class="btn-tp btn-sm" data-action="set-tp" data-idx="' + i + '">TP</button> ';
+                html += '<button class="btn-danger btn-sm" data-action="exit" data-idx="' + i + '">EXIT</button>';
                 html += '</td>';
                 html += '</tr>';
 
@@ -912,13 +926,47 @@ DASHBOARD_HTML = """
                 html += '<input id="tsl-price-' + sid + '" placeholder="SL Price" type="number" step="0.05" value="' + ltp.toFixed(2) + '">';
                 html += '<input id="tsl-trail-' + sid + '" placeholder="Trail pts" type="number" step="0.05" value="10">';
                 html += '<input id="tsl-trigger-' + sid + '" placeholder="Start after" type="number" step="0.05" value="20">';
-                html += '<button class="btn-sl btn-sm" onclick="setTrailingSL(\'' + sid + '\')">Set TSL</button>';
-                html += '<button class="btn-neutral btn-sm" onclick="hideTSLForm(\'' + sid + '\')">Cancel</button>';
+                html += '<button class="btn-sl btn-sm" data-action="set-tsl" data-idx="' + i + '">Set TSL</button>';
+                html += '<button class="btn-neutral btn-sm" data-action="hide-tsl" data-idx="' + i + '">Cancel</button>';
                 html += '</div>';
                 html += '</td></tr>';
             }
             tbody.innerHTML = html;
         }
+
+        // Event delegation for all position table buttons
+        document.getElementById('positions-body').addEventListener('click', function(e) {
+            var btn = e.target.closest('button[data-action]');
+            if (!btn) return;
+            var action = btn.getAttribute('data-action');
+            var idx = parseInt(btn.getAttribute('data-idx'));
+            var p = _openPositions[idx];
+            if (!p) return;
+
+            var sid = (p.securityId || '') + '';
+            var exSeg = p.exchangeSegment || '';
+            var prodType = p.productType || '';
+            var qty = Math.abs(p.netQty || 0);
+            var dir = p.netQty > 0 ? 1 : -1;
+
+            if (action === 'qsl') {
+                quickSL(sid, exSeg, dir, parseInt(btn.getAttribute('data-offset')));
+            } else if (action === 'qtp') {
+                quickTP(sid, exSeg, dir, parseInt(btn.getAttribute('data-offset')));
+            } else if (action === 'tsl') {
+                showTSLForm(sid);
+            } else if (action === 'set-sl') {
+                promptSL(sid);
+            } else if (action === 'set-tp') {
+                promptTP(sid);
+            } else if (action === 'exit') {
+                exitPosition(sid, exSeg, prodType, qty, dir);
+            } else if (action === 'set-tsl') {
+                setTrailingSL(sid);
+            } else if (action === 'hide-tsl') {
+                hideTSLForm(sid);
+            }
+        });
 
         function updateSpreads(spreads) {
             var container = document.getElementById('spreads-container');
@@ -971,12 +1019,17 @@ DASHBOARD_HTML = """
                 return;
             }
             searchTimeout = setTimeout(function() {
-                fetch('/api/instruments/search?q=' + encodeURIComponent(q) + '&limit=15')
-                    .then(function(r){ return r.json(); })
+                var url = '/api/instruments/search?q=' + encodeURIComponent(q) + '&limit=15';
+                fetch(url)
+                    .then(function(r){
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.json();
+                    })
                     .then(function(results) {
                         var container = document.getElementById('search-results');
                         if (!results || results.length === 0) {
-                            container.style.display = 'none';
+                            container.innerHTML = '<div class="search-item"><div class="meta">No results found</div></div>';
+                            container.style.display = 'block';
                             _searchResults = [];
                             return;
                         }
@@ -990,6 +1043,12 @@ DASHBOARD_HTML = """
                             html += '</div>';
                         }
                         container.innerHTML = html;
+                        container.style.display = 'block';
+                    })
+                    .catch(function(err) {
+                        console.error('Search failed:', err);
+                        var container = document.getElementById('search-results');
+                        container.innerHTML = '<div class="search-item"><div class="meta" style="color:#f85149;">Search error: ' + err.message + '</div></div>';
                         container.style.display = 'block';
                     });
             }, 300);
@@ -1253,16 +1312,31 @@ DASHBOARD_HTML = """
         }
 
         // ── Socket.IO real-time updates ────────────────────────────
-        socket.on('status_update', function(data) {
+        if (socket) socket.on('status_update', function(data) {
             updateDashboard(data);
         });
 
+        // Safe dashboard update wrapper
+        function safeUpdate(data) {
+            try {
+                if (data && data.lockout) updateDashboard(data);
+            } catch(e) {
+                console.error('Dashboard update error:', e);
+            }
+        }
+
         // Initial fetch
-        fetch('/api/status').then(function(r){ return r.json(); }).then(updateDashboard);
+        fetch('/api/status')
+            .then(function(r){ return r.json(); })
+            .then(safeUpdate)
+            .catch(function(e){ console.error('Status fetch error:', e); });
 
         // Fallback polling
         setInterval(function() {
-            fetch('/api/status').then(function(r){ return r.json(); }).then(updateDashboard);
+            fetch('/api/status')
+                .then(function(r){ return r.json(); })
+                .then(safeUpdate)
+                .catch(function(e){});
         }, {{ interval * 1000 }});
     </script>
 </body>
