@@ -36,11 +36,13 @@ When lockout triggers:
 - Lockout banner when account is locked
 - Spread visualization with leg-level details
 
-## Setup
+## Setup (First Time Only)
 
-### 1. Install Dependencies
+### 1. Create Virtual Environment & Install Dependencies
 
 ```bash
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -75,20 +77,27 @@ CONSECUTIVE_LOSS_COUNT=3
 
 Get your Dhan access token from https://web.dhan.co (API section).
 
-### 3. Run
+## Daily Startup (Every Time)
+
+Run these 3 commands each time you want to start the platform:
 
 ```bash
-# Full platform (monitor + dashboard)
+cd ~/Risk-Management
+source venv/bin/activate
 python main.py
-
-# Monitor only (no web UI)
-python main.py --monitor
-
-# Check current status
-python main.py --status
 ```
 
 Dashboard opens at `http://localhost:5555`
+
+### Other Run Modes
+
+```bash
+# Monitor only (no web UI)
+python main.py --monitor
+
+# Check current status without starting
+python main.py --status
+```
 
 ## How It Works
 
