@@ -961,6 +961,8 @@ DASHBOARD_HTML = """
 
         // ── Instrument Search ──────────────────────────────────────
         var searchTimeout = null;
+        var _searchResults = [];  // Store results so we can reference by index
+
         document.getElementById('instrument-search').addEventListener('input', function() {
             clearTimeout(searchTimeout);
             var q = this.value.trim();
@@ -975,13 +977,14 @@ DASHBOARD_HTML = """
                         var container = document.getElementById('search-results');
                         if (!results || results.length === 0) {
                             container.style.display = 'none';
+                            _searchResults = [];
                             return;
                         }
+                        _searchResults = results;
                         var html = '';
                         for (var i = 0; i < results.length; i++) {
                             var r = results[i];
-                            var data = encodeURIComponent(JSON.stringify(r));
-                            html += '<div class="search-item" onclick="selectInstrument(decodeURIComponent(\\'' + data + '\\'))">';
+                            html += '<div class="search-item" data-idx="' + i + '">';
                             html += '<div><span class="sym">' + r.custom_symbol + '</span></div>';
                             html += '<div class="meta">' + r.exchange + ' | Lot: ' + r.lot_size + ' | ' + r.instrument_type + '</div>';
                             html += '</div>';
@@ -992,6 +995,16 @@ DASHBOARD_HTML = """
             }, 300);
         });
 
+        // Handle search result clicks via event delegation
+        document.getElementById('search-results').addEventListener('click', function(e) {
+            var item = e.target.closest('.search-item');
+            if (!item) return;
+            var idx = parseInt(item.getAttribute('data-idx'));
+            if (idx >= 0 && idx < _searchResults.length) {
+                selectInstrument(_searchResults[idx]);
+            }
+        });
+
         // Close search results when clicking elsewhere
         document.addEventListener('click', function(e) {
             if (!e.target.closest('.search-wrapper')) {
@@ -999,8 +1012,7 @@ DASHBOARD_HTML = """
             }
         });
 
-        function selectInstrument(jsonStr) {
-            var inst = JSON.parse(jsonStr);
+        function selectInstrument(inst) {
             document.getElementById('instrument-search').value = inst.custom_symbol;
             document.getElementById('order-security-id').value = inst.security_id;
             document.getElementById('order-exchange-segment').value = inst.exchange_segment;
@@ -1074,6 +1086,10 @@ DASHBOARD_HTML = """
 
                 // Also set the order price to entry
                 document.getElementById('order-price').value = parseFloat(document.getElementById('calc-entry').value) || 0;
+            })
+            .catch(function(err) {
+                showToast('Calculator error: ' + err, 'error');
+                console.error('Calculate size error:', err);
             });
         }
 
