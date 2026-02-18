@@ -43,6 +43,7 @@ class OrderInterceptor:
         product_type: str,
         price: float = 0,
         trigger_price: float = 0,
+        sl_price: float = 0,
         **kwargs,
     ) -> dict:
         """
@@ -56,7 +57,7 @@ class OrderInterceptor:
         # Estimate risk for this order
         estimated_risk = self._estimate_order_risk(
             security_id, exchange_segment, transaction_type,
-            quantity, price, positions
+            quantity, price, positions, sl_price=sl_price
         )
 
         # Run risk checks
@@ -101,10 +102,12 @@ class OrderInterceptor:
         quantity: int,
         price: float,
         current_positions: list,
+        sl_price: float = 0,
     ) -> float:
         """
         Estimate the risk of a new order.
-        For options, risk depends on whether it's a naked position or part of a spread.
+        If a stop-loss price is provided, risk = |entry - SL| * qty.
+        Otherwise falls back to heuristic estimates.
         """
         # Check if this is closing an existing position (reduces risk)
         for pos in current_positions:
@@ -115,6 +118,13 @@ class OrderInterceptor:
                    (net_qty < 0 and transaction_type == "BUY"):
                     return 0  # Closing trade has no additional risk
 
+        # If stop-loss is provided, actual risk = distance to SL * quantity
+        if sl_price > 0 and price > 0:
+            risk_per_unit = abs(price - sl_price)
+            if risk_per_unit > 0:
+                return risk_per_unit * quantity
+
+        # Fallback heuristics when no SL is provided
         # For options, estimate risk based on premium
         if exchange_segment in ("NSE_FNO", "BSE_FNO"):
             if price > 0:
@@ -123,7 +133,6 @@ class OrderInterceptor:
                     return price * quantity
                 else:
                     # Selling options: theoretically unlimited, use margin as proxy
-                    # Use a conservative estimate (2x premium or config limit)
                     return min(price * quantity * 2, Config.MAX_SINGLE_TRADE_RISK)
             else:
                 # Market order: use max single trade risk as estimate
@@ -141,6 +150,7 @@ class OrderInterceptor:
         transaction_type: str,
         quantity: int,
         price: float = 0,
+        sl_price: float = 0,
     ) -> RiskDecision:
         """
         Pre-check if an order would be allowed without placing it.
@@ -150,7 +160,7 @@ class OrderInterceptor:
         open_count = sum(1 for p in positions if p.get("netQty", 0) != 0)
         estimated_risk = self._estimate_order_risk(
             security_id, exchange_segment, transaction_type,
-            quantity, price, positions
+            quantity, price, positions, sl_price=sl_price
         )
         return self.risk.check_new_order(
             order_quantity=quantity,

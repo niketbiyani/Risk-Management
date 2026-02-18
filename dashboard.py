@@ -2236,6 +2236,7 @@ def api_place_order():
             product_type=data.get("product_type", "INTRADAY"),
             price=float(data.get("price", 0)),
             trigger_price=float(data.get("trigger_price", 0)),
+            sl_price=float(data.get("sl_price", 0)),
         )
 
         # If order placed and SL specified, auto-set SL
@@ -2340,6 +2341,7 @@ def api_calculate_size():
             transaction_type=data.get("transaction_type", "BUY"),
             quantity=quantity,
             price=entry_price,
+            sl_price=sl_price,
         )
         feasible = bool(decision)
         if not feasible:
