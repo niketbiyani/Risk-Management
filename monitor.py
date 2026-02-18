@@ -23,6 +23,7 @@ from state_manager import StateManager
 from risk_engine import RiskEngine
 from trade_manager import TradeManager
 from order_interceptor import OrderInterceptor
+from pnl_tracker import PnLTracker
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,12 @@ class PositionMonitor:
         self.trade_mgr = TradeManager(self.api)
         self.interceptor = OrderInterceptor(self.api, self.risk, self.state)
 
+        self.pnl_tracker = PnLTracker()
+
         self._running = False
         self._lock = threading.Lock()
         self._last_positions: list[dict] = []
+        self._last_orders: list[dict] = []
         self._last_trade_count = 0
         self._lockout_executed = False
 
@@ -96,6 +100,13 @@ class PositionMonitor:
                     if now > market_end and not self.state.is_fresh_day():
                         logger.info("Market closed. Final P&L: ₹%.0f",
                                     self.state.total_pnl)
+                        # Flush intraday P&L snapshots to journal for historical replay
+                        try:
+                            snapshots = self.pnl_tracker.get_all_snapshots()
+                            if snapshots:
+                                self.state.journal.flush_pnl_snapshots(snapshots)
+                        except Exception as e:
+                            logger.warning("Failed to flush P&L snapshots: %s", e)
                         self._running = False
                         break
                     time.sleep(30)
@@ -149,6 +160,15 @@ class PositionMonitor:
 
             if spreads:
                 self.state.update_spreads(self.trade_mgr.get_spread_summary())
+
+            # Record P&L snapshot for intraday chart
+            self.pnl_tracker.record(realized_pnl, unrealized_pnl)
+
+            # Fetch pending orders for dashboard display
+            try:
+                self._last_orders = self.api.get_order_book()
+            except Exception:
+                pass  # Keep previous orders on failure
 
             # Evaluate P&L against risk rules
             action = self.risk.evaluate_pnl(realized_pnl, unrealized_pnl)
@@ -377,6 +397,28 @@ class PositionMonitor:
         logger.info("Shutting down monitor...")
         self._running = False
 
+    def _get_pending_orders(self) -> list[dict]:
+        """Filter order book for pending/transit orders."""
+        pending = []
+        for order in self._last_orders:
+            status = order.get("orderStatus", "")
+            if status in ("PENDING", "TRANSIT", "PART_TRADED"):
+                pending.append({
+                    "orderId": order.get("orderId", ""),
+                    "tradingSymbol": order.get("tradingSymbol", ""),
+                    "securityId": order.get("securityId", ""),
+                    "exchangeSegment": order.get("exchangeSegment", ""),
+                    "transactionType": order.get("transactionType", ""),
+                    "quantity": order.get("quantity", 0),
+                    "tradedQuantity": order.get("tradedQuantity", 0),
+                    "price": order.get("price", 0),
+                    "triggerPrice": order.get("triggerPrice", 0),
+                    "orderType": order.get("orderType", ""),
+                    "productType": order.get("productType", ""),
+                    "orderStatus": status,
+                })
+        return pending
+
     def get_status(self) -> dict:
         """Get current monitor status for dashboard."""
         risk_status = self.risk.get_risk_status()
@@ -387,6 +429,8 @@ class PositionMonitor:
             "spreads": self.trade_mgr.get_spread_summary(),
             "sl_tp_orders": self.trade_mgr.get_active_sl_tp(),
             "pending_spreads": self.trade_mgr.get_pending_spreads_summary(),
+            "pnl_chart": self.pnl_tracker.get_chart_data(),
+            "pending_orders": self._get_pending_orders(),
         }
 
 

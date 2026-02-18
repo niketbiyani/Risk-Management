@@ -15,6 +15,7 @@ from typing import Any, Optional
 from cryptography.fernet import Fernet
 
 from config import Config
+from trade_journal import TradeJournal
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class StateManager:
         self._state_file = os.path.join(Config.STATE_DIR, "daily_state.enc")
         self._key_file = os.path.join(Config.STATE_DIR, ".state_key")
         self._state: dict = {}
+        self._journal = TradeJournal()
         self._load_or_reset()
 
     def _get_or_create_key(self) -> bytes:
@@ -240,6 +242,12 @@ class StateManager:
 
         self._save()
 
+        # Persist to SQLite journal (non-critical, failures logged as warnings)
+        try:
+            self._journal.record_trade(self._state["trade_history"][-1])
+        except Exception as e:
+            logger.warning("Journal write failed (non-critical): %s", e)
+
     def activate_lockout(self, reason: str):
         """Lock out trading for the day. CANNOT be reversed."""
         self._state["is_locked_out"] = True
@@ -286,6 +294,11 @@ class StateManager:
         """Store detected option spreads."""
         self._state["open_spreads"] = spreads
         self._save()
+
+    @property
+    def journal(self) -> TradeJournal:
+        """Access the trade journal for analytics queries."""
+        return self._journal
 
     def is_fresh_day(self) -> bool:
         """Check if this is a fresh state with no trades."""

@@ -77,17 +77,33 @@ CONSECUTIVE_LOSS_COUNT=3
 
 Get your Dhan access token from https://web.dhan.co (API section).
 
-## Daily Startup (Every Time)
+## Running the Platform
 
-Run these 3 commands each time you want to start the platform:
+### Option A: Auto-Start Service (Recommended)
+
+Install once, then it runs automatically on boot and survives sleep/restart:
+
+```bash
+sudo bash install_service.sh
+```
+
+After that, the platform starts automatically. Control it with:
+
+```bash
+sudo systemctl start risk-manager      # Start
+sudo systemctl stop risk-manager       # Stop
+sudo systemctl restart risk-manager    # Restart
+sudo systemctl status risk-manager     # Check status
+journalctl -u risk-manager -f          # View live logs
+```
+
+### Option B: Manual Start
 
 ```bash
 cd ~/Risk-Management
 source venv/bin/activate
 python main.py
 ```
-
-Dashboard opens at `http://localhost:5555`
 
 ### Other Run Modes
 
@@ -98,6 +114,8 @@ python main.py --monitor
 # Check current status without starting
 python main.py --status
 ```
+
+Dashboard opens at `http://localhost:5555`
 
 ## How It Works
 

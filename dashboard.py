@@ -8,6 +8,7 @@ import json
 import logging
 import threading
 import time
+from datetime import date
 
 from flask import Flask, render_template_string, jsonify, request
 from flask_socketio import SocketIO
@@ -364,8 +365,12 @@ DASHBOARD_HTML = """
 <body>
     <div class="header">
         <h1>Risk Management Dashboard</h1>
-        <div>
-            <span id="market-time" style="color:#8b949e;font-size:13px;margin-right:16px;"></span>
+        <div style="display:flex;align-items:center;gap:16px;">
+            <span id="market-time" style="color:#8b949e;font-size:13px;"></span>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <button id="mute-btn" onclick="toggleMute()" style="background:none;border:1px solid #30363d;color:#8b949e;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:14px;">&#x1f50a;</button>
+                <input type="range" id="volume-slider" min="0" max="100" value="30" style="-webkit-appearance:none;width:70px;height:4px;background:#30363d;border-radius:2px;outline:none;cursor:pointer;">
+            </div>
             <span id="status-badge" class="status-badge status-active">ACTIVE</span>
         </div>
     </div>
@@ -409,6 +414,16 @@ DASHBOARD_HTML = """
             <h3>Win Rate</h3>
             <div class="value" id="win-rate">0%</div>
             <div class="sub" id="trade-stats">0 trades</div>
+        </div>
+    </div>
+
+    <!-- Intraday P&L Chart -->
+    <div style="padding:0 24px;">
+        <div class="card">
+            <h3>Intraday P&L</h3>
+            <div style="position:relative;height:250px;width:100%;">
+                <canvas id="pnl-chart"></canvas>
+            </div>
         </div>
     </div>
 
@@ -464,7 +479,7 @@ DASHBOARD_HTML = """
                 </div>
 
                 <!-- Integrated Order Form: fields + auto-sizing -->
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
                     <div>
                         <div class="form-label">Side</div>
                         <select id="order-txn-type" class="form-select">
@@ -500,6 +515,10 @@ DASHBOARD_HTML = """
                     <div>
                         <div class="form-label">SL Price</div>
                         <input id="calc-sl" class="form-input calc-trigger" type="number" step="0.05" placeholder="0.00">
+                    </div>
+                    <div>
+                        <div class="form-label">TP Price</div>
+                        <input id="calc-tp" class="form-input" type="number" step="0.05" placeholder="0.00">
                     </div>
                     <div>
                         <div class="form-label">Max Loss (&#8377;)</div>
@@ -616,6 +635,33 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
+    <!-- Pending Orders -->
+    <div style="padding:0 24px;margin-top:16px;">
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <h3 style="margin:0;">Pending Orders</h3>
+                <span id="pending-orders-count" style="color:#8b949e;font-size:12px;"></span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Instrument</th>
+                        <th>Side</th>
+                        <th>Qty</th>
+                        <th>Type</th>
+                        <th>Price</th>
+                        <th>Trigger</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="pending-orders-body">
+                    <tr><td colspan="8" style="text-align:center;color:#484f58;">No pending orders</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <!-- Spreads -->
     <div style="padding:0 24px;margin-top:16px;">
         <div class="card">
@@ -626,10 +672,40 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
+    <!-- Trade Journal -->
+    <div style="padding:0 24px;margin-top:16px;">
+        <div class="card">
+            <div style="display:flex;gap:0;border-bottom:1px solid #21262d;margin-bottom:16px;">
+                <div class="journal-tab active" data-jtab="today" onclick="switchJournalTab('today')" style="padding:10px 20px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;">Today</div>
+                <div class="journal-tab" data-jtab="history" onclick="switchJournalTab('history')" style="padding:10px 20px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;">History</div>
+                <div class="journal-tab" data-jtab="analytics" onclick="switchJournalTab('analytics')" style="padding:10px 20px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;">Analytics</div>
+            </div>
+            <div id="jtab-today">
+                <table>
+                    <thead><tr><th>Time</th><th>Instrument</th><th>Type</th><th>Qty</th><th>P&L</th></tr></thead>
+                    <tbody id="journal-today-body">
+                        <tr><td colspan="5" style="text-align:center;color:#484f58;">No trades today</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div id="jtab-history" style="display:none;">
+                <div id="journal-daily-summary">
+                    <div style="color:#484f58;text-align:center;padding:20px;">Loading...</div>
+                </div>
+            </div>
+            <div id="jtab-analytics" style="display:none;">
+                <div id="journal-analytics">
+                    <div style="color:#484f58;text-align:center;padding:20px;">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="footer">
         Trade Management Platform | Risk data refreshes every {{ interval }}s | State is encrypted and tamper-proof
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         // Socket.IO - graceful fallback if CDN fails to load
@@ -647,9 +723,11 @@ DASHBOARD_HTML = """
         const QUICK_SL_OFFSETS = {{ quick_sl_offsets }};
         const QUICK_TP_OFFSETS = {{ quick_tp_offsets }};
 
-        // ── Sound Alert System ─────────────────────────────────────
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        let audioCtx = null;
+        // ── Sound Alert System (with volume/mute controls) ─────────
+        var AudioCtx = window.AudioContext || window.webkitAudioContext;
+        var audioCtx = null;
+        var _audioVolume = parseFloat(localStorage.getItem('audioVolume') || '0.3');
+        var _audioMuted = localStorage.getItem('audioMuted') === 'true';
 
         function initAudio() {
             if (!audioCtx) {
@@ -658,16 +736,45 @@ DASHBOARD_HTML = """
         }
         document.addEventListener('click', initAudio, { once: true });
 
+        function getVolume() { return _audioMuted ? 0 : _audioVolume; }
+
+        function toggleMute() {
+            _audioMuted = !_audioMuted;
+            localStorage.setItem('audioMuted', _audioMuted);
+            var btn = document.getElementById('mute-btn');
+            if (btn) {
+                btn.innerHTML = _audioMuted ? '&#x1f507;' : '&#x1f50a;';
+                btn.style.borderColor = _audioMuted ? '#f85149' : '#30363d';
+                btn.style.color = _audioMuted ? '#f85149' : '#8b949e';
+            }
+        }
+
+        // Init audio controls from localStorage
+        (function() {
+            var slider = document.getElementById('volume-slider');
+            if (slider) {
+                slider.value = _audioVolume * 100;
+                slider.addEventListener('input', function() {
+                    _audioVolume = this.value / 100;
+                    localStorage.setItem('audioVolume', _audioVolume);
+                });
+            }
+            if (_audioMuted) {
+                var btn = document.getElementById('mute-btn');
+                if (btn) { btn.innerHTML = '&#x1f507;'; btn.style.borderColor = '#f85149'; btn.style.color = '#f85149'; }
+            }
+        })();
+
         function playBeep(freq, dur, type) {
-            if (!audioCtx) return;
+            if (!audioCtx || getVolume() === 0) return;
             try {
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
+                var osc = audioCtx.createOscillator();
+                var gain = audioCtx.createGain();
                 osc.connect(gain);
                 gain.connect(audioCtx.destination);
                 osc.frequency.value = freq;
                 osc.type = type || 'sine';
-                gain.gain.value = 0.3;
+                gain.gain.value = getVolume();
                 osc.start();
                 gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
                 osc.stop(audioCtx.currentTime + dur);
@@ -694,6 +801,18 @@ DASHBOARD_HTML = """
                     break;
                 case 'error':
                     playBeep(300, 0.3, 'sawtooth');
+                    break;
+                case 'cooldown_end':
+                    playBeep(500, 0.15); setTimeout(function(){playBeep(700, 0.15);}, 180);
+                    setTimeout(function(){playBeep(900, 0.3);}, 360);
+                    break;
+                case 'profit_lock':
+                    playBeep(1200, 0.12); setTimeout(function(){playBeep(1500, 0.2);}, 150);
+                    break;
+                case 'approaching_loss_limit':
+                    playBeep(500, 0.08, 'triangle'); setTimeout(function(){playBeep(500, 0.08, 'triangle');}, 120);
+                    setTimeout(function(){playBeep(500, 0.08, 'triangle');}, 240);
+                    setTimeout(function(){playBeep(700, 0.15, 'triangle');}, 400);
                     break;
             }
         }
@@ -735,22 +854,29 @@ DASHBOARD_HTML = """
         }
 
         // ── Alert State Tracking ───────────────────────────────────
-        var _alertState = { lockout: false, cooldown: false, lossWarn80: false, lossWarn90: false };
+        var _alertState = {
+            lockout: false, cooldown: false,
+            lossWarn80: false, lossWarn90: false,
+            profitLock: false, cooldownEndNotified: false
+        };
         var _lastSlTpData = {};
 
         function checkAlerts(data) {
-            // Loss limit warnings
             var pct = data.limits.loss_used_pct;
+
+            // Approaching loss limit (80%)
+            if (pct >= 80 && !_alertState.lossWarn80) {
+                playAlert('approaching_loss_limit');
+                showToast('80% of daily loss limit used!', 'warning');
+                showBrowserNotif('Loss Warning', '80% of daily loss limit used!');
+                _alertState.lossWarn80 = true;
+            }
+            // 90% loss limit
             if (pct >= 90 && !_alertState.lossWarn90) {
                 playAlert('loss_warning');
                 showToast('90% of daily loss limit used!', 'error');
                 showBrowserNotif('Loss Warning', '90% of daily loss limit used!');
                 _alertState.lossWarn90 = true;
-            } else if (pct >= 80 && !_alertState.lossWarn80) {
-                playAlert('loss_warning');
-                showToast('80% of daily loss limit used!', 'warning');
-                showBrowserNotif('Loss Warning', '80% of daily loss limit used!');
-                _alertState.lossWarn80 = true;
             }
             // Lockout
             if (data.lockout.active && !_alertState.lockout) {
@@ -759,13 +885,29 @@ DASHBOARD_HTML = """
                 showBrowserNotif('ACCOUNT LOCKED', data.lockout.reason);
                 _alertState.lockout = true;
             }
-            // Cooldown
+            // Cooldown start
             if (data.cooldown.active && !_alertState.cooldown) {
                 playAlert('loss_warning');
                 showToast('Cooldown active: ' + data.cooldown.reason, 'warning');
                 _alertState.cooldown = true;
+                _alertState.cooldownEndNotified = false;
+            }
+            // Cooldown end
+            if (!data.cooldown.active && _alertState.cooldown && !_alertState.cooldownEndNotified) {
+                playAlert('cooldown_end');
+                showToast('Cooldown expired - you can trade again', 'success');
+                showBrowserNotif('Cooldown Over', 'You can trade again');
+                _alertState.cooldownEndNotified = true;
             }
             if (!data.cooldown.active) _alertState.cooldown = false;
+
+            // Profit lock activation
+            if (data.profit_lock.active && !_alertState.profitLock) {
+                playAlert('profit_lock');
+                showToast('Profit Lock activated! Floor: ' + fmt(data.profit_lock.floor), 'info');
+                showBrowserNotif('Profit Lock Active', 'Floor set at ' + fmt(data.profit_lock.floor));
+                _alertState.profitLock = true;
+            }
         }
 
         // ── SL/TP trigger from server ──────────────────────────────
@@ -865,8 +1007,19 @@ DASHBOARD_HTML = """
             // Positions table
             updatePositions(data.positions || [], data.sl_tp_orders || {});
 
+            // Pending orders
+            updatePendingOrders(data.pending_orders || []);
+
             // Spreads
             updateSpreads(data.spreads || []);
+
+            // P&L chart
+            updatePnlChart(data.pnl_chart || []);
+
+            // Journal today tab
+            if (data.trades && data.trades.history) {
+                updateJournalToday(data.trades.history);
+            }
 
             // Time
             document.getElementById('market-time').textContent = new Date().toLocaleTimeString('en-IN');
@@ -1020,6 +1173,274 @@ DASHBOARD_HTML = """
                 html += '</tbody></table></div>';
             }
             container.innerHTML = html;
+        }
+
+        // ── P&L Chart ────────────────────────────────────────────────
+        var pnlChart = null;
+        function initPnlChart() {
+            var ctx = document.getElementById('pnl-chart');
+            if (!ctx || typeof Chart === 'undefined') return;
+            pnlChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: 'Total', data: [], borderColor: '#58a6ff', borderWidth: 2, fill: false, tension: 0.1, pointRadius: 0 },
+                        { label: 'Realized', data: [], borderColor: '#3fb950', borderWidth: 1, fill: false, tension: 0.1, pointRadius: 0, borderDash: [5,3] },
+                        { label: 'Unrealized', data: [], borderColor: '#d29922', borderWidth: 1, fill: false, tension: 0.1, pointRadius: 0, borderDash: [3,3] }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#8b949e', font: { size: 11 } } } },
+                    scales: {
+                        x: { ticks: { color: '#484f58', maxTicksLimit: 12, font: { size: 10 } }, grid: { color: '#161b22' } },
+                        y: { ticks: { color: '#8b949e', callback: function(v){ return '\\u20B9' + v.toLocaleString('en-IN'); } }, grid: { color: '#21262d' } }
+                    },
+                    animation: { duration: 0 }
+                }
+            });
+        }
+        if (typeof Chart !== 'undefined') { initPnlChart(); }
+
+        function updatePnlChart(chartData) {
+            if (!pnlChart || !chartData || chartData.length === 0) return;
+            var data = chartData;
+            if (data.length > 500) {
+                var step = Math.ceil(data.length / 500);
+                data = data.filter(function(_, i) { return i % step === 0 || i === data.length - 1; });
+            }
+            pnlChart.data.labels = data.map(function(p) {
+                var d = new Date(p.timestamp * 1000);
+                return d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
+            });
+            pnlChart.data.datasets[0].data = data.map(function(p){ return p.total; });
+            pnlChart.data.datasets[1].data = data.map(function(p){ return p.realized; });
+            pnlChart.data.datasets[2].data = data.map(function(p){ return p.unrealized; });
+            pnlChart.update('none');
+        }
+
+        // ── Pending Orders ──────────────────────────────────────────
+        function updatePendingOrders(orders) {
+            var tbody = document.getElementById('pending-orders-body');
+            var countEl = document.getElementById('pending-orders-count');
+            if (!orders || orders.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#484f58;">No pending orders</td></tr>';
+                if (countEl) countEl.textContent = '';
+                return;
+            }
+            if (countEl) countEl.textContent = orders.length + ' pending';
+            var html = '';
+            for (var i = 0; i < orders.length; i++) {
+                var o = orders[i];
+                var sideColor = o.transactionType === 'BUY' ? '#3fb950' : '#f85149';
+                html += '<tr>';
+                html += '<td>' + (o.tradingSymbol || o.securityId) + '</td>';
+                html += '<td style="color:' + sideColor + ';font-weight:600;">' + o.transactionType + '</td>';
+                html += '<td>' + o.quantity;
+                if (o.tradedQuantity > 0) html += ' <span style="color:#8b949e;font-size:11px;">(' + o.tradedQuantity + ' filled)</span>';
+                html += '</td>';
+                html += '<td>' + o.orderType + '</td>';
+                html += '<td>' + (o.price > 0 ? fmtDec(o.price) : '-') + '</td>';
+                html += '<td>' + (o.triggerPrice > 0 ? fmtDec(o.triggerPrice) : '-') + '</td>';
+                html += '<td><span style="color:#d29922;">' + o.orderStatus + '</span></td>';
+                html += '<td>';
+                html += '<button class="btn-neutral btn-sm" onclick="showModifyOrder(\'' + o.orderId + '\',' + i + ')">Modify</button> ';
+                html += '<button class="btn-danger btn-sm" onclick="cancelPendingOrder(\'' + o.orderId + '\')">Cancel</button>';
+                html += '</td>';
+                html += '</tr>';
+                // Inline modify row (hidden)
+                html += '<tr id="modify-row-' + o.orderId + '" style="display:none;"><td colspan="8">';
+                html += '<div style="display:flex;gap:10px;align-items:center;padding:8px 0;">';
+                html += '<span style="font-size:12px;color:#8b949e;">Modify:</span>';
+                html += '<input id="mod-price-' + o.orderId + '" type="number" step="0.05" placeholder="Price" value="' + (o.price || '') + '" class="form-input" style="width:100px;">';
+                html += '<input id="mod-trigger-' + o.orderId + '" type="number" step="0.05" placeholder="Trigger" value="' + (o.triggerPrice || '') + '" class="form-input" style="width:100px;">';
+                html += '<button class="btn-sl btn-sm" onclick="submitModifyOrder(\'' + o.orderId + '\',\'' + o.orderType + '\',' + o.quantity + ')">Save</button>';
+                html += '<button class="btn-neutral btn-sm" onclick="hideModifyOrder(\'' + o.orderId + '\')">Cancel</button>';
+                html += '</div></td></tr>';
+            }
+            tbody.innerHTML = html;
+        }
+
+        function showModifyOrder(orderId) {
+            var row = document.getElementById('modify-row-' + orderId);
+            if (row) row.style.display = '';
+        }
+        function hideModifyOrder(orderId) {
+            var row = document.getElementById('modify-row-' + orderId);
+            if (row) row.style.display = 'none';
+        }
+        function submitModifyOrder(orderId, orderType, qty) {
+            var price = parseFloat(document.getElementById('mod-price-' + orderId).value) || 0;
+            var trigger = parseFloat(document.getElementById('mod-trigger-' + orderId).value) || 0;
+            fetch('/api/order/modify', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ order_id: orderId, order_type: orderType, quantity: qty, price: price, trigger_price: trigger })
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(res) {
+                if (res.status === 'ok') {
+                    playAlert('order');
+                    showToast('Order modified', 'success');
+                    hideModifyOrder(orderId);
+                } else {
+                    showToast('Modify failed: ' + (res.message || ''), 'error');
+                }
+            })
+            .catch(function(e) { showToast('Modify error: ' + e, 'error'); });
+        }
+        function cancelPendingOrder(orderId) {
+            if (!confirm('Cancel this order?')) return;
+            fetch('/api/order/cancel_pending', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ order_id: orderId })
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(res) {
+                if (res.status === 'ok') {
+                    playAlert('order');
+                    showToast('Order cancelled', 'success');
+                } else {
+                    showToast('Cancel failed: ' + (res.message || ''), 'error');
+                }
+            })
+            .catch(function(e) { showToast('Cancel error: ' + e, 'error'); });
+        }
+
+        // ── Trade Journal ───────────────────────────────────────────
+        function switchJournalTab(tab) {
+            ['today', 'history', 'analytics'].forEach(function(t) {
+                var el = document.getElementById('jtab-' + t);
+                if (el) el.style.display = t === tab ? '' : 'none';
+            });
+            document.querySelectorAll('.journal-tab').forEach(function(el) {
+                var isActive = el.getAttribute('data-jtab') === tab;
+                el.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
+                el.style.color = isActive ? '#58a6ff' : '#8b949e';
+            });
+            if (tab === 'history') loadJournalHistory();
+            if (tab === 'analytics') loadJournalAnalytics();
+        }
+
+        function updateJournalToday(trades) {
+            var tbody = document.getElementById('journal-today-body');
+            if (!tbody) return;
+            if (!trades || trades.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#484f58;">No trades today</td></tr>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < trades.length; i++) {
+                var t = trades[i];
+                var pnlClass = t.pnl >= 0 ? 'positive' : 'negative';
+                html += '<tr>';
+                html += '<td>' + (t.time_of_day || new Date(t.time * 1000).toLocaleTimeString('en-IN')) + '</td>';
+                html += '<td>' + (t.security_id || '-') + '</td>';
+                html += '<td>' + (t.type || t.trade_type || '-') + '</td>';
+                html += '<td>' + (t.quantity || '-') + '</td>';
+                html += '<td class="' + pnlClass + '">' + fmt(t.pnl) + '</td>';
+                html += '</tr>';
+            }
+            tbody.innerHTML = html;
+        }
+
+        function loadJournalHistory() {
+            fetch('/api/journal/daily_summaries?days=30')
+                .then(function(r){ return r.json(); })
+                .then(function(data) {
+                    var el = document.getElementById('journal-daily-summary');
+                    if (!data || data.length === 0) {
+                        el.innerHTML = '<div style="color:#484f58;text-align:center;padding:20px;">No historical data yet</div>';
+                        return;
+                    }
+                    var html = '<table><thead><tr><th>Date</th><th>Trades</th><th>Win Rate</th><th>P&L</th><th>Gross Profit</th><th>Gross Loss</th><th>Avg Win</th><th>Avg Loss</th></tr></thead><tbody>';
+                    for (var i = 0; i < data.length; i++) {
+                        var d = data[i];
+                        var pnlClass = d.total_pnl >= 0 ? 'positive' : 'negative';
+                        html += '<tr>';
+                        html += '<td>' + d.date + '</td>';
+                        html += '<td>' + d.total_trades + ' <span style="color:#8b949e;font-size:11px;">(W:' + d.winners + ' L:' + d.losers + ')</span></td>';
+                        html += '<td>' + d.win_rate.toFixed(1) + '%</td>';
+                        html += '<td class="' + pnlClass + '">' + fmt(d.total_pnl) + '</td>';
+                        html += '<td class="positive">' + fmt(d.gross_profit) + '</td>';
+                        html += '<td class="negative">' + fmt(d.gross_loss) + '</td>';
+                        html += '<td>' + fmt(d.avg_win) + '</td>';
+                        html += '<td>' + fmt(d.avg_loss) + '</td>';
+                        html += '</tr>';
+                    }
+                    html += '</tbody></table>';
+                    el.innerHTML = html;
+                })
+                .catch(function(e) {
+                    document.getElementById('journal-daily-summary').innerHTML =
+                        '<div style="color:#f85149;text-align:center;padding:20px;">Failed to load history</div>';
+                });
+        }
+
+        function loadJournalAnalytics() {
+            fetch('/api/journal/analytics?days=30')
+                .then(function(r){ return r.json(); })
+                .then(function(data) {
+                    var el = document.getElementById('journal-analytics');
+                    if (!data || data.total_days === 0) {
+                        el.innerHTML = '<div style="color:#484f58;text-align:center;padding:20px;">No data for analytics yet</div>';
+                        return;
+                    }
+                    var html = '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px;">';
+                    var cards = [
+                        { label: 'Total Days', val: data.total_days },
+                        { label: 'Total Trades', val: data.total_trades },
+                        { label: 'Overall P&L', val: fmt(data.overall_pnl), cls: data.overall_pnl >= 0 ? 'positive' : 'negative' },
+                        { label: 'Win Rate', val: data.win_rate + '%' },
+                        { label: 'Avg Win', val: fmt(data.avg_win), cls: 'positive' },
+                        { label: 'Avg Loss', val: fmt(data.avg_loss), cls: 'negative' },
+                        { label: 'Profitable Days', val: data.profitable_days, cls: 'positive' },
+                        { label: 'Losing Days', val: data.losing_days, cls: 'negative' },
+                        { label: 'Avg Daily P&L', val: fmt(data.avg_daily_pnl), cls: data.avg_daily_pnl >= 0 ? 'positive' : 'negative' },
+                        { label: 'Best Day', val: data.best_day ? fmt(data.best_day.pnl) + ' (' + data.best_day.date + ')' : '-', cls: 'positive' },
+                        { label: 'Worst Day', val: data.worst_day ? fmt(data.worst_day.pnl) + ' (' + data.worst_day.date + ')' : '-', cls: 'negative' },
+                    ];
+                    for (var i = 0; i < cards.length; i++) {
+                        var c = cards[i];
+                        html += '<div style="background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:12px;text-align:center;">';
+                        html += '<div style="font-size:11px;color:#8b949e;text-transform:uppercase;">' + c.label + '</div>';
+                        html += '<div style="font-size:18px;font-weight:700;margin-top:4px;" class="' + (c.cls || '') + '">' + c.val + '</div>';
+                        html += '</div>';
+                    }
+                    html += '</div>';
+
+                    // P&L by hour
+                    if (data.pnl_by_hour && data.pnl_by_hour.length > 0) {
+                        html += '<h4 style="color:#c9d1d9;margin:16px 0 8px;">P&L by Hour</h4>';
+                        html += '<table><thead><tr><th>Hour</th><th>P&L</th><th>Trades</th></tr></thead><tbody>';
+                        for (var h = 0; h < data.pnl_by_hour.length; h++) {
+                            var hr = data.pnl_by_hour[h];
+                            var hClass = hr.total_pnl >= 0 ? 'positive' : 'negative';
+                            html += '<tr><td>' + hr.hour + ':00</td><td class="' + hClass + '">' + fmt(hr.total_pnl) + '</td><td>' + hr.trade_count + '</td></tr>';
+                        }
+                        html += '</tbody></table>';
+                    }
+
+                    // P&L by instrument
+                    if (data.pnl_by_instrument && data.pnl_by_instrument.length > 0) {
+                        html += '<h4 style="color:#c9d1d9;margin:16px 0 8px;">P&L by Instrument</h4>';
+                        html += '<table><thead><tr><th>Security ID</th><th>P&L</th><th>Trades</th><th>Winners</th></tr></thead><tbody>';
+                        for (var inst = 0; inst < data.pnl_by_instrument.length; inst++) {
+                            var ins = data.pnl_by_instrument[inst];
+                            var iClass = ins.total_pnl >= 0 ? 'positive' : 'negative';
+                            html += '<tr><td>' + ins.security_id + '</td><td class="' + iClass + '">' + fmt(ins.total_pnl) + '</td><td>' + ins.trade_count + '</td><td>' + ins.winners + '</td></tr>';
+                        }
+                        html += '</tbody></table>';
+                    }
+                    el.innerHTML = html;
+                })
+                .catch(function(e) {
+                    document.getElementById('journal-analytics').innerHTML =
+                        '<div style="color:#f85149;text-align:center;padding:20px;">Failed to load analytics</div>';
+                });
         }
 
         // ── Tab Switching ───────────────────────────────────────────
@@ -1197,7 +1618,8 @@ DASHBOARD_HTML = """
                 quantity: qty,
                 price: price,
                 trigger_price: parseFloat(document.getElementById('order-trigger-price').value) || 0,
-                sl_price: parseFloat(document.getElementById('calc-sl').value) || 0
+                sl_price: parseFloat(document.getElementById('calc-sl').value) || 0,
+                tp_price: parseFloat(document.getElementById('calc-tp').value) || 0
             };
 
             var label = side + ' ' + qty + ' @ ' + orderType;
@@ -1646,6 +2068,16 @@ def api_place_order():
                 )
                 logger.info("Auto-set SL at %.2f for %s", sl_price, security_id)
 
+        # If order placed and TP specified, auto-set TP
+        if result.get("status") != "BLOCKED" and data.get("tp_price"):
+            tp_price = float(data["tp_price"])
+            if tp_price > 0:
+                _monitor.trade_mgr.set_take_profit(
+                    security_id=security_id,
+                    tp_price=tp_price,
+                )
+                logger.info("Auto-set TP at %.2f for %s", tp_price, security_id)
+
         return jsonify(result)
     except Exception as e:
         logger.error("Order placement error: %s", e)
@@ -1933,6 +2365,79 @@ def api_projections():
     target_prices = data.get("target_prices", [])
     projections = _monitor.trade_mgr.calculate_projections(target_pos, target_prices)
     return jsonify({"projections": projections})
+
+
+# ── Trade Journal Endpoints ────────────────────────────────────────
+
+@app.route("/api/journal/trades")
+def api_journal_trades():
+    """Get trades for a specific day (defaults to today)."""
+    if not _monitor:
+        return jsonify([])
+    day = request.args.get("date", str(date.today()))
+    limit = int(request.args.get("limit", 200))
+    return jsonify(_monitor.state.journal.get_trades(day=day, limit=limit))
+
+
+@app.route("/api/journal/daily_summaries")
+def api_journal_daily_summaries():
+    """Get daily P&L summaries for the last N days."""
+    if not _monitor:
+        return jsonify([])
+    days = int(request.args.get("days", 30))
+    return jsonify(_monitor.state.journal.get_daily_summaries(days=days))
+
+
+@app.route("/api/journal/analytics")
+def api_journal_analytics():
+    """Get aggregated analytics."""
+    if not _monitor:
+        return jsonify({})
+    days = int(request.args.get("days", 30))
+    return jsonify(_monitor.state.journal.get_analytics(days=days))
+
+
+# ── Pending Order Management ──────────────────────────────────────
+
+@app.route("/api/order/modify", methods=["POST"])
+def api_modify_order():
+    """Modify a pending order on Dhan (price/trigger)."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    data = request.json
+    order_id = data.get("order_id", "")
+    if not order_id:
+        return jsonify({"status": "error", "message": "Missing order_id"}), 400
+    try:
+        result = _monitor.api.modify_order(
+            order_id=order_id,
+            order_type=data.get("order_type", "LIMIT"),
+            quantity=int(data.get("quantity", 0)),
+            price=float(data.get("price", 0)),
+            trigger_price=float(data.get("trigger_price", 0)),
+            validity=data.get("validity", "DAY"),
+        )
+        return jsonify({"status": "ok", "result": result})
+    except Exception as e:
+        logger.error("Order modify error: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/order/cancel_pending", methods=["POST"])
+def api_cancel_pending_order():
+    """Cancel a single pending order on Dhan."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    data = request.json
+    order_id = data.get("order_id", "")
+    if not order_id:
+        return jsonify({"status": "error", "message": "Missing order_id"}), 400
+    try:
+        result = _monitor.api.cancel_order(order_id=order_id)
+        return jsonify({"status": "ok", "result": result})
+    except Exception as e:
+        logger.error("Order cancel error: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # ── SocketIO Emitters ──────────────────────────────────────────────
