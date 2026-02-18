@@ -35,6 +35,13 @@ class DhanAPI:
         self._market_feed = None
         logger.info("Dhan API initialized for client: %s", self.client_id)
 
+    def reinitialize(self, client_id: str, access_token: str):
+        """Reinitialize the API client with new credentials (for token refresh)."""
+        self.client_id = client_id
+        self.access_token = access_token
+        self.dhan = dhanhq(client_id, access_token)
+        logger.info("Dhan API reinitialized for client: %s", client_id)
+
     # ── Order Management ───────────────────────────────────────────────
 
     def place_order(

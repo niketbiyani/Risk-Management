@@ -701,6 +701,20 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
+    <!-- Token Update -->
+    <div style="padding:0 24px;margin-top:16px;">
+        <details style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:12px 16px;">
+            <summary style="cursor:pointer;color:#8b949e;font-size:13px;font-weight:600;">Update Dhan Access Token</summary>
+            <div style="margin-top:12px;display:flex;gap:10px;align-items:center;">
+                <input id="new-token-input" type="password" class="form-input" placeholder="Paste new Dhan access token" style="flex:1;">
+                <button onclick="updateToken()" class="btn-neutral" style="padding:8px 20px;white-space:nowrap;">Update Token</button>
+            </div>
+            <div style="margin-top:8px;font-size:11px;color:#484f58;">
+                Get your token from <a href="https://web.dhan.co" target="_blank" style="color:#58a6ff;">web.dhan.co</a> &rarr; API section. Token expires daily.
+            </div>
+        </details>
+    </div>
+
     <div class="footer">
         Trade Management Platform | Risk data refreshes every {{ interval }}s | State is encrypted and tamper-proof
     </div>
@@ -1756,6 +1770,29 @@ DASHBOARD_HTML = """
             }
         }
 
+        // ── Token Update ─────────────────────────────────────────────
+        function updateToken() {
+            var token = document.getElementById('new-token-input').value.trim();
+            if (!token) { showToast('Please paste a token first', 'warning'); return; }
+            if (!confirm('Update the Dhan access token?')) return;
+            fetch('/api/update_token', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ access_token: token })
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(res) {
+                if (res.status === 'ok') {
+                    playAlert('order');
+                    showToast('Token updated successfully!', 'success');
+                    document.getElementById('new-token-input').value = '';
+                } else {
+                    showToast('Token update failed: ' + (res.message || ''), 'error');
+                }
+            })
+            .catch(function(e) { showToast('Error: ' + e, 'error'); });
+        }
+
         // ── Spread Instrument Search ─────────────────────────────────
         var _spreadSellResults = [];
         var _spreadBuyResults = [];
@@ -2395,6 +2432,40 @@ def api_journal_analytics():
         return jsonify({})
     days = int(request.args.get("days", 30))
     return jsonify(_monitor.state.journal.get_analytics(days=days))
+
+
+# ── Token Update ──────────────────────────────────────────────────
+
+@app.route("/api/update_token", methods=["POST"])
+def api_update_token():
+    """Update Dhan access token in .env and reinitialize the API client."""
+    import os as _os
+    data = request.json
+    new_token = (data.get("access_token") or "").strip()
+    if not new_token:
+        return jsonify({"status": "error", "message": "Token cannot be empty"}), 400
+
+    env_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".env")
+    try:
+        with open(env_path, "r") as f:
+            lines = f.readlines()
+        with open(env_path, "w") as f:
+            for line in lines:
+                if line.startswith("DHAN_ACCESS_TOKEN="):
+                    f.write("DHAN_ACCESS_TOKEN=" + new_token + "\n")
+                else:
+                    f.write(line)
+
+        # Reinitialize the Dhan API client in-memory (no restart needed)
+        if _monitor:
+            _monitor.api.reinitialize(Config.DHAN_CLIENT_ID, new_token)
+            Config.DHAN_ACCESS_TOKEN = new_token
+
+        logger.info("Access token updated successfully")
+        return jsonify({"status": "ok", "message": "Token updated and API reinitialized"})
+    except Exception as e:
+        logger.error("Token update failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # ── Pending Order Management ──────────────────────────────────────
