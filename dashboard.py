@@ -399,16 +399,16 @@ DASHBOARD_HTML = """
         </div>
         <div class="card">
             <h3>Loss Buffer</h3>
-            <div class="value" id="loss-remaining">&#8377;0</div>
-            <div class="sub" id="loss-limit-info">of &#8377;0 limit</div>
+            <div class="value positive" id="loss-remaining">{{ loss_limit_fmt }}</div>
+            <div class="sub" id="loss-limit-info">of {{ loss_limit_fmt }} limit</div>
             <div class="progress-bar">
                 <div class="progress-fill" id="loss-bar" style="width:0%;background:#3fb950;"></div>
             </div>
         </div>
         <div class="card">
             <h3>Profit Lock</h3>
-            <div class="value" id="profit-lock-value">INACTIVE</div>
-            <div class="sub" id="profit-lock-info"></div>
+            <div class="value neutral" id="profit-lock-value">{{ profit_lock_distance_fmt }}</div>
+            <div class="sub" id="profit-lock-info">to {{ profit_lock_threshold_fmt }} lock threshold</div>
         </div>
         <div class="card">
             <h3>Win Rate</h3>
@@ -937,6 +937,15 @@ DASHBOARD_HTML = """
 
         // ── Dashboard Update ───────────────────────────────────────
         function updateDashboard(data) {
+            // Ensure nested objects exist to prevent TypeError
+            data.lockout = data.lockout || {active: false, reason: '', time: null};
+            data.cooldown = data.cooldown || {active: false, remaining_seconds: 0, reason: ''};
+            data.pnl = data.pnl || {realized: 0, unrealized: 0, total: 0, peak: 0};
+            data.limits = data.limits || {daily_max_loss: 0, loss_remaining: 0, loss_used_pct: 0};
+            data.profit_lock = data.profit_lock || {active: false, threshold: 0, distance: 0};
+            data.trailing_drawdown = data.trailing_drawdown || {enabled: false};
+            data.trades = data.trades || {total: 0, winners: 0, losers: 0, win_rate: 0, history: []};
+
             // Status badge
             var badge = document.getElementById('status-badge');
             if (data.lockout.active) {
@@ -1970,23 +1979,28 @@ DASHBOARD_HTML = """
             .catch(function(err) { showToast('Network error: ' + err, 'error'); });
         }
 
-        // ── Socket.IO real-time updates ────────────────────────────
-        if (socket) socket.on('status_update', function(data) {
-            updateDashboard(data);
-        });
-
         // Safe dashboard update wrapper
         function safeUpdate(data) {
             try {
-                if (data && data.lockout) updateDashboard(data);
+                if (data && typeof data === 'object' && !data.error) {
+                    updateDashboard(data);
+                } else if (data && data.error) {
+                    console.warn('Status API error:', data.error);
+                }
             } catch(e) {
-                console.error('Dashboard update error:', e);
+                console.error('Dashboard update error:', e, data);
             }
         }
 
+        // Socket.IO real-time updates
+        if (socket) socket.on('status_update', safeUpdate);
+
         // Initial fetch
         fetch('/api/status')
-            .then(function(r){ return r.json(); })
+            .then(function(r){
+                if (!r.ok) console.warn('Status HTTP error:', r.status);
+                return r.json();
+            })
             .then(safeUpdate)
             .catch(function(e){ console.error('Status fetch error:', e); });
 
@@ -2005,20 +2019,87 @@ DASHBOARD_HTML = """
 
 @app.route("/")
 def index():
+    def fmt_inr(n):
+        """Format number as INR for HTML template."""
+        return "\u20B9{:,.0f}".format(abs(n))
     return render_template_string(
         DASHBOARD_HTML,
         interval=Config.MONITOR_INTERVAL,
         default_risk=int(Config.DEFAULT_RISK_AMOUNT),
         quick_sl_offsets=json.dumps(Config.QUICK_SL_OFFSETS),
         quick_tp_offsets=json.dumps(Config.QUICK_TP_OFFSETS),
+        loss_limit_fmt=fmt_inr(Config.DAILY_MAX_LOSS),
+        profit_lock_threshold_fmt=fmt_inr(Config.PROFIT_LOCK_THRESHOLD),
+        profit_lock_distance_fmt=fmt_inr(Config.PROFIT_LOCK_THRESHOLD),
     )
 
 
 @app.route("/api/status")
 def api_status():
     if _monitor:
-        return jsonify(_monitor.get_status())
-    return jsonify({"error": "Monitor not initialized"})
+        try:
+            return jsonify(_monitor.get_status())
+        except Exception as e:
+            logger.error("Status endpoint error: %s", e, exc_info=True)
+            # Return minimal valid status so dashboard still shows config values
+            from risk_engine import RiskEngine
+            try:
+                risk_status = _monitor.risk.get_risk_status()
+                return jsonify({**risk_status, "monitor_running": _monitor._running,
+                                "positions": [], "spreads": [], "sl_tp_orders": {},
+                                "pending_spreads": [], "pnl_chart": [], "pending_orders": []})
+            except Exception:
+                pass
+    # Fallback: return config-only status so dashboard can at least show limits
+    return jsonify({
+        "lockout": {"active": False, "reason": "", "time": None},
+        "cooldown": {"active": False, "remaining_seconds": 0, "reason": ""},
+        "pnl": {"realized": 0, "unrealized": 0, "total": 0, "peak": 0},
+        "limits": {
+            "daily_max_loss": Config.DAILY_MAX_LOSS,
+            "loss_remaining": Config.DAILY_MAX_LOSS,
+            "loss_used_pct": 0,
+            "profit_target": Config.DAILY_PROFIT_TARGET,
+            "profit_remaining": Config.DAILY_PROFIT_TARGET,
+        },
+        "profit_lock": {"active": False, "threshold": Config.PROFIT_LOCK_THRESHOLD,
+                        "distance": Config.PROFIT_LOCK_THRESHOLD},
+        "trailing_drawdown": {"enabled": Config.TRAILING_DRAWDOWN_ENABLED,
+                              "high_water_mark": 0, "current_drawdown": 0,
+                              "drawdown_limit": 0, "buffer": 0},
+        "trades": {"total": 0, "winners": 0, "losers": 0,
+                   "consecutive_losses": 0, "win_rate": 0, "history": []},
+        "kill_switch": False,
+        "can_trade": False,
+        "monitor_running": False,
+        "positions": [], "spreads": [], "sl_tp_orders": {},
+        "pending_spreads": [], "pnl_chart": [], "pending_orders": [],
+    })
+
+
+@app.route("/api/health")
+def api_health():
+    """Diagnostic endpoint for debugging issues."""
+    health = {
+        "monitor_set": _monitor is not None,
+        "monitor_running": _monitor._running if _monitor else False,
+        "instrument_cache_loaded": _instrument_cache is not None and _instrument_cache.count > 0,
+        "instrument_count": _instrument_cache.count if _instrument_cache else 0,
+        "config": {
+            "daily_max_loss": Config.DAILY_MAX_LOSS,
+            "daily_profit_target": Config.DAILY_PROFIT_TARGET,
+            "profit_lock_threshold": Config.PROFIT_LOCK_THRESHOLD,
+            "client_id": Config.DHAN_CLIENT_ID[:4] + "..." if Config.DHAN_CLIENT_ID else "NOT SET",
+            "token_set": bool(Config.DHAN_ACCESS_TOKEN),
+        },
+    }
+    if _monitor:
+        try:
+            health["positions_count"] = len(_monitor._last_positions or [])
+            health["orders_count"] = len(_monitor._last_orders or [])
+        except Exception:
+            pass
+    return jsonify(health)
 
 
 # ── Instrument Search ──────────────────────────────────────────────

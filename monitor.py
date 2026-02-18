@@ -166,7 +166,9 @@ class PositionMonitor:
 
             # Fetch pending orders for dashboard display
             try:
-                self._last_orders = self.api.get_order_book()
+                orders = self.api.get_order_book()
+                if orders is not None:
+                    self._last_orders = orders
             except Exception:
                 pass  # Keep previous orders on failure
 
@@ -422,16 +424,38 @@ class PositionMonitor:
     def get_status(self) -> dict:
         """Get current monitor status for dashboard."""
         risk_status = self.risk.get_risk_status()
-        return {
+        result = {
             **risk_status,
             "monitor_running": self._running,
-            "positions": self._last_positions,
-            "spreads": self.trade_mgr.get_spread_summary(),
-            "sl_tp_orders": self.trade_mgr.get_active_sl_tp(),
-            "pending_spreads": self.trade_mgr.get_pending_spreads_summary(),
-            "pnl_chart": self.pnl_tracker.get_chart_data(),
-            "pending_orders": self._get_pending_orders(),
+            "positions": self._last_positions or [],
+            "spreads": [],
+            "sl_tp_orders": {},
+            "pending_spreads": [],
+            "pnl_chart": [],
+            "pending_orders": [],
         }
+        # Fetch non-critical components individually so one failure doesn't break all
+        try:
+            result["spreads"] = self.trade_mgr.get_spread_summary()
+        except Exception as e:
+            logger.debug("get_status: spreads error: %s", e)
+        try:
+            result["sl_tp_orders"] = self.trade_mgr.get_active_sl_tp()
+        except Exception as e:
+            logger.debug("get_status: sl_tp error: %s", e)
+        try:
+            result["pending_spreads"] = self.trade_mgr.get_pending_spreads_summary()
+        except Exception as e:
+            logger.debug("get_status: pending_spreads error: %s", e)
+        try:
+            result["pnl_chart"] = self.pnl_tracker.get_chart_data()
+        except Exception as e:
+            logger.debug("get_status: pnl_chart error: %s", e)
+        try:
+            result["pending_orders"] = self._get_pending_orders()
+        except Exception as e:
+            logger.debug("get_status: pending_orders error: %s", e)
+        return result
 
 
 def run_monitor():
