@@ -401,21 +401,45 @@ class PositionMonitor:
         for order in self._last_orders:
             status = order.get("orderStatus", "")
             if status in ("PENDING", "TRANSIT", "PART_TRADED"):
-                pending.append({
-                    "orderId": order.get("orderId", ""),
-                    "tradingSymbol": order.get("tradingSymbol", ""),
-                    "securityId": order.get("securityId", ""),
-                    "exchangeSegment": order.get("exchangeSegment", ""),
-                    "transactionType": order.get("transactionType", ""),
-                    "quantity": order.get("quantity", 0),
-                    "tradedQuantity": order.get("tradedQuantity", 0),
-                    "price": order.get("price", 0),
-                    "triggerPrice": order.get("triggerPrice", 0),
-                    "orderType": order.get("orderType", ""),
-                    "productType": order.get("productType", ""),
-                    "orderStatus": status,
-                })
+                pending.append(self._format_order(order))
         return pending
+
+    def _get_recent_orders(self) -> list[dict]:
+        """Get recent non-pending orders (rejected, executed, cancelled) for dashboard display."""
+        recent = []
+        for order in self._last_orders:
+            status = order.get("orderStatus", "")
+            if status in ("REJECTED", "TRADED", "CANCELLED"):
+                formatted = self._format_order(order)
+                # Add rejection reason for rejected orders
+                if status == "REJECTED":
+                    formatted["rejectedReason"] = (
+                        order.get("omsErrorDescription", "")
+                        or order.get("rejectedReason", "")
+                        or ""
+                    )
+                recent.append(formatted)
+        return recent
+
+    @staticmethod
+    def _format_order(order: dict) -> dict:
+        """Format a Dhan order dict into a consistent shape for the dashboard."""
+        return {
+            "orderId": order.get("orderId", ""),
+            "tradingSymbol": order.get("tradingSymbol", ""),
+            "securityId": order.get("securityId", ""),
+            "exchangeSegment": order.get("exchangeSegment", ""),
+            "transactionType": order.get("transactionType", ""),
+            "quantity": order.get("quantity", 0),
+            "tradedQuantity": order.get("tradedQuantity", 0),
+            "price": order.get("price", 0),
+            "triggerPrice": order.get("triggerPrice", 0),
+            "orderType": order.get("orderType", ""),
+            "productType": order.get("productType", ""),
+            "orderStatus": order.get("orderStatus", ""),
+            "createTime": order.get("createTime", ""),
+            "updateTime": order.get("updateTime", ""),
+        }
 
     def get_status(self) -> dict:
         """Get current monitor status for dashboard."""
@@ -429,6 +453,7 @@ class PositionMonitor:
             "pending_spreads": [],
             "pnl_chart": [],
             "pending_orders": [],
+            "recent_orders": [],
         }
         # Fetch non-critical components individually so one failure doesn't break all
         try:
@@ -451,6 +476,10 @@ class PositionMonitor:
             result["pending_orders"] = self._get_pending_orders()
         except Exception as e:
             logger.debug("get_status: pending_orders error: %s", e)
+        try:
+            result["recent_orders"] = self._get_recent_orders()
+        except Exception as e:
+            logger.debug("get_status: recent_orders error: %s", e)
         return result
 
 

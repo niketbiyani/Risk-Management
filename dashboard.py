@@ -708,6 +708,32 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
+    <!-- Recent Orders (Rejected / Executed / Cancelled) -->
+    <div style="padding:0 24px;margin-top:16px;">
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <h3 style="margin:0;">Recent Orders</h3>
+                <span id="recent-orders-count" style="color:#8b949e;font-size:12px;"></span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Instrument</th>
+                        <th>Side</th>
+                        <th>Qty</th>
+                        <th>Type</th>
+                        <th>Price</th>
+                        <th>Status</th>
+                        <th>Reason / Info</th>
+                    </tr>
+                </thead>
+                <tbody id="recent-orders-body">
+                    <tr><td colspan="7" style="text-align:center;color:#484f58;">No recent orders</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <!-- Spreads -->
     <div style="padding:0 24px;margin-top:16px;">
         <div class="card">
@@ -1112,6 +1138,9 @@ DASHBOARD_HTML = """
             // Pending orders
             updatePendingOrders(data.pending_orders || []);
 
+            // Recent orders (rejected/executed/cancelled)
+            updateRecentOrders(data.recent_orders || []);
+
             // Spreads
             updateSpreads(data.spreads || []);
 
@@ -1410,6 +1439,53 @@ DASHBOARD_HTML = """
                 }
             })
             .catch(function(e) { showToast('Cancel error: ' + e, 'error'); });
+        }
+
+        // ── Recent Orders (Rejected / Executed / Cancelled) ─────────
+        function updateRecentOrders(orders) {
+            var tbody = document.getElementById('recent-orders-body');
+            var countEl = document.getElementById('recent-orders-count');
+            if (!tbody) return;
+            if (!orders || orders.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#484f58;">No recent orders</td></tr>';
+                if (countEl) countEl.textContent = '';
+                return;
+            }
+            var rejected = 0;
+            for (var j = 0; j < orders.length; j++) { if (orders[j].orderStatus === 'REJECTED') rejected++; }
+            if (countEl) {
+                countEl.textContent = orders.length + ' order' + (orders.length > 1 ? 's' : '') +
+                    (rejected > 0 ? ' (' + rejected + ' rejected)' : '');
+            }
+            var html = '';
+            for (var i = 0; i < orders.length; i++) {
+                var o = orders[i];
+                var sideColor = o.transactionType === 'BUY' ? '#3fb950' : '#f85149';
+                var statusColor = '#8b949e';
+                if (o.orderStatus === 'REJECTED') statusColor = '#f85149';
+                else if (o.orderStatus === 'TRADED') statusColor = '#3fb950';
+                else if (o.orderStatus === 'CANCELLED') statusColor = '#d29922';
+                html += '<tr>';
+                html += '<td>' + (o.tradingSymbol || o.securityId) + '</td>';
+                html += '<td style="color:' + sideColor + ';font-weight:600;">' + o.transactionType + '</td>';
+                html += '<td>' + o.quantity;
+                if (o.tradedQuantity > 0) html += ' <span style="color:#8b949e;font-size:11px;">(' + o.tradedQuantity + ' filled)</span>';
+                html += '</td>';
+                html += '<td>' + o.orderType + '</td>';
+                html += '<td>' + (o.price > 0 ? fmtDec(o.price) : 'MKT') + '</td>';
+                html += '<td><span style="color:' + statusColor + ';font-weight:600;">' + o.orderStatus + '</span></td>';
+                html += '<td style="font-size:12px;color:#8b949e;max-width:200px;overflow:hidden;text-overflow:ellipsis;">';
+                if (o.orderStatus === 'REJECTED' && o.rejectedReason) {
+                    html += '<span style="color:#f85149;">' + o.rejectedReason + '</span>';
+                } else if (o.updateTime) {
+                    html += o.updateTime;
+                } else {
+                    html += '-';
+                }
+                html += '</td>';
+                html += '</tr>';
+            }
+            tbody.innerHTML = html;
         }
 
         // ── Trade Journal ───────────────────────────────────────────
@@ -1716,12 +1792,16 @@ DASHBOARD_HTML = """
                 if (result.status === 'BLOCKED') {
                     playAlert('error');
                     showToast('Order BLOCKED: ' + result.reason, 'error');
+                } else if (result.status === 'REJECTED') {
+                    playAlert('error');
+                    showToast('Order REJECTED by Dhan: ' + (result.reason || 'Unknown reason'), 'error');
                 } else if (result.status === 'error') {
                     playAlert('error');
                     showToast('Order failed: ' + result.message, 'error');
                 } else {
+                    var statusInfo = result.orderStatus ? ' (' + result.orderStatus + ')' : '';
                     playAlert('order');
-                    showToast('Order placed: ' + label, 'success');
+                    showToast('Order placed' + statusInfo + ': ' + label, 'success');
                     // Clear form
                     document.getElementById('order-quantity').value = '';
                 }
@@ -2109,7 +2189,8 @@ def api_status():
                 risk_status = _monitor.risk.get_risk_status()
                 return jsonify({**risk_status, "monitor_running": _monitor._running,
                                 "positions": [], "spreads": [], "sl_tp_orders": {},
-                                "pending_spreads": [], "pnl_chart": [], "pending_orders": []})
+                                "pending_spreads": [], "pnl_chart": [], "pending_orders": [],
+                                "recent_orders": []})
             except Exception:
                 pass
     # Fallback: return config-only status so dashboard can at least show limits
@@ -2136,6 +2217,7 @@ def api_status():
         "monitor_running": False,
         "positions": [], "spreads": [], "sl_tp_orders": {},
         "pending_spreads": [], "pnl_chart": [], "pending_orders": [],
+        "recent_orders": [],
     })
 
 
@@ -2239,8 +2321,36 @@ def api_place_order():
             sl_price=float(data.get("sl_price", 0)),
         )
 
-        # If order placed and SL specified, auto-set SL
-        if result.get("status") != "BLOCKED" and data.get("sl_price"):
+        # Check if the order was blocked by risk engine
+        if result.get("status") == "BLOCKED":
+            return jsonify(result)
+
+        # Dhan API responded - check the actual order status
+        # Dhan returns: {"orderId": "...", "orderStatus": "TRANSIT|PENDING|REJECTED", ...}
+        # or on API error: {"status": "failure", "remarks": {"error_code": "...", "message": "..."}}
+        order_status = result.get("orderStatus", "")
+        dhan_status = result.get("status", "")
+        order_id = result.get("orderId", "")
+
+        # Detect Dhan-side rejection or API failure
+        if order_status == "REJECTED" or dhan_status == "failure":
+            remarks = result.get("remarks", {})
+            reject_reason = ""
+            if isinstance(remarks, dict):
+                reject_reason = remarks.get("message", "") or remarks.get("error_message", "")
+            if not reject_reason:
+                reject_reason = result.get("rejectedReason", "") or result.get("omsErrorDescription", "")
+            logger.warning("Order REJECTED by Dhan: %s | reason: %s | full: %s",
+                           order_id, reject_reason, result)
+            return jsonify({
+                "status": "REJECTED",
+                "orderId": order_id,
+                "reason": reject_reason or "Order rejected by exchange/broker",
+                "dhan_response": result,
+            })
+
+        # Order accepted - set SL/TP if specified
+        if data.get("sl_price"):
             sl_price = float(data["sl_price"])
             if sl_price > 0:
                 _monitor.trade_mgr.set_stop_loss(
@@ -2249,8 +2359,7 @@ def api_place_order():
                 )
                 logger.info("Auto-set SL at %.2f for %s", sl_price, security_id)
 
-        # If order placed and TP specified, auto-set TP
-        if result.get("status") != "BLOCKED" and data.get("tp_price"):
+        if data.get("tp_price"):
             tp_price = float(data["tp_price"])
             if tp_price > 0:
                 _monitor.trade_mgr.set_take_profit(
@@ -2259,6 +2368,37 @@ def api_place_order():
                 )
                 logger.info("Auto-set TP at %.2f for %s", tp_price, security_id)
 
+        # Also fetch updated order status asynchronously to detect fast rejections
+        # (some orders get accepted then rejected within milliseconds)
+        if order_id:
+            try:
+                order_detail = _monitor.api.get_order_by_id(order_id)
+                actual_status = ""
+                if isinstance(order_detail, dict):
+                    actual_status = order_detail.get("orderStatus", "")
+                    if not actual_status and "data" in order_detail:
+                        detail_data = order_detail["data"]
+                        if isinstance(detail_data, dict):
+                            actual_status = detail_data.get("orderStatus", "")
+                if actual_status == "REJECTED":
+                    reject_reason = ""
+                    detail = order_detail.get("data", order_detail)
+                    if isinstance(detail, dict):
+                        reject_reason = detail.get("rejectedReason", "") or detail.get("omsErrorDescription", "")
+                    logger.warning("Order %s REJECTED after placement: %s", order_id, reject_reason)
+                    return jsonify({
+                        "status": "REJECTED",
+                        "orderId": order_id,
+                        "reason": reject_reason or "Order rejected by exchange/broker",
+                        "dhan_response": order_detail,
+                    })
+                # Add actual status to result for frontend
+                if actual_status:
+                    result["orderStatus"] = actual_status
+            except Exception as e:
+                logger.debug("Could not fetch order detail for %s: %s", order_id, e)
+
+        result["status"] = "SUCCESS"
         return jsonify(result)
     except Exception as e:
         logger.error("Order placement error: %s", e)
