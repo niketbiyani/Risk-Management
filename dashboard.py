@@ -1322,8 +1322,8 @@ DASHBOARD_HTML = """
                 html += '<td>' + (o.triggerPrice > 0 ? fmtDec(o.triggerPrice) : '-') + '</td>';
                 html += '<td><span style="color:#d29922;">' + o.orderStatus + '</span></td>';
                 html += '<td>';
-                html += '<button class="btn-neutral btn-sm" onclick="showModifyOrder(\'' + o.orderId + '\',' + i + ')">Modify</button> ';
-                html += '<button class="btn-danger btn-sm" onclick="cancelPendingOrder(\'' + o.orderId + '\')">Cancel</button>';
+                html += '<button class="btn-neutral btn-sm" onclick="showModifyOrder(\\'' + o.orderId + '\\',' + i + ')">Modify</button> ';
+                html += '<button class="btn-danger btn-sm" onclick="cancelPendingOrder(\\'' + o.orderId + '\\')">Cancel</button>';
                 html += '</td>';
                 html += '</tr>';
                 // Inline modify row (hidden)
@@ -1332,8 +1332,8 @@ DASHBOARD_HTML = """
                 html += '<span style="font-size:12px;color:#8b949e;">Modify:</span>';
                 html += '<input id="mod-price-' + o.orderId + '" type="number" step="0.05" placeholder="Price" value="' + (o.price || '') + '" class="form-input" style="width:100px;">';
                 html += '<input id="mod-trigger-' + o.orderId + '" type="number" step="0.05" placeholder="Trigger" value="' + (o.triggerPrice || '') + '" class="form-input" style="width:100px;">';
-                html += '<button class="btn-sl btn-sm" onclick="submitModifyOrder(\'' + o.orderId + '\',\'' + o.orderType + '\',' + o.quantity + ')">Save</button>';
-                html += '<button class="btn-neutral btn-sm" onclick="hideModifyOrder(\'' + o.orderId + '\')">Cancel</button>';
+                html += '<button class="btn-sl btn-sm" onclick="submitModifyOrder(\\'' + o.orderId + '\\',\\'' + o.orderType + '\\',' + o.quantity + ')">Save</button>';
+                html += '<button class="btn-neutral btn-sm" onclick="hideModifyOrder(\\'' + o.orderId + '\\')">Cancel</button>';
                 html += '</div></td></tr>';
             }
             tbody.innerHTML = html;
