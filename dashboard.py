@@ -42,6 +42,9 @@ DASHBOARD_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Trade Risk Management</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -361,8 +364,25 @@ DASHBOARD_HTML = """
             margin-top: 20px;
         }
     </style>
+    <script>
+        // Global JS error handler - shows errors on page for debugging
+        window._jsErrors = [];
+        window.onerror = function(msg, src, line, col, err) {
+            window._jsErrors.push(msg + ' (line ' + line + ')');
+            var banner = document.getElementById('js-error-banner');
+            if (banner) {
+                banner.style.display = 'block';
+                banner.querySelector('pre').textContent = window._jsErrors.join('\\n');
+            }
+            return false;
+        };
+    </script>
 </head>
 <body>
+    <!-- JS Error Banner (hidden unless errors occur) -->
+    <div id="js-error-banner" style="display:none;background:#4a1d1d;border:1px solid #da3633;color:#f85149;padding:12px 24px;font-size:13px;">
+        <strong>JavaScript Error:</strong> <pre style="margin:4px 0 0;white-space:pre-wrap;color:#e0e6ed;font-size:12px;"></pre>
+    </div>
     <div class="header">
         <h1>Risk Management Dashboard</h1>
         <div style="display:flex;align-items:center;gap:16px;">
@@ -719,20 +739,45 @@ DASHBOARD_HTML = """
         Trade Management Platform | Risk data refreshes every {{ interval }}s | State is encrypted and tamper-proof
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        // Socket.IO - graceful fallback if CDN fails to load
-        var socket = null;
-        try {
-            if (typeof io !== 'undefined') {
-                socket = io();
-            } else {
-                console.warn('Socket.IO not loaded - using polling only');
-            }
-        } catch(e) {
-            console.warn('Socket.IO connection failed:', e);
+        // ── CDN Script Loader (non-blocking with timeout) ────────────
+        // Loads external scripts without blocking the page. If a CDN
+        // fails or takes too long, the dashboard still works fully.
+        function loadScript(url, timeout, onReady) {
+            var done = false;
+            var s = document.createElement('script');
+            s.src = url;
+            s.async = true;
+            s.onload = function() { if (!done) { done = true; onReady(true); } };
+            s.onerror = function() { if (!done) { done = true; console.warn('CDN load failed:', url); onReady(false); } };
+            setTimeout(function() { if (!done) { done = true; console.warn('CDN load timeout:', url); onReady(false); } }, timeout);
+            document.head.appendChild(s);
         }
+
+        // Socket.IO - loaded async, fallback to polling if unavailable
+        var socket = null;
+        loadScript('https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js', 8000, function(ok) {
+            if (ok && typeof io !== 'undefined') {
+                try {
+                    socket = io();
+                    if (typeof setupSocketListeners === 'function') setupSocketListeners();
+                    console.log('Socket.IO connected');
+                } catch(e) {
+                    console.warn('Socket.IO connection failed:', e);
+                }
+            } else {
+                console.warn('Socket.IO not available - using polling only');
+            }
+        });
+
+        // Chart.js - loaded async, chart section hidden if unavailable
+        loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js', 8000, function(ok) {
+            if (ok && typeof Chart !== 'undefined') {
+                try { initPnlChart(); console.log('Chart.js initialized'); } catch(e) { console.warn('Chart init error:', e); }
+            } else {
+                console.warn('Chart.js not available - chart disabled');
+            }
+        });
 
         const QUICK_SL_OFFSETS = {{ quick_sl_offsets }};
         const QUICK_TP_OFFSETS = {{ quick_tp_offsets }};
@@ -925,15 +970,23 @@ DASHBOARD_HTML = """
         }
 
         // ── SL/TP trigger from server ──────────────────────────────
-        if (socket) socket.on('sl_tp_triggered', function(data) {
-            var isTP = data.action === 'TAKE_PROFIT';
-            playAlert(isTP ? 'tp_hit' : 'sl_hit');
-            var msg = data.action + ' triggered for ' + data.security_id +
-                      ' @ \\u20B9' + (data.trigger_price || 0).toFixed(2) +
-                      ' (LTP: \\u20B9' + (data.ltp || 0).toFixed(2) + ')';
-            showToast(msg, isTP ? 'success' : 'error');
-            showBrowserNotif(data.action, msg);
-        });
+        // Called from CDN loader when socket connects asynchronously
+        function setupSocketListeners() {
+            if (!socket) return;
+            socket.on('sl_tp_triggered', function(data) {
+                var isTP = data.action === 'TAKE_PROFIT';
+                playAlert(isTP ? 'tp_hit' : 'sl_hit');
+                var msg = data.action + ' triggered for ' + data.security_id +
+                          ' @ \\u20B9' + (data.trigger_price || 0).toFixed(2) +
+                          ' (LTP: \\u20B9' + (data.ltp || 0).toFixed(2) + ')';
+                showToast(msg, isTP ? 'success' : 'error');
+                showBrowserNotif(data.action, msg);
+            });
+            if (typeof safeUpdate === 'function') {
+                socket.on('status_update', safeUpdate);
+            }
+        }
+        if (socket) setupSocketListeners();
 
         // ── Dashboard Update ───────────────────────────────────────
         function updateDashboard(data) {
@@ -1225,7 +1278,7 @@ DASHBOARD_HTML = """
                 }
             });
         }
-        if (typeof Chart !== 'undefined') { initPnlChart(); }
+        // Chart.js is now initialized via async CDN loader callback above
 
         function updatePnlChart(chartData) {
             if (!pnlChart || !chartData || chartData.length === 0) return;
@@ -1992,8 +2045,7 @@ DASHBOARD_HTML = """
             }
         }
 
-        // Socket.IO real-time updates
-        if (socket) socket.on('status_update', safeUpdate);
+        // Socket.IO real-time updates (bound via setupSocketListeners when socket connects async)
 
         // Initial fetch
         fetch('/api/status')
@@ -2022,7 +2074,8 @@ def index():
     def fmt_inr(n):
         """Format number as INR for HTML template."""
         return "\u20B9{:,.0f}".format(abs(n))
-    return render_template_string(
+    from flask import make_response
+    resp = make_response(render_template_string(
         DASHBOARD_HTML,
         interval=Config.MONITOR_INTERVAL,
         default_risk=int(Config.DEFAULT_RISK_AMOUNT),
@@ -2031,7 +2084,11 @@ def index():
         loss_limit_fmt=fmt_inr(Config.DAILY_MAX_LOSS),
         profit_lock_threshold_fmt=fmt_inr(Config.PROFIT_LOCK_THRESHOLD),
         profit_lock_distance_fmt=fmt_inr(Config.PROFIT_LOCK_THRESHOLD),
-    )
+    ))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/api/status")
