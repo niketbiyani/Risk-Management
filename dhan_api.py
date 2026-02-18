@@ -159,7 +159,10 @@ class DhanAPI:
         try:
             response = self.dhan.get_order_list()
             if isinstance(response, dict) and "data" in response:
-                return response["data"] or []
+                data = response["data"]
+                if isinstance(data, list):
+                    return [o for o in data if isinstance(o, dict)]
+                return []
             return []
         except Exception as e:
             logger.error("Failed to get order book: %s", e)
@@ -178,7 +181,10 @@ class DhanAPI:
         try:
             response = self.dhan.get_trade_book()
             if isinstance(response, dict) and "data" in response:
-                return response["data"] or []
+                data = response["data"]
+                if isinstance(data, list):
+                    return [t for t in data if isinstance(t, dict)]
+                return []
             return []
         except Exception as e:
             logger.error("Failed to get trade book: %s", e)
@@ -191,7 +197,10 @@ class DhanAPI:
         try:
             response = self.dhan.get_positions()
             if isinstance(response, dict) and "data" in response:
-                return response["data"] or []
+                data = response["data"]
+                if isinstance(data, list):
+                    return [p for p in data if isinstance(p, dict)]
+                return []
             return []
         except Exception as e:
             logger.error("Failed to get positions: %s", e)
@@ -202,7 +211,10 @@ class DhanAPI:
         try:
             response = self.dhan.get_holdings()
             if isinstance(response, dict) and "data" in response:
-                return response["data"] or []
+                data = response["data"]
+                if isinstance(data, list):
+                    return [h for h in data if isinstance(h, dict)]
+                return []
             return []
         except Exception as e:
             logger.error("Failed to get holdings: %s", e)
@@ -274,7 +286,10 @@ class DhanAPI:
                 under_exchange_segment=self.IDX_I,
             )
             if isinstance(response, dict) and "data" in response:
-                return response["data"] or []
+                data = response["data"]
+                if isinstance(data, list):
+                    return data
+                return []
             return []
         except Exception as e:
             logger.error("Failed to get expiry list: %s", e)
