@@ -376,6 +376,32 @@ DASHBOARD_HTML = """
             }
             return false;
         };
+
+        // Tab switching defined early so tabs always work even if main script has errors
+        function switchOrderTab(tab) {
+            var naked = document.getElementById('tab-naked');
+            var spread = document.getElementById('tab-spread');
+            if (naked) naked.style.display = tab === 'naked' ? '' : 'none';
+            if (spread) spread.style.display = tab === 'spread' ? '' : 'none';
+            document.querySelectorAll('.order-tab').forEach(function(t) {
+                var isActive = t.getAttribute('data-tab') === tab;
+                t.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
+                t.style.color = isActive ? '#58a6ff' : '#8b949e';
+            });
+        }
+        function switchJournalTab(tab) {
+            ['today', 'history', 'analytics'].forEach(function(t) {
+                var el = document.getElementById('jtab-' + t);
+                if (el) el.style.display = t === tab ? '' : 'none';
+            });
+            document.querySelectorAll('.journal-tab').forEach(function(el) {
+                var isActive = el.getAttribute('data-jtab') === tab;
+                el.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
+                el.style.color = isActive ? '#58a6ff' : '#8b949e';
+            });
+            if (typeof loadJournalHistory === 'function' && tab === 'history') loadJournalHistory();
+            if (typeof loadJournalAnalytics === 'function' && tab === 'analytics') loadJournalAnalytics();
+        }
     </script>
 </head>
 <body>
@@ -1387,19 +1413,7 @@ DASHBOARD_HTML = """
         }
 
         // ── Trade Journal ───────────────────────────────────────────
-        function switchJournalTab(tab) {
-            ['today', 'history', 'analytics'].forEach(function(t) {
-                var el = document.getElementById('jtab-' + t);
-                if (el) el.style.display = t === tab ? '' : 'none';
-            });
-            document.querySelectorAll('.journal-tab').forEach(function(el) {
-                var isActive = el.getAttribute('data-jtab') === tab;
-                el.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
-                el.style.color = isActive ? '#58a6ff' : '#8b949e';
-            });
-            if (tab === 'history') loadJournalHistory();
-            if (tab === 'analytics') loadJournalAnalytics();
-        }
+        // switchJournalTab is defined in <head> so tabs work even if this script errors
 
         function updateJournalToday(trades) {
             var tbody = document.getElementById('journal-today-body');
@@ -1519,16 +1533,7 @@ DASHBOARD_HTML = """
                 });
         }
 
-        // ── Tab Switching ───────────────────────────────────────────
-        function switchOrderTab(tab) {
-            document.getElementById('tab-naked').style.display = tab === 'naked' ? '' : 'none';
-            document.getElementById('tab-spread').style.display = tab === 'spread' ? '' : 'none';
-            document.querySelectorAll('.order-tab').forEach(function(t) {
-                var isActive = t.getAttribute('data-tab') === tab;
-                t.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
-                t.style.color = isActive ? '#58a6ff' : '#8b949e';
-            });
-        }
+        // switchOrderTab is defined in <head> so tabs work even if this script errors
 
         // ── Instrument Search ──────────────────────────────────────
         var searchTimeout = null;
