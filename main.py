@@ -134,8 +134,14 @@ def run_full():
 
     logger.info("Dashboard starting on http://%s:%d", Config.DASHBOARD_HOST, Config.DASHBOARD_PORT)
 
-    # Dashboard runs in main thread (Flask)
-    run_dashboard(monitor)
+    # Dashboard runs in main thread (Flask).
+    # Ctrl+C will be handled by Flask/SocketIO naturally (no signal override).
+    # The monitor thread is a daemon thread, so it will stop when the main thread exits.
+    try:
+        run_dashboard(monitor)
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+        monitor._running = False
 
 
 def main():

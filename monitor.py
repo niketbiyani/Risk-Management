@@ -50,10 +50,6 @@ class PositionMonitor:
         self._last_trade_count = 0
         self._lockout_executed = False
 
-        # Graceful shutdown
-        signal.signal(signal.SIGINT, self._shutdown)
-        signal.signal(signal.SIGTERM, self._shutdown)
-
     def start(self):
         """Start the monitoring loop."""
         errors = Config.validate()
@@ -459,7 +455,7 @@ class PositionMonitor:
 
 
 def run_monitor():
-    """Entry point for the monitor daemon."""
+    """Entry point for the monitor daemon (standalone mode)."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -469,6 +465,9 @@ def run_monitor():
         ],
     )
     monitor = PositionMonitor()
+    # Register signal handlers only in standalone mode (main thread)
+    signal.signal(signal.SIGINT, monitor._shutdown)
+    signal.signal(signal.SIGTERM, monitor._shutdown)
     monitor.start()
 
 
