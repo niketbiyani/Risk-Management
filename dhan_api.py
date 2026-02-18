@@ -56,8 +56,6 @@ class DhanAPI:
         trigger_price: float = 0,
         disclosed_quantity: int = 0,
         validity: str = "DAY",
-        bo_profit_value: float = 0,
-        bo_stop_loss_value: float = 0,
         correlation_id: str = "",
     ) -> dict:
         """Place an order on Dhan."""
@@ -73,8 +71,6 @@ class DhanAPI:
                 trigger_price=trigger_price,
                 disclosed_quantity=disclosed_quantity,
                 validity=validity,
-                bo_profit_value=bo_profit_value,
-                bo_stop_loss_value=bo_stop_loss_value,
             )
             logger.info("Order placed: %s %s %s qty=%d @ %s", transaction_type,
                         exchange_segment, security_id, quantity, price)
