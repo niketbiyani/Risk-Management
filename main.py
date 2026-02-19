@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 import threading
 import time
@@ -25,6 +26,7 @@ from risk_engine import RiskEngine
 from monitor import PositionMonitor
 from dashboard import run_dashboard, emit_status_update, set_instrument_cache
 from instrument_cache import InstrumentCache
+from token_manager import refresh_token, is_token_refresh_configured
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,8 +95,56 @@ def print_status():
     print("=" * 60 + "\n")
 
 
+def auto_refresh_token_on_startup():
+    """Refresh the API token before starting the platform."""
+    if not is_token_refresh_configured():
+        logger.info("Auto token refresh not configured (DHAN_PIN/DHAN_TOTP_SECRET missing). "
+                     "Using existing token from .env")
+        return
+
+    logger.info("Auto-refreshing API token on startup...")
+    success = refresh_token()
+    if success:
+        # Reload config so Config class picks up the new token
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+        Config.DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")
+        logger.info("Token refreshed and loaded into config")
+    else:
+        logger.warning("Token auto-refresh failed. Will try existing token from .env")
+
+
+def schedule_token_renewal(dhan_api):
+    """Schedule periodic token renewal every 12 hours to keep it alive."""
+    if not is_token_refresh_configured():
+        return
+
+    def renewal_loop():
+        while True:
+            time.sleep(12 * 60 * 60)  # 12 hours
+            logger.info("Scheduled token renewal running...")
+            try:
+                success = refresh_token(dhan_api=dhan_api)
+                if success:
+                    from dotenv import load_dotenv
+                    load_dotenv(override=True)
+                    Config.DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")
+                    logger.info("Scheduled token renewal succeeded")
+                else:
+                    logger.error("Scheduled token renewal failed")
+            except Exception as e:
+                logger.error("Scheduled token renewal error: %s", e)
+
+    t = threading.Thread(target=renewal_loop, daemon=True, name="token-renewal")
+    t.start()
+    logger.info("Token renewal scheduled (every 12 hours)")
+
+
 def run_full():
     """Start both monitor and dashboard."""
+    # Auto-refresh token before validating config
+    auto_refresh_token_on_startup()
+
     errors = Config.validate()
     if errors:
         for e in errors:
@@ -113,6 +163,9 @@ def run_full():
     set_instrument_cache(instrument_cache)
 
     monitor = PositionMonitor()
+
+    # Schedule periodic token renewal (keeps token alive across 24h boundary)
+    schedule_token_renewal(monitor.api)
 
     # Start monitor in background thread
     monitor_thread = threading.Thread(target=monitor.start, daemon=True)

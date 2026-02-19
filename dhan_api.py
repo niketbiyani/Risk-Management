@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from dhanhq import dhanhq, DhanFeed, OrderSocket
+from dhanhq import DhanContext, dhanhq, MarketFeed, OrderUpdate
 
 from config import Config
 
@@ -30,11 +30,8 @@ class DhanAPI:
     def __init__(self):
         self.client_id = Config.DHAN_CLIENT_ID
         self.access_token = Config.DHAN_ACCESS_TOKEN
-        self.dhan = dhanhq(self.client_id, self.access_token)
-        # dhanhq 2.0.2 bug: self.header is missing 'client-id', which causes
-        # order placement to fail with DH-901 even though data APIs work fine
-        # (data APIs like ticker_data build their own headers with client-id).
-        self.dhan.header['client-id'] = self.client_id
+        self._context = DhanContext(self.client_id, self.access_token)
+        self.dhan = dhanhq(self._context)
         self._order_update_client = None
         self._market_feed = None
         logger.info("Dhan API initialized for client: %s", self.client_id)
@@ -43,8 +40,8 @@ class DhanAPI:
         """Reinitialize the API client with new credentials (for token refresh)."""
         self.client_id = client_id
         self.access_token = access_token
-        self.dhan = dhanhq(client_id, access_token)
-        self.dhan.header['client-id'] = client_id
+        self._context = DhanContext(client_id, access_token)
+        self.dhan = dhanhq(self._context)
         logger.info("Dhan API reinitialized for client: %s", client_id)
 
     # ── Order Management ───────────────────────────────────────────────
@@ -260,9 +257,15 @@ class DhanAPI:
             raise
 
     def get_kill_switch_status(self) -> str:
-        """Check current kill switch status. Not available in dhanhq 2.0.x."""
-        logger.debug("kill_switch_status not available in dhanhq 2.0.x")
-        return "UNKNOWN"
+        """Check current kill switch status."""
+        try:
+            response = self.dhan.status_kill_switch()
+            if isinstance(response, dict):
+                return response.get("killSwitchStatus", "UNKNOWN")
+            return "UNKNOWN"
+        except Exception as e:
+            logger.debug("Failed to get kill switch status: %s", e)
+            return "UNKNOWN"
 
     # ── Options Chain & Market Data ────────────────────────────────────
 
@@ -411,24 +414,25 @@ class DhanAPI:
 
     # ── Real-time Feeds ────────────────────────────────────────────────
 
-    def start_order_updates(self, callback) -> OrderSocket:
+    def start_order_updates(self, callback) -> OrderUpdate:
         """Start receiving real-time order updates via websocket."""
-        self._order_update_client = OrderSocket(self.client_id, self.access_token)
-        self._order_update_client.handle_order_update = callback
+        self._order_update_client = OrderUpdate(self._context)
+        self._order_update_client.on_update = callback
         self._order_update_client.connect_to_dhan_websocket_sync()
         return self._order_update_client
 
-    def start_market_feed(self, instruments: list, callback) -> DhanFeed:
+    def start_market_feed(self, instruments: list, callback) -> MarketFeed:
         """
         Start real-time market feed.
         instruments: [(exchange_segment_int, "security_id", feed_type)]
         """
-        self._market_feed = DhanFeed(self.client_id, self.access_token, instruments, version="v2")
+        self._market_feed = MarketFeed(self._context, instruments, version="v2",
+                                       on_message=callback)
         self._market_feed.run_forever()
         return self._market_feed
 
     def stop_market_feed(self):
         """Disconnect market feed."""
         if self._market_feed:
-            self._market_feed.disconnect()
+            self._market_feed.close_connection()
             self._market_feed = None

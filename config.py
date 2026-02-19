@@ -14,6 +14,10 @@ class Config:
     DHAN_CLIENT_ID: str = os.getenv("DHAN_CLIENT_ID", "")
     DHAN_ACCESS_TOKEN: str = os.getenv("DHAN_ACCESS_TOKEN", "")
 
+    # Auto Token Refresh
+    DHAN_PIN: str = os.getenv("DHAN_PIN", "")
+    DHAN_TOTP_SECRET: str = os.getenv("DHAN_TOTP_SECRET", "")
+
     # Risk Limits (INR)
     DAILY_MAX_LOSS: float = float(os.getenv("DAILY_MAX_LOSS", "5000"))
     DAILY_PROFIT_TARGET: float = float(os.getenv("DAILY_PROFIT_TARGET", "20000"))
