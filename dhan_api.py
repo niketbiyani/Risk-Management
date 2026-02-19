@@ -31,6 +31,10 @@ class DhanAPI:
         self.client_id = Config.DHAN_CLIENT_ID
         self.access_token = Config.DHAN_ACCESS_TOKEN
         self.dhan = dhanhq(self.client_id, self.access_token)
+        # dhanhq 2.0.2 bug: self.header is missing 'client-id', which causes
+        # order placement to fail with DH-901 even though data APIs work fine
+        # (data APIs like ticker_data build their own headers with client-id).
+        self.dhan.header['client-id'] = self.client_id
         self._order_update_client = None
         self._market_feed = None
         logger.info("Dhan API initialized for client: %s", self.client_id)
@@ -40,6 +44,7 @@ class DhanAPI:
         self.client_id = client_id
         self.access_token = access_token
         self.dhan = dhanhq(client_id, access_token)
+        self.dhan.header['client-id'] = client_id
         logger.info("Dhan API reinitialized for client: %s", client_id)
 
     # ── Order Management ───────────────────────────────────────────────
