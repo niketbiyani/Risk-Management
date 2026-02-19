@@ -536,8 +536,8 @@ DASHBOARD_HTML = """
                     <div>
                         <div class="form-label">Order Type</div>
                         <select id="order-type" class="form-select">
-                            <option value="SL">STOP LIMIT</option>
-                            <option value="SLM">STOP MARKET</option>
+                            <option value="STOP_LOSS">STOP LIMIT</option>
+                            <option value="STOP_LOSS_MARKET">STOP MARKET</option>
                             <option value="LIMIT">LIMIT</option>
                             <option value="MARKET">MARKET</option>
                         </select>
@@ -1767,8 +1767,8 @@ DASHBOARD_HTML = """
             var triggerPrice = parseFloat(document.getElementById('order-trigger-price').value) || 0;
 
             if (orderType === 'LIMIT' && price <= 0) { showToast('Enter a price for limit order', 'warning'); return; }
-            if ((orderType === 'SL' || orderType === 'SLM') && triggerPrice <= 0) { showToast('Enter a trigger price for stop-loss order', 'warning'); return; }
-            if (orderType === 'SL' && price <= 0) { showToast('Enter a limit price for stop-limit order', 'warning'); return; }
+            if ((orderType === 'STOP_LOSS' || orderType === 'STOP_LOSS_MARKET') && triggerPrice <= 0) { showToast('Enter a trigger price for stop-loss order', 'warning'); return; }
+            if (orderType === 'STOP_LOSS' && price <= 0) { showToast('Enter a limit price for stop-limit order', 'warning'); return; }
 
             var payload = {
                 security_id: secId,
@@ -2320,10 +2320,10 @@ def api_place_order():
     # Validate required fields based on order type
     if quantity <= 0:
         return jsonify({"status": "error", "message": "Quantity must be > 0"}), 400
-    if order_type in ("SL", "SLM") and trigger_price <= 0:
-        return jsonify({"status": "error", "message": "Trigger price required for SL/SLM orders"}), 400
-    if order_type in ("SL", "LIMIT") and price <= 0:
-        return jsonify({"status": "error", "message": "Price required for LIMIT/SL orders"}), 400
+    if order_type in ("STOP_LOSS", "STOP_LOSS_MARKET") and trigger_price <= 0:
+        return jsonify({"status": "error", "message": "Trigger price required for stop-loss orders"}), 400
+    if order_type in ("STOP_LOSS", "LIMIT") and price <= 0:
+        return jsonify({"status": "error", "message": "Price required for LIMIT/STOP_LOSS orders"}), 400
 
     try:
         result = _monitor.interceptor.place_order(
