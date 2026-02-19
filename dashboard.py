@@ -2325,31 +2325,85 @@ def api_place_order():
         if result.get("status") == "BLOCKED":
             return jsonify(result)
 
-        # Dhan API responded - check the actual order status
-        # Dhan returns: {"orderId": "...", "orderStatus": "TRANSIT|PENDING|REJECTED", ...}
-        # or on API error: {"status": "failure", "remarks": {"error_code": "...", "message": "..."}}
-        order_status = result.get("orderStatus", "")
+        # Dhan SDK wraps all responses as:
+        #   {"status": "success"/"failure", "data": {...}, "remarks": ""/{"error_code":..., "error_message":...}}
         dhan_status = result.get("status", "")
-        order_id = result.get("orderId", "")
+        dhan_data = result.get("data", {})
+        if isinstance(dhan_data, str):
+            dhan_data = {}
+        remarks = result.get("remarks", {})
 
-        # Detect Dhan-side rejection or API failure
-        if order_status == "REJECTED" or dhan_status == "failure":
-            remarks = result.get("remarks", {})
+        # Case 1: Dhan API-level failure (bad request, auth error, etc.)
+        if dhan_status == "failure":
             reject_reason = ""
             if isinstance(remarks, dict):
-                reject_reason = remarks.get("message", "") or remarks.get("error_message", "")
-            if not reject_reason:
-                reject_reason = result.get("rejectedReason", "") or result.get("omsErrorDescription", "")
-            logger.warning("Order REJECTED by Dhan: %s | reason: %s | full: %s",
-                           order_id, reject_reason, result)
+                reject_reason = remarks.get("error_message", "") or remarks.get("message", "")
+            elif isinstance(remarks, str) and remarks:
+                reject_reason = remarks
+            if not reject_reason and isinstance(dhan_data, dict):
+                reject_reason = dhan_data.get("errorMessage", "") or dhan_data.get("message", "")
+            logger.warning("Order FAILED at Dhan API: reason=%s | full=%s", reject_reason, result)
+            return jsonify({
+                "status": "REJECTED",
+                "orderId": "",
+                "reason": reject_reason or "Order rejected by broker API",
+            })
+
+        # Case 2: API accepted but order was rejected by exchange
+        order_id = ""
+        order_status = ""
+        if isinstance(dhan_data, dict):
+            order_id = str(dhan_data.get("orderId", ""))
+            order_status = dhan_data.get("orderStatus", "")
+        # Also check top-level (some SDK versions flatten the response)
+        if not order_id:
+            order_id = str(result.get("orderId", ""))
+        if not order_status:
+            order_status = result.get("orderStatus", "")
+
+        if order_status == "REJECTED":
+            reject_reason = ""
+            if isinstance(dhan_data, dict):
+                reject_reason = (dhan_data.get("omsErrorDescription", "")
+                                 or dhan_data.get("rejectedReason", ""))
+            logger.warning("Order REJECTED by exchange: %s | reason=%s", order_id, reject_reason)
             return jsonify({
                 "status": "REJECTED",
                 "orderId": order_id,
-                "reason": reject_reason or "Order rejected by exchange/broker",
-                "dhan_response": result,
+                "reason": reject_reason or "Order rejected by exchange",
             })
 
-        # Order accepted - set SL/TP if specified
+        # Case 3: Order accepted - but re-fetch to catch fast rejections
+        # (some orders get accepted then rejected within milliseconds)
+        if order_id:
+            try:
+                order_detail = _monitor.api.get_order_by_id(order_id)
+                actual_status = ""
+                if isinstance(order_detail, dict):
+                    detail_data = order_detail.get("data", order_detail)
+                    if isinstance(detail_data, dict):
+                        actual_status = detail_data.get("orderStatus", "")
+                    if not actual_status:
+                        actual_status = order_detail.get("orderStatus", "")
+
+                if actual_status == "REJECTED":
+                    reject_reason = ""
+                    if isinstance(detail_data, dict):
+                        reject_reason = (detail_data.get("omsErrorDescription", "")
+                                         or detail_data.get("rejectedReason", ""))
+                    logger.warning("Order %s REJECTED after placement: %s", order_id, reject_reason)
+                    return jsonify({
+                        "status": "REJECTED",
+                        "orderId": order_id,
+                        "reason": reject_reason or "Order rejected by exchange/broker",
+                    })
+                # Update status for frontend display
+                if actual_status:
+                    order_status = actual_status
+            except Exception as e:
+                logger.debug("Could not fetch order detail for %s: %s", order_id, e)
+
+        # Order is accepted/pending/transit - set SL/TP if specified
         if data.get("sl_price"):
             sl_price = float(data["sl_price"])
             if sl_price > 0:
@@ -2368,38 +2422,11 @@ def api_place_order():
                 )
                 logger.info("Auto-set TP at %.2f for %s", tp_price, security_id)
 
-        # Also fetch updated order status asynchronously to detect fast rejections
-        # (some orders get accepted then rejected within milliseconds)
-        if order_id:
-            try:
-                order_detail = _monitor.api.get_order_by_id(order_id)
-                actual_status = ""
-                if isinstance(order_detail, dict):
-                    actual_status = order_detail.get("orderStatus", "")
-                    if not actual_status and "data" in order_detail:
-                        detail_data = order_detail["data"]
-                        if isinstance(detail_data, dict):
-                            actual_status = detail_data.get("orderStatus", "")
-                if actual_status == "REJECTED":
-                    reject_reason = ""
-                    detail = order_detail.get("data", order_detail)
-                    if isinstance(detail, dict):
-                        reject_reason = detail.get("rejectedReason", "") or detail.get("omsErrorDescription", "")
-                    logger.warning("Order %s REJECTED after placement: %s", order_id, reject_reason)
-                    return jsonify({
-                        "status": "REJECTED",
-                        "orderId": order_id,
-                        "reason": reject_reason or "Order rejected by exchange/broker",
-                        "dhan_response": order_detail,
-                    })
-                # Add actual status to result for frontend
-                if actual_status:
-                    result["orderStatus"] = actual_status
-            except Exception as e:
-                logger.debug("Could not fetch order detail for %s: %s", order_id, e)
-
-        result["status"] = "SUCCESS"
-        return jsonify(result)
+        return jsonify({
+            "status": "SUCCESS",
+            "orderId": order_id,
+            "orderStatus": order_status,
+        })
     except Exception as e:
         logger.error("Order placement error: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
