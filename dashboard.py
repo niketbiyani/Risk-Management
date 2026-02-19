@@ -536,10 +536,10 @@ DASHBOARD_HTML = """
                     <div>
                         <div class="form-label">Order Type</div>
                         <select id="order-type" class="form-select">
+                            <option value="MARKET">MARKET</option>
+                            <option value="LIMIT">LIMIT</option>
                             <option value="SL">STOP LIMIT</option>
                             <option value="SLM">STOP MARKET</option>
-                            <option value="LIMIT">LIMIT</option>
-                            <option value="MARKET">MARKET</option>
                         </select>
                     </div>
                     <div>
@@ -1764,7 +1764,11 @@ DASHBOARD_HTML = """
             var orderType = document.getElementById('order-type').value;
             var price = parseFloat(document.getElementById('order-price').value) || 0;
 
+            var triggerPrice = parseFloat(document.getElementById('order-trigger-price').value) || 0;
+
             if (orderType === 'LIMIT' && price <= 0) { showToast('Enter a price for limit order', 'warning'); return; }
+            if ((orderType === 'SL' || orderType === 'SLM') && triggerPrice <= 0) { showToast('Enter a trigger price for stop-loss order', 'warning'); return; }
+            if (orderType === 'SL' && price <= 0) { showToast('Enter a limit price for stop-limit order', 'warning'); return; }
 
             var payload = {
                 security_id: secId,
@@ -2308,16 +2312,29 @@ def api_place_order():
     if not security_id:
         return jsonify({"status": "error", "message": "No security_id"}), 400
 
+    order_type = data.get("order_type", "MARKET")
+    price = float(data.get("price", 0))
+    trigger_price = float(data.get("trigger_price", 0))
+    quantity = int(data.get("quantity", 0))
+
+    # Validate required fields based on order type
+    if quantity <= 0:
+        return jsonify({"status": "error", "message": "Quantity must be > 0"}), 400
+    if order_type in ("SL", "SLM") and trigger_price <= 0:
+        return jsonify({"status": "error", "message": "Trigger price required for SL/SLM orders"}), 400
+    if order_type in ("SL", "LIMIT") and price <= 0:
+        return jsonify({"status": "error", "message": "Price required for LIMIT/SL orders"}), 400
+
     try:
         result = _monitor.interceptor.place_order(
             security_id=security_id,
             exchange_segment=data.get("exchange_segment", "NSE_FNO"),
             transaction_type=data.get("transaction_type", "BUY"),
-            quantity=int(data.get("quantity", 0)),
-            order_type=data.get("order_type", "MARKET"),
+            quantity=quantity,
+            order_type=order_type,
             product_type=data.get("product_type", "INTRADAY"),
-            price=float(data.get("price", 0)),
-            trigger_price=float(data.get("trigger_price", 0)),
+            price=price,
+            trigger_price=trigger_price,
             sl_price=float(data.get("sl_price", 0)),
         )
 
