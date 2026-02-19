@@ -42,9 +42,36 @@ nohup "$PYTHON" -u main.py >> "$LOGFILE" 2>&1 &
 PID=$!
 echo $PID > "$PIDFILE"
 
-# Wait a moment and verify it started
-sleep 2
-if kill -0 "$PID" 2>/dev/null; then
+# Wait for startup (token refresh + instrument loading can take ~15s)
+echo "Waiting for platform to initialize (token refresh + instrument loading)..."
+STARTED=false
+for i in $(seq 1 30); do
+    if ! kill -0 "$PID" 2>/dev/null; then
+        # Process died during startup
+        break
+    fi
+    # Check if dashboard is listening
+    if command -v curl >/dev/null 2>&1; then
+        if curl -s -o /dev/null -w '' --max-time 1 http://127.0.0.1:${DASHBOARD_PORT:-5555}/ 2>/dev/null; then
+            STARTED=true
+            break
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if wget -q -O /dev/null --timeout=1 http://127.0.0.1:${DASHBOARD_PORT:-5555}/ 2>/dev/null; then
+            STARTED=true
+            break
+        fi
+    else
+        # No curl/wget, just wait and check if process is alive
+        if [ "$i" -ge 15 ]; then
+            STARTED=true
+            break
+        fi
+    fi
+    sleep 1
+done
+
+if [ "$STARTED" = true ] && kill -0 "$PID" 2>/dev/null; then
     echo ""
     echo "============================================"
     echo "  Platform Started Successfully!"
