@@ -71,12 +71,6 @@ class DhanAPI:
             order_type, product_type, price, trigger_price,
         )
         try:
-            # Debug: log headers being sent (mask token for security)
-            hdr = self.dhan.header.copy()
-            token_val = hdr.get('access-token', '')
-            hdr['access-token'] = token_val[:8] + '...' + token_val[-4:] if len(token_val) > 12 else '***'
-            logger.info("Debug headers: %s | base_url: %s", hdr, self.dhan.base_url)
-
             response = self.dhan.place_order(
                 security_id=security_id,
                 exchange_segment=exchange_segment,
