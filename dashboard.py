@@ -536,10 +536,10 @@ DASHBOARD_HTML = """
                     <div>
                         <div class="form-label">Order Type</div>
                         <select id="order-type" class="form-select">
-                            <option value="MARKET">MARKET</option>
-                            <option value="LIMIT">LIMIT</option>
                             <option value="SL">STOP LIMIT</option>
                             <option value="SLM">STOP MARKET</option>
+                            <option value="LIMIT">LIMIT</option>
+                            <option value="MARKET">MARKET</option>
                         </select>
                     </div>
                     <div>

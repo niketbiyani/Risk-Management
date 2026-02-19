@@ -59,6 +59,12 @@ class DhanAPI:
         correlation_id: str = "",
     ) -> dict:
         """Place an order on Dhan."""
+        logger.info(
+            "Placing order -> security_id=%s exchange=%s txn=%s qty=%d "
+            "type=%s product=%s price=%.2f trigger=%.2f",
+            security_id, exchange_segment, transaction_type, quantity,
+            order_type, product_type, price, trigger_price,
+        )
         try:
             response = self.dhan.place_order(
                 security_id=security_id,
@@ -72,11 +78,10 @@ class DhanAPI:
                 disclosed_quantity=disclosed_quantity,
                 validity=validity,
             )
-            logger.info("Order placed: %s %s %s qty=%d @ %s", transaction_type,
-                        exchange_segment, security_id, quantity, price)
+            logger.info("Dhan response: %s", response)
             return response
         except Exception as e:
-            logger.error("Order placement failed: %s", e)
+            logger.error("Order placement exception: %s", e)
             raise
 
     def place_slice_order(
