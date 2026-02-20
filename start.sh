@@ -30,7 +30,17 @@ fi
 if [ ! -f "$PYTHON" ]; then
     echo "Creating virtual environment..."
     python3 -m venv "${WORK_DIR}/venv"
-    "${WORK_DIR}/venv/bin/pip" install -r "${WORK_DIR}/requirements.txt" --quiet
+fi
+
+# Always sync dependencies (handles new/updated packages after git pull)
+REQ_FILE="${WORK_DIR}/requirements.txt"
+REQ_HASH_FILE="${WORK_DIR}/venv/.requirements.hash"
+CURRENT_HASH=$(md5sum "$REQ_FILE" 2>/dev/null | awk '{print $1}')
+CACHED_HASH=$(cat "$REQ_HASH_FILE" 2>/dev/null)
+if [ "$CURRENT_HASH" != "$CACHED_HASH" ]; then
+    echo "Installing/updating dependencies..."
+    "${WORK_DIR}/venv/bin/pip" install -r "$REQ_FILE" --quiet
+    echo "$CURRENT_HASH" > "$REQ_HASH_FILE"
 fi
 
 cd "$WORK_DIR"
@@ -87,8 +97,11 @@ if [ "$STARTED" = true ] && kill -0 "$PID" 2>/dev/null; then
     echo "You can close the terminal — the platform keeps running."
     echo ""
 else
-    echo "ERROR: Platform failed to start. Check logs:"
-    echo "  tail -20 $LOGFILE"
+    echo "ERROR: Platform failed to start."
+    echo ""
+    echo "--- Last 20 lines of log ---"
+    tail -20 "$LOGFILE"
+    echo "----------------------------"
     rm -f "$PIDFILE"
     exit 1
 fi
