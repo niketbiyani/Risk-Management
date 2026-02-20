@@ -2581,8 +2581,8 @@ def api_option_chain_data():
                         ce = sides.get("ce", {}) or {}
                         pe = sides.get("pe", {}) or {}
                         ltp_by_strike[s] = {
-                            "ce_ltp": ce.get("ltp", 0) or 0,
-                            "pe_ltp": pe.get("ltp", 0) or 0,
+                            "ce_ltp": ce.get("last_price", 0) or 0,
+                            "pe_ltp": pe.get("last_price", 0) or 0,
                         }
                     # Log mapping results
                     sample_chain = chain[:3] if chain else []
