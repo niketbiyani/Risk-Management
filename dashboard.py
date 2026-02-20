@@ -2553,6 +2553,13 @@ def api_option_chain_data():
                             list(oc_result["data"].keys())[:5] if isinstance(oc_result.get("data"), dict) else "N/A")
                 if isinstance(oc_result, dict) and oc_result.get("status") == "success":
                     oc_data = oc_result.get("data", {})
+                    # Dhan wraps option chain in extra "data" key: {"data": {"data": {actual}, "status": ...}}
+                    if isinstance(oc_data, dict) and "data" in oc_data and isinstance(oc_data["data"], dict):
+                        oc_data = oc_data["data"]
+                    logger.info("Option chain oc_data keys=%s spot=%s num_strikes=%s",
+                                list(oc_data.keys())[:8] if isinstance(oc_data, dict) else "N/A",
+                                oc_data.get("last_price") if isinstance(oc_data, dict) else "N/A",
+                                len(oc_data.get("oc", {})) if isinstance(oc_data, dict) else 0)
                     spot = oc_data.get("last_price", 0) or 0
                     oc_strikes = oc_data.get("oc", {})
                     # Map LTPs from option chain into our chain
