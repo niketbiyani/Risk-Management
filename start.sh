@@ -48,7 +48,7 @@ cd "$WORK_DIR"
 echo "Starting Risk Management Platform..."
 
 # Run in background with nohup
-nohup "$PYTHON" -u main.py >> "$LOGFILE" 2>&1 &
+nohup "$PYTHON" -u main.py > /dev/null 2>&1 &
 PID=$!
 echo $PID > "$PIDFILE"
 
