@@ -2547,6 +2547,10 @@ def api_option_chain_data():
             try:
                 underlying_id = 13 if underlying == "NIFTY" else 25
                 oc_result = _monitor.api.get_option_chain(underlying_id, expiry)
+                logger.info("Option chain API response status=%s remarks=%s data_type=%s data_keys=%s",
+                            oc_result.get("status"), oc_result.get("remarks"),
+                            type(oc_result.get("data")).__name__,
+                            list(oc_result["data"].keys())[:5] if isinstance(oc_result.get("data"), dict) else "N/A")
                 if isinstance(oc_result, dict) and oc_result.get("status") == "success":
                     oc_data = oc_result.get("data", {})
                     spot = oc_data.get("last_price", 0) or 0
@@ -2570,7 +2574,7 @@ def api_option_chain_data():
                             row["ce_ltp"] = strike_data["ce_ltp"]
                             row["pe_ltp"] = strike_data["pe_ltp"]
             except Exception as e:
-                logger.debug("Option chain API failed: %s", e)
+                logger.error("Option chain API failed: %s", e, exc_info=True)
 
         # Find ATM index
         atm_idx = len(chain) // 2
