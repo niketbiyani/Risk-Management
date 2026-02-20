@@ -464,16 +464,6 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
-    <!-- Intraday P&L Chart -->
-    <div style="padding:0 24px;">
-        <div class="card">
-            <h3>Intraday P&L</h3>
-            <div style="position:relative;height:250px;width:100%;">
-                <canvas id="pnl-chart"></canvas>
-            </div>
-        </div>
-    </div>
-
     <!-- Risk Meters -->
     <div class="grid grid-detail">
         <div class="card">
@@ -655,6 +645,44 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
+    <!-- Option Chain -->
+    <div style="padding:0 24px;margin-top:16px;">
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <h3 style="margin:0;">Option Chain</h3>
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <select id="oc-underlying" class="form-input" style="width:140px;padding:4px 8px;font-size:12px;" onchange="loadOptionChain()">
+                        <option value="13">NIFTY</option>
+                        <option value="25">BANKNIFTY</option>
+                    </select>
+                    <select id="oc-expiry" class="form-input" style="width:140px;padding:4px 8px;font-size:12px;" onchange="loadOptionChain()">
+                        <option value="">Loading...</option>
+                    </select>
+                    <button onclick="loadOptionChain()" class="btn-neutral" style="padding:4px 12px;font-size:12px;">Refresh</button>
+                </div>
+            </div>
+            <div id="oc-spot" style="font-size:13px;color:#8b949e;margin-bottom:8px;">Spot: --</div>
+            <div style="max-height:400px;overflow-y:auto;">
+                <table id="oc-table" style="font-size:12px;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:right;color:#3fb950;">CE OI</th>
+                            <th style="text-align:right;color:#3fb950;">CE Vol</th>
+                            <th style="text-align:right;color:#3fb950;">CE LTP</th>
+                            <th style="text-align:center;font-weight:700;">Strike</th>
+                            <th style="text-align:left;color:#f85149;">PE LTP</th>
+                            <th style="text-align:left;color:#f85149;">PE Vol</th>
+                            <th style="text-align:left;color:#f85149;">PE OI</th>
+                        </tr>
+                    </thead>
+                    <tbody id="oc-body">
+                        <tr><td colspan="7" style="text-align:center;color:#484f58;padding:20px;">Select an expiry to load option chain</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <!-- Positions Table -->
     <div style="padding:0 24px;margin-top:16px;">
         <div class="card">
@@ -770,6 +798,16 @@ DASHBOARD_HTML = """
                 <div id="journal-analytics">
                     <div style="color:#484f58;text-align:center;padding:20px;">Loading...</div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Intraday P&L Chart -->
+    <div style="padding:0 24px;margin-top:16px;">
+        <div class="card">
+            <h3>Intraday P&L</h3>
+            <div style="position:relative;height:250px;width:100%;">
+                <canvas id="pnl-chart"></canvas>
             </div>
         </div>
     </div>
@@ -2207,6 +2245,144 @@ DASHBOARD_HTML = """
         // Check on load, then every 5 minutes
         checkTokenStatus();
         setInterval(checkTokenStatus, 300000);
+
+        // ── Option Chain ─────────────────────────────────────────────
+        var _ocExpiries = [];
+        var _ocLotSize = 75; // default NIFTY lot size
+
+        function initOptionChain() {
+            var uid = document.getElementById('oc-underlying').value;
+            fetch('/api/option_chain/expiries?underlying_id=' + uid)
+                .then(function(r){ return r.json(); })
+                .then(function(d) {
+                    if (d.error) { showToast('Expiry fetch failed: ' + d.error, 'error'); return; }
+                    _ocExpiries = d.expiries || [];
+                    var sel = document.getElementById('oc-expiry');
+                    sel.innerHTML = '';
+                    _ocExpiries.forEach(function(exp, i) {
+                        var opt = document.createElement('option');
+                        opt.value = exp;
+                        opt.textContent = exp;
+                        sel.appendChild(opt);
+                    });
+                    if (_ocExpiries.length > 0) loadOptionChain();
+                })
+                .catch(function(e) { console.error('Expiry list error:', e); });
+        }
+
+        function loadOptionChain() {
+            var uid = document.getElementById('oc-underlying').value;
+            var expiry = document.getElementById('oc-expiry').value;
+            if (!expiry) { initOptionChain(); return; }
+
+            // Determine lot size for this underlying
+            _ocLotSize = (uid === '25') ? 30 : 75;
+
+            var body = document.getElementById('oc-body');
+            body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#484f58;padding:20px;">Loading...</td></tr>';
+
+            fetch('/api/option_chain/data?underlying_id=' + uid + '&expiry=' + expiry)
+                .then(function(r){ return r.json(); })
+                .then(function(d) {
+                    if (d.error) {
+                        body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#f85149;padding:20px;">' + d.error + '</td></tr>';
+                        return;
+                    }
+                    var spot = d.spot || 0;
+                    document.getElementById('oc-spot').textContent = 'Spot: \\u20B9' + spot.toFixed(2);
+
+                    var chain = d.chain || [];
+                    if (chain.length === 0) {
+                        body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#484f58;padding:20px;">No data available</td></tr>';
+                        return;
+                    }
+
+                    // Show strikes around spot price (20 above + 20 below ATM)
+                    var atmIdx = 0;
+                    var minDist = Infinity;
+                    chain.forEach(function(row, i) {
+                        var dist = Math.abs(row.strike - spot);
+                        if (dist < minDist) { minDist = dist; atmIdx = i; }
+                    });
+                    var startIdx = Math.max(0, atmIdx - 20);
+                    var endIdx = Math.min(chain.length, atmIdx + 21);
+                    var visible = chain.slice(startIdx, endIdx);
+
+                    var html = '';
+                    visible.forEach(function(row) {
+                        var isATM = (row.strike === chain[atmIdx].strike);
+                        var isITMce = row.strike < spot;
+                        var isITMpe = row.strike > spot;
+                        var atmStyle = isATM ? 'background:#1a2332;font-weight:700;' : '';
+                        var ceItm = isITMce ? 'background:rgba(63,185,80,0.06);' : '';
+                        var peItm = isITMpe ? 'background:rgba(248,81,73,0.06);' : '';
+
+                        html += '<tr style="cursor:pointer;' + atmStyle + '">';
+                        html += '<td style="text-align:right;' + ceItm + '" onclick="ocSelect(' + row.ce_security_id + ',\\'CE\\',\\'' + expiry + '\\',' + row.strike + ',' + row.ce_ltp + ')">' + fmtOI(row.ce_oi) + '</td>';
+                        html += '<td style="text-align:right;' + ceItm + '" onclick="ocSelect(' + row.ce_security_id + ',\\'CE\\',\\'' + expiry + '\\',' + row.strike + ',' + row.ce_ltp + ')">' + fmtVol(row.ce_volume) + '</td>';
+                        html += '<td style="text-align:right;color:#3fb950;font-weight:600;' + ceItm + '" onclick="ocSelect(' + row.ce_security_id + ',\\'CE\\',\\'' + expiry + '\\',' + row.strike + ',' + row.ce_ltp + ')">' + (row.ce_ltp ? row.ce_ltp.toFixed(2) : '-') + '</td>';
+                        html += '<td style="text-align:center;font-weight:700;color:#e6edf3;background:#161b22;border-left:2px solid #30363d;border-right:2px solid #30363d;">' + row.strike.toFixed(0) + '</td>';
+                        html += '<td style="text-align:left;color:#f85149;font-weight:600;' + peItm + '" onclick="ocSelect(' + row.pe_security_id + ',\\'PE\\',\\'' + expiry + '\\',' + row.strike + ',' + row.pe_ltp + ')">' + (row.pe_ltp ? row.pe_ltp.toFixed(2) : '-') + '</td>';
+                        html += '<td style="text-align:left;' + peItm + '" onclick="ocSelect(' + row.pe_security_id + ',\\'PE\\',\\'' + expiry + '\\',' + row.strike + ',' + row.pe_ltp + ')">' + fmtVol(row.pe_volume) + '</td>';
+                        html += '<td style="text-align:left;' + peItm + '" onclick="ocSelect(' + row.pe_security_id + ',\\'PE\\',\\'' + expiry + '\\',' + row.strike + ',' + row.pe_ltp + ')">' + fmtOI(row.pe_oi) + '</td>';
+                        html += '</tr>';
+                    });
+                    body.innerHTML = html;
+                })
+                .catch(function(e) {
+                    body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#f85149;padding:20px;">Error: ' + e + '</td></tr>';
+                });
+        }
+
+        function fmtOI(val) {
+            if (!val) return '-';
+            if (val >= 10000000) return (val / 10000000).toFixed(2) + ' Cr';
+            if (val >= 100000) return (val / 100000).toFixed(2) + ' L';
+            if (val >= 1000) return (val / 1000).toFixed(1) + ' K';
+            return val.toString();
+        }
+
+        function fmtVol(val) {
+            if (!val) return '-';
+            if (val >= 10000000) return (val / 10000000).toFixed(1) + ' Cr';
+            if (val >= 100000) return (val / 100000).toFixed(1) + ' L';
+            if (val >= 1000) return (val / 1000).toFixed(0) + ' K';
+            return val.toString();
+        }
+
+        function ocSelect(securityId, optType, expiry, strike, ltp) {
+            if (!securityId) return;
+            var uid = document.getElementById('oc-underlying').value;
+            var underlying = (uid === '25') ? 'BANKNIFTY' : 'NIFTY';
+            var symbol = underlying + ' ' + strike.toFixed(0) + ' ' + optType + ' ' + expiry;
+
+            // Fill order form fields
+            document.getElementById('instrument-search').value = symbol;
+            document.getElementById('order-security-id').value = securityId;
+            document.getElementById('order-exchange-segment').value = 'NSE_FNO';
+            document.getElementById('order-lot-size').value = _ocLotSize;
+            document.getElementById('order-tick-size').value = '0.05';
+            document.getElementById('selected-instrument').style.display = 'block';
+            document.getElementById('selected-instrument').textContent =
+                'NSE | OPTIDX | Lot size: ' + _ocLotSize + ' | ID: ' + securityId;
+
+            if (ltp && ltp > 0) {
+                document.getElementById('order-price').value = ltp;
+                triggerAutoCalc();
+            }
+
+            // Scroll to order panel
+            document.querySelector('.order-tab').scrollIntoView({behavior: 'smooth', block: 'start'});
+            showToast('Selected: ' + symbol + ' @ \\u20B9' + (ltp ? ltp.toFixed(2) : '--'), 'success');
+        }
+
+        // Watch for underlying change to reload expiries
+        document.getElementById('oc-underlying').addEventListener('change', function() {
+            initOptionChain();
+        });
+
+        // Load expiries on page load
+        initOptionChain();
     </script>
 </body>
 </html>
@@ -2325,6 +2501,67 @@ def api_reload_instruments():
         return jsonify({"error": "Instrument cache not initialized"}), 500
     count = _instrument_cache.reload()
     return jsonify({"status": "ok", "instruments_loaded": count})
+
+
+# ── Option Chain ───────────────────────────────────────────────────
+
+@app.route("/api/option_chain/expiries")
+def api_option_chain_expiries():
+    """Get expiry dates for an underlying."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    underlying_id = int(request.args.get("underlying_id", 13))
+    try:
+        expiries = _monitor.api.get_expiry_list(underlying_id)
+        return jsonify({"expiries": expiries[:2]})  # Only first 2 expiries
+    except Exception as e:
+        logger.error("Failed to get expiries: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/option_chain/data")
+def api_option_chain_data():
+    """Get option chain data for a given underlying + expiry."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    underlying_id = int(request.args.get("underlying_id", 13))
+    expiry = request.args.get("expiry", "")
+    if not expiry:
+        return jsonify({"error": "expiry parameter required"}), 400
+    try:
+        result = _monitor.api.get_option_chain(underlying_id, expiry)
+        if isinstance(result, dict) and result.get("status") == "success":
+            data = result.get("data", {})
+            oc = data.get("oc", {})
+            spot = data.get("last_price", 0)
+            # Build a simplified chain: list of rows sorted by strike
+            chain = []
+            for strike_str, sides in oc.items():
+                try:
+                    strike = float(strike_str)
+                except (ValueError, TypeError):
+                    continue
+                ce = sides.get("ce", {}) or {}
+                pe = sides.get("pe", {}) or {}
+                chain.append({
+                    "strike": strike,
+                    "ce_ltp": ce.get("ltp", 0),
+                    "ce_oi": ce.get("oi", 0),
+                    "ce_volume": ce.get("volume", 0),
+                    "ce_security_id": ce.get("security_id", ""),
+                    "pe_ltp": pe.get("ltp", 0),
+                    "pe_oi": pe.get("oi", 0),
+                    "pe_volume": pe.get("volume", 0),
+                    "pe_security_id": pe.get("security_id", ""),
+                })
+            chain.sort(key=lambda x: x["strike"])
+            return jsonify({"spot": spot, "chain": chain, "expiry": expiry})
+        else:
+            remarks = result.get("remarks", "") if isinstance(result, dict) else ""
+            return jsonify({"error": "Failed to fetch option chain", "remarks": remarks}), 500
+    except Exception as e:
+        logger.error("Option chain error: %s", e)
+        return jsonify({"error": str(e)}), 500
 
 
 # ── LTP ────────────────────────────────────────────────────────────
