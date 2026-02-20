@@ -2564,6 +2564,15 @@ def api_option_chain_data():
                     oc_strikes = oc_data.get("oc", {})
                     # Map LTPs from option chain into our chain
                     ltp_by_strike = {}
+                    # Log sample strike keys and values from API to debug mapping
+                    sample_keys = list(oc_strikes.keys())[:3]
+                    for sk in sample_keys:
+                        sv = oc_strikes[sk]
+                        logger.info("OC API sample strike key=%r type=%s value_keys=%s ce=%s pe=%s",
+                                    sk, type(sk).__name__,
+                                    list(sv.keys()) if isinstance(sv, dict) else type(sv).__name__,
+                                    sv.get("ce", {}) if isinstance(sv, dict) else "N/A",
+                                    sv.get("pe", {}) if isinstance(sv, dict) else "N/A")
                     for strike_str, sides in oc_strikes.items():
                         try:
                             s = float(strike_str)
@@ -2575,6 +2584,13 @@ def api_option_chain_data():
                             "ce_ltp": ce.get("ltp", 0) or 0,
                             "pe_ltp": pe.get("ltp", 0) or 0,
                         }
+                    # Log mapping results
+                    sample_chain = chain[:3] if chain else []
+                    matched = sum(1 for r in chain if ltp_by_strike.get(r["strike"]))
+                    sample_ltp_keys = list(ltp_by_strike.keys())[:3]
+                    logger.info("OC mapping: ltp_by_strike has %d entries, sample_keys=%s, chain has %d rows, matched=%d, sample_chain_strikes=%s",
+                                len(ltp_by_strike), sample_ltp_keys, len(chain), matched,
+                                [r["strike"] for r in sample_chain])
                     for row in chain:
                         strike_data = ltp_by_strike.get(row["strike"])
                         if strike_data:
