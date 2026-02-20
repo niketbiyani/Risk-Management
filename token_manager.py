@@ -91,39 +91,56 @@ def try_renew_token(client_id: str, current_token: str) -> str | None:
         return None
 
 
-def generate_fresh_token(client_id: str, pin: str, totp_secret: str) -> str | None:
+def generate_fresh_token(client_id: str, pin: str, totp_secret: str, max_retries: int = 3) -> str | None:
     """
     Generate a brand new token using PIN + TOTP. Fully headless, no browser needed.
+    Retries on Dhan's rate limit ("Token can be generated once every 2 minutes").
     """
     if not pin or not totp_secret:
         logger.error("DHAN_PIN and DHAN_TOTP_SECRET must be set in .env for auto token generation")
         return None
 
-    try:
-        totp = pyotp.TOTP(totp_secret)
-        totp_code = totp.now()
-        logger.info("Generated TOTP code, requesting new token...")
+    for attempt in range(1, max_retries + 1):
+        try:
+            totp = pyotp.TOTP(totp_secret)
+            totp_code = totp.now()
+            logger.info("Generated TOTP code, requesting new token... (attempt %d/%d)",
+                        attempt, max_retries)
 
-        login = DhanLogin(client_id)
-        response = login.generate_token(pin=pin, totp=totp_code)
-        logger.info("GenerateToken response keys: %s",
-                     list(response.keys()) if isinstance(response, dict) else type(response))
+            login = DhanLogin(client_id)
+            response = login.generate_token(pin=pin, totp=totp_code)
+            logger.info("GenerateToken response keys: %s",
+                         list(response.keys()) if isinstance(response, dict) else type(response))
 
-        if isinstance(response, dict):
-            new_token = response.get("accessToken") or response.get("access_token")
-            if new_token:
-                return new_token
-            data = response.get("data", {})
-            if isinstance(data, dict):
-                new_token = data.get("accessToken") or data.get("access_token")
+            if isinstance(response, dict):
+                # Check for rate limit
+                if response.get("status") == "error":
+                    msg = response.get("message", "")
+                    if "once every" in msg.lower() or "2 minute" in msg.lower():
+                        if attempt < max_retries:
+                            logger.warning("Rate limited by Dhan: %s. Waiting 130s before retry...", msg)
+                            time.sleep(130)
+                            continue
+                        else:
+                            logger.error("Rate limited by Dhan after %d attempts: %s", max_retries, msg)
+                            return None
+
+                new_token = response.get("accessToken") or response.get("access_token")
                 if new_token:
                     return new_token
+                data = response.get("data", {})
+                if isinstance(data, dict):
+                    new_token = data.get("accessToken") or data.get("access_token")
+                    if new_token:
+                        return new_token
 
-        logger.error("GenerateToken did not return a valid token: %s", response)
-        return None
-    except Exception as e:
-        logger.error("GenerateToken failed: %s", e)
-        return None
+            logger.error("GenerateToken did not return a valid token: %s", response)
+            return None
+        except Exception as e:
+            logger.error("GenerateToken failed: %s", e)
+            return None
+
+    return None
 
 
 def refresh_token(dhan_api=None) -> bool:

@@ -164,6 +164,20 @@ def run_full():
 
     monitor = PositionMonitor()
 
+    # Validate token with a lightweight API call before starting
+    logger.info("Validating API token...")
+    try:
+        fund_resp = monitor.api.get_fund_limits()
+        if isinstance(fund_resp, dict) and fund_resp.get("status") == "success":
+            logger.info("API token validated successfully")
+        elif isinstance(fund_resp, dict) and "error" in str(fund_resp.get("status", "")).lower():
+            logger.error("API token is INVALID. Response: %s", fund_resp)
+            logger.error("Orders will be rejected. Fix your token (check .env or TOTP config) and restart.")
+        else:
+            logger.warning("Token validation returned unexpected response: %s", fund_resp)
+    except Exception as e:
+        logger.warning("Token validation call failed: %s", e)
+
     # Schedule periodic token renewal (keeps token alive across 24h boundary)
     schedule_token_renewal(monitor.api)
 
