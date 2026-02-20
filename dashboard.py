@@ -2541,27 +2541,39 @@ def api_option_chain_data():
         if not chain:
             return jsonify({"spot": 0, "chain": [], "expiry": expiry, "lot_size": lot_size})
 
-        # Try to get spot price to find ATM
+        # Use Dhan's option_chain API to get spot + LTPs in one call
         spot = 0
         if _monitor:
             try:
                 underlying_id = 13 if underlying == "NIFTY" else 25
-                spot_data = _monitor.api.get_ltp({"IDX_I": [underlying_id]})
-                if isinstance(spot_data, dict) and spot_data.get("status") != "failure":
-                    inner = spot_data.get("data", {})
-                    if isinstance(inner, dict):
-                        for val in inner.values():
-                            if isinstance(val, dict) and "last_price" in val:
-                                spot = val["last_price"]
-                                break
-                            elif isinstance(val, (int, float)):
-                                spot = val
-                                break
-            except Exception:
-                pass
+                oc_result = _monitor.api.get_option_chain(underlying_id, expiry)
+                if isinstance(oc_result, dict) and oc_result.get("status") == "success":
+                    oc_data = oc_result.get("data", {})
+                    spot = oc_data.get("last_price", 0) or 0
+                    oc_strikes = oc_data.get("oc", {})
+                    # Map LTPs from option chain into our chain
+                    ltp_by_strike = {}
+                    for strike_str, sides in oc_strikes.items():
+                        try:
+                            s = float(strike_str)
+                        except (ValueError, TypeError):
+                            continue
+                        ce = sides.get("ce", {}) or {}
+                        pe = sides.get("pe", {}) or {}
+                        ltp_by_strike[s] = {
+                            "ce_ltp": ce.get("ltp", 0) or 0,
+                            "pe_ltp": pe.get("ltp", 0) or 0,
+                        }
+                    for row in chain:
+                        strike_data = ltp_by_strike.get(row["strike"])
+                        if strike_data:
+                            row["ce_ltp"] = strike_data["ce_ltp"]
+                            row["pe_ltp"] = strike_data["pe_ltp"]
+            except Exception as e:
+                logger.debug("Option chain API failed: %s", e)
 
         # Find ATM index
-        atm_idx = len(chain) // 2  # fallback: middle of chain
+        atm_idx = len(chain) // 2
         if spot > 0:
             min_dist = float("inf")
             for i, row in enumerate(chain):
@@ -2574,34 +2586,6 @@ def api_option_chain_data():
         start = max(0, atm_idx - 6)
         end = min(len(chain), atm_idx + 7)
         chain = chain[start:end]
-
-        # Batch fetch LTPs for visible strikes (SDK needs integer IDs)
-        if _monitor and chain:
-            visible_ids = []
-            for row in chain:
-                if row["ce_security_id"]:
-                    visible_ids.append(int(row["ce_security_id"]))
-                if row["pe_security_id"]:
-                    visible_ids.append(int(row["pe_security_id"]))
-            if visible_ids:
-                try:
-                    ltp_data = _monitor.api.get_ltp({"NSE_FNO": visible_ids})
-                    if isinstance(ltp_data, dict) and ltp_data.get("status") != "failure":
-                        inner = ltp_data.get("data", {})
-                        if isinstance(inner, dict):
-                            ltp_map = {}
-                            for sid, val in inner.items():
-                                if isinstance(val, dict) and "last_price" in val:
-                                    ltp_map[str(sid)] = val["last_price"]
-                                elif isinstance(val, (int, float)):
-                                    ltp_map[str(sid)] = val
-                            for row in chain:
-                                if str(row["ce_security_id"]) in ltp_map:
-                                    row["ce_ltp"] = ltp_map[str(row["ce_security_id"])]
-                                if str(row["pe_security_id"]) in ltp_map:
-                                    row["pe_ltp"] = ltp_map[str(row["pe_security_id"])]
-                except Exception:
-                    pass
 
         return jsonify({"spot": spot, "chain": chain, "expiry": expiry, "lot_size": lot_size})
     except Exception as e:
