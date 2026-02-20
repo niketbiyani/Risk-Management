@@ -2546,7 +2546,7 @@ def api_option_chain_data():
         if _monitor:
             try:
                 underlying_id = 13 if underlying == "NIFTY" else 25
-                spot_data = _monitor.api.get_ltp({"IDX_I": [str(underlying_id)]})
+                spot_data = _monitor.api.get_ltp({"IDX_I": [underlying_id]})
                 if isinstance(spot_data, dict) and spot_data.get("status") != "failure":
                     inner = spot_data.get("data", {})
                     if isinstance(inner, dict):
@@ -2575,14 +2575,14 @@ def api_option_chain_data():
         end = min(len(chain), atm_idx + 7)
         chain = chain[start:end]
 
-        # Batch fetch LTPs for visible strikes
+        # Batch fetch LTPs for visible strikes (SDK needs integer IDs)
         if _monitor and chain:
             visible_ids = []
             for row in chain:
                 if row["ce_security_id"]:
-                    visible_ids.append(row["ce_security_id"])
+                    visible_ids.append(int(row["ce_security_id"]))
                 if row["pe_security_id"]:
-                    visible_ids.append(row["pe_security_id"])
+                    visible_ids.append(int(row["pe_security_id"]))
             if visible_ids:
                 try:
                     ltp_data = _monitor.api.get_ltp({"NSE_FNO": visible_ids})
@@ -2618,7 +2618,7 @@ def api_get_ltp(security_id):
         return jsonify({"error": "Monitor not initialized"}), 500
     exchange_segment = request.args.get("exchange_segment", "NSE_FNO")
     try:
-        data = _monitor.api.get_ltp({exchange_segment: [security_id]})
+        data = _monitor.api.get_ltp({exchange_segment: [int(security_id)]})
         # Extract LTP from Dhan response
         ltp = None
         if isinstance(data, dict) and "data" in data:
