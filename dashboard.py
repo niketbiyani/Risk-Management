@@ -509,7 +509,7 @@ DASHBOARD_HTML = """
                 </div>
             </div>
             <div id="oc-spot" style="font-size:13px;color:#8b949e;margin-bottom:8px;">Spot: --</div>
-            <div id="oc-scroll-container" style="max-height:400px;overflow-y:auto;">
+            <div id="oc-scroll-container">
                 <table id="oc-table" style="font-size:12px;">
                     <thead style="position:sticky;top:0;background:#0d1117;z-index:1;">
                         <tr>
@@ -2292,7 +2292,7 @@ DASHBOARD_HTML = """
                     }
                     var spot = d.spot || 0;
                     _ocLotSize = d.lot_size || 75;
-                    document.getElementById('oc-spot').textContent = 'Spot: \\u20B9' + (spot > 0 ? spot.toFixed(2) : '--');
+                    document.getElementById('oc-spot').textContent = 'Spot: \\u20B9' + (spot > 0 ? spot.toFixed(2) : '--') + '  |  Expiry: ' + expiry + '  |  Lot: ' + _ocLotSize;
 
                     var chain = d.chain || [];
                     if (chain.length === 0) {
@@ -2300,56 +2300,27 @@ DASHBOARD_HTML = """
                         return;
                     }
 
-                    // Find ATM index
-                    var atmIdx = 0;
-                    if (spot > 0) {
-                        var minDist = Infinity;
-                        chain.forEach(function(row, i) {
-                            var dist = Math.abs(row.strike - spot);
-                            if (dist < minDist) { minDist = dist; atmIdx = i; }
-                        });
-                    } else {
-                        atmIdx = Math.floor(chain.length / 2);
-                    }
-
-                    // Show 20 strikes above + 20 below ATM
-                    var startIdx = Math.max(0, atmIdx - 20);
-                    var endIdx = Math.min(chain.length, atmIdx + 21);
-                    var visible = chain.slice(startIdx, endIdx);
-                    var atmStrike = chain[atmIdx].strike;
+                    // ATM is the middle row (backend already trimmed to +/- 6)
+                    var atmIdx = Math.floor(chain.length / 2);
 
                     var html = '';
-                    visible.forEach(function(row) {
-                        var isATM = (row.strike === atmStrike);
-                        var isITMce = spot > 0 && row.strike < spot;
-                        var isITMpe = spot > 0 && row.strike > spot;
-                        var rowStyle = isATM ? 'background:#1a2332;font-weight:700;' : '';
-                        var ceStyle = isITMce ? 'background:rgba(63,185,80,0.06);' : '';
-                        var peStyle = isITMpe ? 'background:rgba(248,81,73,0.06);' : '';
+                    chain.forEach(function(row, i) {
+                        var isATM = (i === atmIdx);
+                        var rowStyle = isATM ? 'background:#1a2332;' : '';
                         var ceLtp = row.ce_ltp ? row.ce_ltp.toFixed(2) : '-';
                         var peLtp = row.pe_ltp ? row.pe_ltp.toFixed(2) : '-';
 
                         html += '<tr style="cursor:pointer;' + rowStyle + '">';
-                        html += '<td style="text-align:right;color:#3fb950;font-weight:600;padding:6px 12px;' + ceStyle + '" ';
-                        html += 'onclick="ocSelect(\\'' + row.ce_security_id + '\\',\\'CE\\',\\'' + expiry + '\\',' + row.strike + ',' + (row.ce_ltp || 0) + ')" ';
-                        html += 'title="Click to trade ' + underlying + ' ' + row.strike + ' CE">';
+                        html += '<td style="text-align:right;color:#3fb950;font-weight:600;padding:8px 16px;" ';
+                        html += 'onclick="ocSelect(\\'' + row.ce_security_id + '\\',\\'CE\\',\\'' + expiry + '\\',' + row.strike + ',' + (row.ce_ltp || 0) + ')">';
                         html += ceLtp + '</td>';
-                        html += '<td style="text-align:center;font-weight:700;color:#e6edf3;background:#161b22;border-left:2px solid #30363d;border-right:2px solid #30363d;padding:6px 12px;">' + row.strike.toFixed(0) + '</td>';
-                        html += '<td style="text-align:left;color:#f85149;font-weight:600;padding:6px 12px;' + peStyle + '" ';
-                        html += 'onclick="ocSelect(\\'' + row.pe_security_id + '\\',\\'PE\\',\\'' + expiry + '\\',' + row.strike + ',' + (row.pe_ltp || 0) + ')" ';
-                        html += 'title="Click to trade ' + underlying + ' ' + row.strike + ' PE">';
+                        html += '<td style="text-align:center;font-weight:700;color:#e6edf3;background:#161b22;border-left:2px solid #30363d;border-right:2px solid #30363d;padding:8px 16px;">' + row.strike.toFixed(0) + '</td>';
+                        html += '<td style="text-align:left;color:#f85149;font-weight:600;padding:8px 16px;" ';
+                        html += 'onclick="ocSelect(\\'' + row.pe_security_id + '\\',\\'PE\\',\\'' + expiry + '\\',' + row.strike + ',' + (row.pe_ltp || 0) + ')">';
                         html += peLtp + '</td>';
                         html += '</tr>';
                     });
                     body.innerHTML = html;
-
-                    // Auto-scroll to ATM row
-                    var container = document.getElementById('oc-scroll-container');
-                    var rows = body.querySelectorAll('tr');
-                    var atmRow = rows[atmIdx - startIdx];
-                    if (atmRow && container) {
-                        container.scrollTop = atmRow.offsetTop - container.offsetHeight / 2;
-                    }
                 })
                 .catch(function(e) {
                     body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f85149;padding:20px;">Error: ' + e + '</td></tr>';
@@ -2545,7 +2516,7 @@ def api_option_chain_data():
         return jsonify({"error": "expiry parameter required"}), 400
     try:
         # Build chain from instrument cache
-        strikes = {}  # strike -> {ce_security_id, pe_security_id, ...}
+        strikes = {}
         lot_size = 75
         for inst in _instrument_cache._instruments:
             if inst.instrument_type != "OPTIDX":
@@ -2567,16 +2538,17 @@ def api_option_chain_data():
                 strikes[strike]["pe_security_id"] = inst.security_id
 
         chain = sorted(strikes.values(), key=lambda x: x["strike"])
+        if not chain:
+            return jsonify({"spot": 0, "chain": [], "expiry": expiry, "lot_size": lot_size})
 
-        # Fetch LTPs in batch if monitor is available
+        # Try to get spot price to find ATM
         spot = 0
-        if _monitor and chain:
-            # Fetch spot price for the underlying
+        if _monitor:
             try:
                 underlying_id = 13 if underlying == "NIFTY" else 25
                 spot_data = _monitor.api.get_ltp({"IDX_I": [str(underlying_id)]})
-                if isinstance(spot_data, dict) and "data" in spot_data:
-                    inner = spot_data["data"]
+                if isinstance(spot_data, dict) and spot_data.get("status") != "failure":
+                    inner = spot_data.get("data", {})
                     if isinstance(inner, dict):
                         for val in inner.values():
                             if isinstance(val, dict) and "last_price" in val:
@@ -2585,46 +2557,51 @@ def api_option_chain_data():
                             elif isinstance(val, (int, float)):
                                 spot = val
                                 break
-            except Exception as e:
-                logger.debug("Could not fetch spot: %s", e)
+            except Exception:
+                pass
 
-            # Determine visible strikes (around ATM) and batch fetch their LTPs
-            if spot > 0:
-                atm_idx = 0
-                min_dist = float("inf")
-                for i, row in enumerate(chain):
-                    d = abs(row["strike"] - spot)
-                    if d < min_dist:
-                        min_dist = d
-                        atm_idx = i
-                start = max(0, atm_idx - 20)
-                end = min(len(chain), atm_idx + 21)
-                visible_ids = []
-                for row in chain[start:end]:
-                    if row["ce_security_id"]:
-                        visible_ids.append(row["ce_security_id"])
-                    if row["pe_security_id"]:
-                        visible_ids.append(row["pe_security_id"])
+        # Find ATM index
+        atm_idx = len(chain) // 2  # fallback: middle of chain
+        if spot > 0:
+            min_dist = float("inf")
+            for i, row in enumerate(chain):
+                d = abs(row["strike"] - spot)
+                if d < min_dist:
+                    min_dist = d
+                    atm_idx = i
 
-                if visible_ids:
-                    try:
-                        ltp_data = _monitor.api.get_ltp({"NSE_FNO": visible_ids})
-                        if isinstance(ltp_data, dict) and "data" in ltp_data:
+        # Trim to ATM +/- 6 strikes (13 total)
+        start = max(0, atm_idx - 6)
+        end = min(len(chain), atm_idx + 7)
+        chain = chain[start:end]
+
+        # Batch fetch LTPs for visible strikes
+        if _monitor and chain:
+            visible_ids = []
+            for row in chain:
+                if row["ce_security_id"]:
+                    visible_ids.append(row["ce_security_id"])
+                if row["pe_security_id"]:
+                    visible_ids.append(row["pe_security_id"])
+            if visible_ids:
+                try:
+                    ltp_data = _monitor.api.get_ltp({"NSE_FNO": visible_ids})
+                    if isinstance(ltp_data, dict) and ltp_data.get("status") != "failure":
+                        inner = ltp_data.get("data", {})
+                        if isinstance(inner, dict):
                             ltp_map = {}
-                            inner = ltp_data["data"]
-                            if isinstance(inner, dict):
-                                for sid, val in inner.items():
-                                    if isinstance(val, dict) and "last_price" in val:
-                                        ltp_map[str(sid)] = val["last_price"]
-                                    elif isinstance(val, (int, float)):
-                                        ltp_map[str(sid)] = val
-                            for row in chain[start:end]:
+                            for sid, val in inner.items():
+                                if isinstance(val, dict) and "last_price" in val:
+                                    ltp_map[str(sid)] = val["last_price"]
+                                elif isinstance(val, (int, float)):
+                                    ltp_map[str(sid)] = val
+                            for row in chain:
                                 if str(row["ce_security_id"]) in ltp_map:
                                     row["ce_ltp"] = ltp_map[str(row["ce_security_id"])]
                                 if str(row["pe_security_id"]) in ltp_map:
                                     row["pe_ltp"] = ltp_map[str(row["pe_security_id"])]
-                    except Exception as e:
-                        logger.debug("Could not batch fetch LTPs: %s", e)
+                except Exception:
+                    pass
 
         return jsonify({"spot": spot, "chain": chain, "expiry": expiry, "lot_size": lot_size})
     except Exception as e:
