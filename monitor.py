@@ -48,6 +48,7 @@ class PositionMonitor:
         self._last_positions: list[dict] = []
         self._last_orders: list[dict] = []
         self._last_trade_count = 0
+        self._prev_realized_pnl = 0.0
         self._lockout_executed = False
 
     def start(self):
@@ -214,18 +215,24 @@ class PositionMonitor:
             if current_count > self._last_trade_count and self._last_trade_count > 0:
                 # New trades detected
                 new_trades = trades[self._last_trade_count:]
+
+                # Calculate realized P&L change since last check to
+                # approximate per-trade P&L (Dhan doesn't give it directly)
+                current_realized = self.state.realized_pnl
+                prev_realized = getattr(self, "_prev_realized_pnl", 0)
+                realized_change = current_realized - prev_realized
+                per_trade_pnl = realized_change / max(1, len(new_trades))
+
                 for trade in new_trades:
-                    # Approximate trade P&L from position data
-                    # (Dhan tradebook doesn't directly give P&L per trade)
                     trade_info = {
                         "security_id": trade.get("securityId", ""),
                         "type": trade.get("transactionType", ""),
                         "quantity": trade.get("tradedQuantity", 0),
                     }
-                    # P&L is tracked at position level, so we use realized P&L changes
-                    # The risk engine tracks this through evaluate_pnl
+                    self.risk.evaluate_trade_result(per_trade_pnl, trade_info)
 
             self._last_trade_count = current_count
+            self._prev_realized_pnl = self.state.realized_pnl
         except Exception as e:
             logger.error("Failed to check trades: %s", e)
 

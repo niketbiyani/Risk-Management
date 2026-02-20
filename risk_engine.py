@@ -170,20 +170,27 @@ class RiskEngine:
                 return "lockout_profit_lock"
 
         # ── Check trailing drawdown ────────────────────────────────────
-        if Config.TRAILING_DRAWDOWN_ENABLED and realized_pnl > 0:
+        if Config.TRAILING_DRAWDOWN_ENABLED:
             hwm = self.state.high_water_mark
-            if realized_pnl > hwm:
+            # Update HWM only when realized is positive and exceeds current HWM
+            if realized_pnl > 0 and realized_pnl > hwm:
                 hwm = realized_pnl
 
-            drawdown_limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100)
-            drawdown = hwm - realized_pnl
-            self.state.update_trailing_drawdown(True, hwm, drawdown)
+            # Only track drawdown once HWM has been established above threshold
+            if hwm >= Config.PROFIT_LOCK_THRESHOLD:
+                drawdown = hwm - realized_pnl
+                drawdown_limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100)
+                self.state.update_trailing_drawdown(True, hwm, drawdown)
 
-            if drawdown >= drawdown_limit and hwm >= Config.PROFIT_LOCK_THRESHOLD:
-                self.state.activate_lockout(
-                    f"Trailing drawdown limit hit: drew down ₹{drawdown:,.0f} "
-                    f"from HWM ₹{hwm:,.0f} (limit: {Config.TRAILING_DRAWDOWN_PERCENTAGE}%)")
-                return "lockout_trailing_drawdown"
+                if drawdown >= drawdown_limit:
+                    self.state.activate_lockout(
+                        f"Trailing drawdown limit hit: drew down ₹{drawdown:,.0f} "
+                        f"from HWM ₹{hwm:,.0f} (limit: {Config.TRAILING_DRAWDOWN_PERCENTAGE}%)")
+                    return "lockout_trailing_drawdown"
+            elif realized_pnl > 0:
+                # Below threshold but track progress
+                drawdown = max(0, hwm - realized_pnl)
+                self.state.update_trailing_drawdown(False, hwm, drawdown)
 
         return None
 
@@ -259,7 +266,7 @@ class RiskEngine:
         total = realized + unrealized
 
         # Calculate distances to limits
-        loss_remaining = Config.DAILY_MAX_LOSS + total
+        loss_remaining = max(0, Config.DAILY_MAX_LOSS + total)
         profit_remaining = Config.DAILY_PROFIT_TARGET - realized if Config.DAILY_PROFIT_TARGET > 0 else None
 
         # Profit lock info
