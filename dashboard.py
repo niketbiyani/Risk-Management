@@ -2521,10 +2521,12 @@ def api_option_chain_expiries():
         for inst in _instrument_cache._instruments:
             if inst.instrument_type != "OPTIDX":
                 continue
-            if inst.symbol_name.upper() != underlying:
+            if not inst.trading_symbol.upper().startswith(underlying + "-"):
                 continue
-            if inst.expiry_date and inst.expiry_date >= today:
-                expiries.add(inst.expiry_date)
+            if inst.expiry_date:
+                exp_date = inst.expiry_date[:10]  # "2026-03-30 14:30:00" -> "2026-03-30"
+                if exp_date >= today:
+                    expiries.add(exp_date)
         sorted_expiries = sorted(expiries)[:2]
         return jsonify({"expiries": sorted_expiries})
     except Exception as e:
@@ -2548,9 +2550,9 @@ def api_option_chain_data():
         for inst in _instrument_cache._instruments:
             if inst.instrument_type != "OPTIDX":
                 continue
-            if inst.symbol_name.upper() != underlying:
+            if not inst.trading_symbol.upper().startswith(underlying + "-"):
                 continue
-            if inst.expiry_date != expiry:
+            if not inst.expiry_date or inst.expiry_date[:10] != expiry:
                 continue
             if inst.exchange != "NSE":
                 continue
