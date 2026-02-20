@@ -417,6 +417,7 @@ DASHBOARD_HTML = """
                 <button id="mute-btn" onclick="toggleMute()" style="background:none;border:1px solid #30363d;color:#8b949e;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:14px;">&#x1f50a;</button>
                 <input type="range" id="volume-slider" min="0" max="100" value="30" style="-webkit-appearance:none;width:70px;height:4px;background:#30363d;border-radius:2px;outline:none;cursor:pointer;">
             </div>
+            <span id="token-status" style="font-size:12px;padding:4px 10px;border-radius:12px;cursor:pointer;border:1px solid #30363d;color:#8b949e;" onclick="refreshToken()" title="Click to refresh token">API: ...</span>
             <span id="status-badge" class="status-badge status-active">ACTIVE</span>
         </div>
     </div>
@@ -2152,6 +2153,60 @@ DASHBOARD_HTML = """
                 .then(safeUpdate)
                 .catch(function(e){});
         }, {{ interval * 1000 }});
+
+        // ── Token Status ──────────────────────────────────
+        function checkTokenStatus() {
+            var el = document.getElementById('token-status');
+            fetch('/api/token/status')
+                .then(function(r){ return r.json(); })
+                .then(function(d) {
+                    if (d.valid) {
+                        el.style.background = '#0d4429';
+                        el.style.color = '#3fb950';
+                        el.style.borderColor = '#238636';
+                        el.textContent = 'API: OK';
+                        el.title = 'Token valid (bal: ' + (d.balance != null ? d.balance : '?') + '). Click to refresh.';
+                    } else {
+                        el.style.background = '#4a1d1d';
+                        el.style.color = '#f85149';
+                        el.style.borderColor = '#da3633';
+                        el.textContent = 'API: INVALID';
+                        el.title = (d.error || 'Token invalid') + ' — Click to refresh token';
+                    }
+                })
+                .catch(function() {
+                    el.style.background = '#3d2e00';
+                    el.style.color = '#d29922';
+                    el.style.borderColor = '#9e6a03';
+                    el.textContent = 'API: ?';
+                    el.title = 'Could not check token status. Click to refresh.';
+                });
+        }
+        function refreshToken() {
+            var el = document.getElementById('token-status');
+            el.textContent = 'Refreshing...';
+            el.style.color = '#d29922';
+            el.style.borderColor = '#9e6a03';
+            el.style.background = '#3d2e00';
+            fetch('/api/token/refresh', {method:'POST', headers:{'Content-Type':'application/json'}})
+                .then(function(r){ return r.json(); })
+                .then(function(d) {
+                    if (d.status === 'ok') {
+                        showToast('Token refreshed successfully!', 'success');
+                        checkTokenStatus();
+                    } else {
+                        showToast('Token refresh failed: ' + (d.message || 'Unknown error'), 'error');
+                        checkTokenStatus();
+                    }
+                })
+                .catch(function(e) {
+                    showToast('Token refresh request failed: ' + e, 'error');
+                    checkTokenStatus();
+                });
+        }
+        // Check on load, then every 5 minutes
+        checkTokenStatus();
+        setInterval(checkTokenStatus, 300000);
     </script>
 </body>
 </html>
@@ -2794,6 +2849,55 @@ def api_update_token():
         return jsonify({"status": "ok", "message": "Token updated and API reinitialized"})
     except Exception as e:
         logger.error("Token update failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/token/status")
+def api_token_status():
+    """Check if the current API token is valid by making a lightweight API call."""
+    if not _monitor:
+        return jsonify({"valid": False, "error": "Monitor not initialized"}), 500
+    try:
+        resp = _monitor.api.get_fund_limits()
+        if isinstance(resp, dict) and resp.get("status") == "success":
+            return jsonify({"valid": True, "balance": resp.get("data", {}).get("availabelBalance")})
+        else:
+            msg = ""
+            if isinstance(resp, dict):
+                remarks = resp.get("remarks", {})
+                if isinstance(remarks, dict):
+                    msg = remarks.get("error_message", "")
+                elif isinstance(remarks, str):
+                    msg = remarks
+            return jsonify({"valid": False, "error": msg or "Token validation failed", "raw": resp})
+    except Exception as e:
+        return jsonify({"valid": False, "error": str(e)}), 500
+
+
+@app.route("/api/token/refresh", methods=["POST"])
+def api_token_refresh():
+    """Trigger automatic token refresh via PIN + TOTP (no manual token needed)."""
+    from token_manager import refresh_token, is_token_refresh_configured
+    import os as _os
+
+    if not is_token_refresh_configured():
+        return jsonify({
+            "status": "error",
+            "message": "Auto-refresh not configured. Set DHAN_PIN and DHAN_TOTP_SECRET in .env"
+        }), 400
+
+    try:
+        success = refresh_token(dhan_api=_monitor.api if _monitor else None)
+        if success:
+            # Reload config
+            from dotenv import load_dotenv
+            load_dotenv(override=True)
+            Config.DHAN_ACCESS_TOKEN = _os.getenv("DHAN_ACCESS_TOKEN", "")
+            return jsonify({"status": "ok", "message": "Token refreshed successfully"})
+        else:
+            return jsonify({"status": "error", "message": "Token refresh failed. Check server logs."}), 500
+    except Exception as e:
+        logger.error("Manual token refresh failed: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
