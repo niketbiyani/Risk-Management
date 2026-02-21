@@ -29,11 +29,6 @@ class Config:
     PROFIT_LOCK_THRESHOLD: float = float(os.getenv("PROFIT_LOCK_THRESHOLD", "10000"))
     PROFIT_LOCK_PERCENTAGE: float = float(os.getenv("PROFIT_LOCK_PERCENTAGE", "50"))
 
-    # Cooldown (seconds)
-    COOLDOWN_AFTER_LOSS: int = int(os.getenv("COOLDOWN_AFTER_LOSS", "300"))
-    COOLDOWN_AFTER_CONSECUTIVE_LOSSES: int = int(os.getenv("COOLDOWN_AFTER_CONSECUTIVE_LOSSES", "600"))
-    CONSECUTIVE_LOSS_COUNT: int = int(os.getenv("CONSECUTIVE_LOSS_COUNT", "3"))
-
     # Trailing Drawdown
     TRAILING_DRAWDOWN_ENABLED: bool = os.getenv("TRAILING_DRAWDOWN_ENABLED", "true").lower() == "true"
     TRAILING_DRAWDOWN_PERCENTAGE: float = float(os.getenv("TRAILING_DRAWDOWN_PERCENTAGE", "50"))

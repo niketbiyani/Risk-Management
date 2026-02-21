@@ -207,17 +207,15 @@ class PositionMonitor:
                 )
 
     def _check_new_trades(self):
-        """Check tradebook for newly executed trades and evaluate them."""
+        """Check tradebook for newly executed trades and record them."""
         try:
             trades = self.api.get_trade_book()
             current_count = len(trades) if trades else 0
 
             if current_count > self._last_trade_count and self._last_trade_count > 0:
-                # New trades detected
                 new_trades = trades[self._last_trade_count:]
 
-                # Calculate realized P&L change since last check to
-                # approximate per-trade P&L (Dhan doesn't give it directly)
+                # Approximate per-trade P&L from realized P&L changes
                 current_realized = self.state.realized_pnl
                 prev_realized = getattr(self, "_prev_realized_pnl", 0)
                 realized_change = current_realized - prev_realized

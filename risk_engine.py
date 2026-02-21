@@ -6,13 +6,11 @@ Rules enforced:
 1. Daily max loss limit → lockout
 2. Daily profit target → lockout (optional)
 3. Profit lock (lock X% of profits once threshold hit)
-4. Trailing drawdown from realized equity high water mark
-5. Cooldown timer after losses
-6. Max consecutive losses → extended cooldown
-7. Max open positions limit
-8. Max single trade risk
-9. Max order quantity
-10. Spread-aware P&L tracking for credit/debit spreads
+4. Trailing drawdown from total P&L high water mark
+5. Max open positions limit
+6. Max single trade risk
+7. Max order quantity
+8. Spread-aware P&L tracking for credit/debit spreads
 """
 
 import logging
@@ -68,30 +66,22 @@ class RiskEngine:
             return RiskDecision(False, f"Locked out: {self.state.get('lockout_reason')}",
                                 "lockout")
 
-        # 2. Cooling down
-        if self.state.is_cooling_down:
-            remaining = self.state.cooldown_remaining
-            return RiskDecision(False,
-                                f"Cooldown active: {remaining}s remaining - "
-                                f"{self.state.get('cooldown_reason')}",
-                                "cooldown")
-
-        # 3. Daily max loss breached
+        # 2. Daily max loss breached
         loss_check = self._check_daily_loss()
         if not loss_check:
             return loss_check
 
-        # 4. Profit lock floor breached
+        # 3. Profit lock floor breached
         profit_lock_check = self._check_profit_lock()
         if not profit_lock_check:
             return profit_lock_check
 
-        # 5. Trailing drawdown breached
+        # 4. Trailing drawdown breached
         drawdown_check = self._check_trailing_drawdown()
         if not drawdown_check:
             return drawdown_check
 
-        # 6. Daily profit target reached (optional lockout)
+        # 5. Daily profit target reached (optional lockout)
         if Config.DAILY_PROFIT_TARGET > 0:
             if self.state.realized_pnl >= Config.DAILY_PROFIT_TARGET:
                 self.state.activate_lockout(
@@ -169,16 +159,16 @@ class RiskEngine:
                     f"fell below floor ₹{floor:,.0f}")
                 return "lockout_profit_lock"
 
-        # ── Check trailing drawdown ────────────────────────────────────
+        # ── Check trailing drawdown (based on total P&L) ──────────────
         if Config.TRAILING_DRAWDOWN_ENABLED:
             hwm = self.state.high_water_mark
-            # Update HWM only when realized is positive and exceeds current HWM
-            if realized_pnl > 0 and realized_pnl > hwm:
-                hwm = realized_pnl
+            # Update HWM based on total P&L (realized + unrealized)
+            if total_pnl > hwm:
+                hwm = total_pnl
 
             # Only track drawdown once HWM has been established above threshold
             if hwm >= Config.PROFIT_LOCK_THRESHOLD:
-                drawdown = hwm - realized_pnl
+                drawdown = hwm - total_pnl
                 drawdown_limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100)
                 self.state.update_trailing_drawdown(True, hwm, drawdown)
 
@@ -187,9 +177,9 @@ class RiskEngine:
                         f"Trailing drawdown limit hit: drew down ₹{drawdown:,.0f} "
                         f"from HWM ₹{hwm:,.0f} (limit: {Config.TRAILING_DRAWDOWN_PERCENTAGE}%)")
                     return "lockout_trailing_drawdown"
-            elif realized_pnl > 0:
+            elif total_pnl > 0:
                 # Below threshold but track progress
-                drawdown = max(0, hwm - realized_pnl)
+                drawdown = max(0, hwm - total_pnl)
                 self.state.update_trailing_drawdown(False, hwm, drawdown)
 
         return None
@@ -197,24 +187,9 @@ class RiskEngine:
     def evaluate_trade_result(self, trade_pnl: float, trade_info: dict):
         """
         Called after each trade completes.
-        Evaluates consecutive loss rules and triggers cooldowns.
+        Records the trade for tracking (win/loss counters, history).
         """
         self.state.record_trade({**trade_info, "pnl": trade_pnl})
-
-        if trade_pnl < 0:
-            consecutive = self.state.consecutive_losses
-
-            # Single loss cooldown
-            if abs(trade_pnl) >= Config.MAX_SINGLE_TRADE_RISK * 0.8:
-                self.state.activate_cooldown(
-                    Config.COOLDOWN_AFTER_LOSS,
-                    f"Large loss: ₹{trade_pnl:,.0f}")
-
-            # Consecutive losses cooldown
-            if consecutive >= Config.CONSECUTIVE_LOSS_COUNT:
-                self.state.activate_cooldown(
-                    Config.COOLDOWN_AFTER_CONSECUTIVE_LOSSES,
-                    f"{consecutive} consecutive losses")
 
     # ── Private Rule Checks ────────────────────────────────────────────
 
@@ -239,7 +214,7 @@ class RiskEngine:
         return RiskDecision(True)
 
     def _check_trailing_drawdown(self) -> RiskDecision:
-        """Check trailing drawdown from HWM."""
+        """Check trailing drawdown from HWM (based on total P&L)."""
         if not Config.TRAILING_DRAWDOWN_ENABLED:
             return RiskDecision(True)
         if not self.state.get("trailing_drawdown_active"):
@@ -249,7 +224,8 @@ class RiskEngine:
         if hwm < Config.PROFIT_LOCK_THRESHOLD:
             return RiskDecision(True)
 
-        drawdown = hwm - self.state.realized_pnl
+        total = self.state.total_pnl
+        drawdown = hwm - total
         limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100)
         if drawdown >= limit:
             self.state.activate_lockout(
@@ -286,11 +262,11 @@ class RiskEngine:
                 "distance": distance_to_lock,
             }
 
-        # Trailing drawdown info
+        # Trailing drawdown info (based on total P&L)
         drawdown_info = {}
         if Config.TRAILING_DRAWDOWN_ENABLED:
             hwm = self.state.high_water_mark
-            drawdown = hwm - realized if hwm > 0 else 0
+            drawdown = hwm - total if hwm > 0 else 0
             limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100) if hwm > 0 else 0
             drawdown_info = {
                 "enabled": True,
@@ -308,9 +284,9 @@ class RiskEngine:
                 "time": self.state.get("lockout_time"),
             },
             "cooldown": {
-                "active": self.state.is_cooling_down,
-                "remaining_seconds": self.state.cooldown_remaining,
-                "reason": self.state.get("cooldown_reason", ""),
+                "active": False,
+                "remaining_seconds": 0,
+                "reason": "",
             },
             "pnl": {
                 "realized": realized,

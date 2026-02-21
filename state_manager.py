@@ -209,11 +209,12 @@ class StateManager:
         self._state["unrealized_pnl"] = unrealized
         self._state["total_pnl"] = realized + unrealized
 
-        # Update peak/HWM
-        if self._state["total_pnl"] > self._state["peak_pnl"]:
-            self._state["peak_pnl"] = self._state["total_pnl"]
-        if realized > self._state["high_water_mark"]:
-            self._state["high_water_mark"] = realized
+        # Update peak/HWM (both track total P&L = realized + unrealized)
+        total = realized + unrealized
+        if total > self._state["peak_pnl"]:
+            self._state["peak_pnl"] = total
+        if total > self._state["high_water_mark"]:
+            self._state["high_water_mark"] = total
 
         self._save()
 
