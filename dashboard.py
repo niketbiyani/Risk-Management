@@ -30,6 +30,7 @@ _instrument_cache = None
 _depth_ws = None
 _depth_timer_running = False
 _depth_cred_version = 0  # Tracks credential version to detect token refresh
+_depth_subscribe_gen = 0  # Incremented on each new subscription to reset no-data state
 
 
 def set_monitor(monitor):
@@ -2504,6 +2505,15 @@ DASHBOARD_HTML = """
                 document.getElementById('dom-chart').innerHTML =
                     '<div style="color:#f85149;padding:20px;text-align:center;">' + (data.error || 'Depth error') + '</div>';
             });
+            socket.on('depth_status', function(data) {
+                if (data.status === 'no_data') {
+                    document.getElementById('dom-chart').innerHTML =
+                        '<div style="color:#d29922;padding:30px;text-align:center;font-size:13px;">' +
+                        'No depth data received \\u2014 market may be closed' +
+                        '<div style="color:#484f58;font-size:11px;margin-top:6px;">Data will appear automatically when the market opens</div>' +
+                        '</div>';
+                }
+            });
         }
 
         function fmtQty(n) {
@@ -3632,10 +3642,19 @@ def _depth_emit_loop():
     """Background loop that reads depth data and emits to frontend every 500ms."""
     global _depth_timer_running
     _depth_timer_running = True
+    no_data_notified = False
+    loop_count = 0
+    last_gen = _depth_subscribe_gen
     while _depth_timer_running and _depth_ws:
+        # Reset counters when a new subscription comes in
+        if _depth_subscribe_gen != last_gen:
+            last_gen = _depth_subscribe_gen
+            no_data_notified = False
+            loop_count = 0
         try:
             depth = _depth_ws.get_depth()
             if depth["bids"] or depth["asks"]:
+                no_data_notified = False
                 analysis = analyze_depth(depth["bids"], depth["asks"])
                 socketio.emit("depth_update", {
                     "bids": depth["bids"],
@@ -3643,8 +3662,16 @@ def _depth_emit_loop():
                     "analysis": analysis,
                     "security_id": depth.get("security_id"),
                 })
+            elif not no_data_notified and loop_count >= 10:
+                # ~5 seconds with no data — likely market closed
+                socketio.emit("depth_status", {
+                    "status": "no_data",
+                    "security_id": depth.get("security_id"),
+                })
+                no_data_notified = True
         except Exception as e:
             logger.error("Depth emit error: %s", e)
+        loop_count += 1
         time.sleep(0.5)
     _depth_timer_running = False
 
@@ -3652,7 +3679,7 @@ def _depth_emit_loop():
 @socketio.on("subscribe_depth")
 def handle_subscribe_depth(data):
     """Client requests depth for an instrument."""
-    global _depth_ws, _depth_timer_running, _depth_cred_version
+    global _depth_ws, _depth_timer_running, _depth_cred_version, _depth_subscribe_gen
     security_id = data.get("security_id")
     exchange_segment = data.get("exchange_segment", "NSE_FNO")
 
@@ -3680,6 +3707,7 @@ def handle_subscribe_depth(data):
 
     # Subscribe to new instrument (stops previous if any)
     _depth_ws.subscribe(security_id, exchange_segment)
+    _depth_subscribe_gen += 1  # Reset no-data timeout in emit loop
 
     # Start emit loop if not already running
     if not _depth_timer_running:
