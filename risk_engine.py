@@ -273,7 +273,7 @@ class RiskEngine:
                 "high_water_mark": hwm,
                 "current_drawdown": drawdown,
                 "drawdown_limit": limit,
-                "buffer": limit - drawdown if limit > 0 else 0,
+                "buffer": max(0, limit - drawdown) if limit > 0 else 0,
             }
 
         return {
