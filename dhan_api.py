@@ -4,10 +4,14 @@ Wraps the dhanhq SDK with error handling and provides a clean interface
 for the risk management system.
 """
 
+import json
 import logging
+import struct
+import threading
 from datetime import datetime
 from typing import Any
 
+import websocket
 from dhanhq import DhanContext, dhanhq, MarketFeed, OrderUpdate
 
 from config import Config
@@ -436,3 +440,184 @@ class DhanAPI:
         if self._market_feed:
             self._market_feed.close_connection()
             self._market_feed = None
+
+
+# ── 20-Level Depth of Market WebSocket ────────────────────────────
+
+class DepthWebSocket:
+    """Custom 20-level depth WebSocket client.
+
+    The dhanhq FullDepth SDK class is unusable programmatically (get_data()
+    only prints to console and returns None), so we connect directly to the
+    Dhan 20-depth WebSocket and parse the binary packets ourselves.
+
+    Binary protocol (Little Endian):
+        Header  (12 bytes): msg_len(int16) + feed_code(uint8) + exchange_seg(uint8)
+                             + security_id(int32) + sequence(uint32)
+        Per-level (16 bytes × 20): price(float64) + quantity(uint32) + orders(uint32)
+
+    Feed codes: 41 = Bid (buy side), 51 = Ask (sell side), 50 = Disconnect
+    """
+
+    WS_URL = "wss://depth-api-feed.dhan.co/twentydepth"
+    FEED_BID = 41
+    FEED_ASK = 51
+    FEED_DISCONNECT = 50
+    HEADER_SIZE = 12
+    LEVEL_SIZE = 16
+    NUM_LEVELS = 20
+
+    def __init__(self, access_token: str, client_id: str):
+        self._token = access_token
+        self._client_id = client_id
+        self._ws = None
+        self._thread = None
+        self._running = False
+        self._security_id = None
+        self._lock = threading.Lock()
+        self._bids = []  # [{price, quantity, orders}, ...] up to 20
+        self._asks = []
+
+    @property
+    def security_id(self):
+        return self._security_id
+
+    def subscribe(self, security_id: str, exchange_segment: str = "NSE_FNO"):
+        """Connect and subscribe to 20-level depth for one instrument."""
+        self.stop()
+        self._security_id = str(security_id)
+        self._running = True
+        with self._lock:
+            self._bids = []
+            self._asks = []
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(str(security_id), exchange_segment),
+            daemon=True,
+        )
+        self._thread.start()
+        logger.info("Depth WS: subscribing to %s (%s)", security_id, exchange_segment)
+
+    def _run(self, security_id: str, exchange_segment: str):
+        """WebSocket connection loop with auto-reconnect."""
+        url = (
+            f"{self.WS_URL}"
+            f"?token={self._token}"
+            f"&clientId={self._client_id}"
+            f"&authType=2"
+        )
+        while self._running:
+            try:
+                self._ws = websocket.WebSocketApp(
+                    url,
+                    on_open=lambda ws: self._on_open(ws, security_id, exchange_segment),
+                    on_message=self._on_message,
+                    on_error=self._on_error,
+                    on_close=self._on_close,
+                )
+                self._ws.run_forever(ping_interval=10, ping_timeout=30)
+            except Exception as e:
+                logger.error("Depth WS run_forever error: %s", e)
+            if self._running:
+                import time
+                logger.info("Depth WS: reconnecting in 2s...")
+                time.sleep(2)
+
+    def _on_open(self, ws, security_id: str, exchange_segment: str):
+        """Send subscription JSON on connect."""
+        payload = json.dumps({
+            "RequestCode": 23,
+            "InstrumentCount": 1,
+            "InstrumentList": [
+                {
+                    "ExchangeSegment": exchange_segment,
+                    "SecurityId": security_id,
+                }
+            ],
+        })
+        ws.send(payload)
+        logger.info("Depth WS: connected, subscribed to %s", security_id)
+
+    def _on_message(self, ws, message):
+        """Parse binary depth packets."""
+        if not isinstance(message, (bytes, bytearray)):
+            return
+
+        offset = 0
+        data = message
+        total_len = len(data)
+
+        while offset < total_len:
+            remaining = total_len - offset
+            if remaining < self.HEADER_SIZE:
+                break
+
+            # Parse header (12 bytes, little-endian)
+            header = data[offset:offset + self.HEADER_SIZE]
+            msg_len = struct.unpack_from("<H", header, 0)[0]
+            feed_code = struct.unpack_from("<B", header, 2)[0]
+            # exchange_seg = struct.unpack_from("<B", header, 3)[0]
+            # sec_id = struct.unpack_from("<i", header, 4)[0]
+            # sequence = struct.unpack_from("<I", header, 8)[0]
+
+            if feed_code == self.FEED_DISCONNECT:
+                logger.warning("Depth WS: server disconnect packet received")
+                offset += self.HEADER_SIZE
+                continue
+
+            # Expect 20 levels after header
+            packet_size = self.HEADER_SIZE + (self.NUM_LEVELS * self.LEVEL_SIZE)
+            if remaining < packet_size:
+                break
+
+            levels = []
+            level_offset = offset + self.HEADER_SIZE
+            for i in range(self.NUM_LEVELS):
+                base = level_offset + (i * self.LEVEL_SIZE)
+                price = struct.unpack_from("<d", data, base)[0]
+                quantity = struct.unpack_from("<I", data, base + 8)[0]
+                orders = struct.unpack_from("<I", data, base + 12)[0]
+                if price > 0 or quantity > 0:
+                    levels.append({
+                        "price": round(price, 2),
+                        "quantity": quantity,
+                        "orders": orders,
+                    })
+
+            with self._lock:
+                if feed_code == self.FEED_BID:
+                    self._bids = levels
+                elif feed_code == self.FEED_ASK:
+                    self._asks = levels
+
+            offset += packet_size
+
+    def _on_error(self, ws, error):
+        logger.error("Depth WS error: %s", error)
+
+    def _on_close(self, ws, close_status_code, close_msg):
+        logger.info("Depth WS closed: code=%s msg=%s", close_status_code, close_msg)
+
+    def get_depth(self) -> dict:
+        """Thread-safe read of current depth data."""
+        with self._lock:
+            return {
+                "bids": list(self._bids),
+                "asks": list(self._asks),
+                "security_id": self._security_id,
+            }
+
+    def stop(self):
+        """Disconnect and clean up."""
+        self._running = False
+        if self._ws:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=3)
+        self._thread = None
+        self._security_id = None
+        logger.info("Depth WS: stopped")

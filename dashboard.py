@@ -14,6 +14,7 @@ from flask import Flask, render_template_string, jsonify, request
 from flask_socketio import SocketIO
 
 from config import Config
+from dhan_api import DepthWebSocket
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,10 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 # Reference to monitor instance and instrument cache (set at startup)
 _monitor = None
 _instrument_cache = None
+
+# Depth of Market state
+_depth_ws = None
+_depth_timer_running = False
 
 
 def set_monitor(monitor):
@@ -492,36 +497,95 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
-    <!-- Option Chain -->
+    <!-- Option Chain + Depth of Market (side by side) -->
     <div style="padding:0 24px;margin-top:16px;">
-        <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <h3 style="margin:0;">Option Chain</h3>
-                <div style="display:flex;gap:10px;align-items:center;">
-                    <select id="oc-underlying" class="form-input" style="width:140px;padding:4px 8px;font-size:12px;">
-                        <option value="13">NIFTY</option>
-                        <option value="25">BANKNIFTY</option>
-                    </select>
-                    <select id="oc-expiry" class="form-input" style="width:140px;padding:4px 8px;font-size:12px;" onchange="loadOptionChain()">
-                        <option value="">Loading...</option>
-                    </select>
-                    <button onclick="loadOptionChain()" class="btn-neutral" style="padding:4px 12px;font-size:12px;">Refresh</button>
+        <div style="display:flex;gap:16px;">
+            <!-- Left: Option Chain -->
+            <div style="flex:0 0 38%;min-width:0;">
+                <div class="card">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                        <h3 style="margin:0;">Option Chain</h3>
+                        <div style="display:flex;gap:10px;align-items:center;">
+                            <select id="oc-underlying" class="form-input" style="width:120px;padding:4px 8px;font-size:12px;">
+                                <option value="13">NIFTY</option>
+                                <option value="25">BANKNIFTY</option>
+                            </select>
+                            <select id="oc-expiry" class="form-input" style="width:120px;padding:4px 8px;font-size:12px;" onchange="loadOptionChain()">
+                                <option value="">Loading...</option>
+                            </select>
+                            <button onclick="loadOptionChain()" class="btn-neutral" style="padding:4px 10px;font-size:11px;">Refresh</button>
+                        </div>
+                    </div>
+                    <div id="oc-spot" style="font-size:13px;color:#8b949e;margin-bottom:8px;">Spot: --</div>
+                    <div id="oc-scroll-container">
+                        <table id="oc-table" style="font-size:12px;">
+                            <thead style="position:sticky;top:0;background:#0d1117;z-index:1;">
+                                <tr>
+                                    <th style="text-align:right;color:#3fb950;">CE LTP</th>
+                                    <th style="text-align:center;font-weight:700;">Strike</th>
+                                    <th style="text-align:left;color:#f85149;">PE LTP</th>
+                                </tr>
+                            </thead>
+                            <tbody id="oc-body">
+                                <tr><td colspan="3" style="text-align:center;color:#484f58;padding:20px;">Loading option chain...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
-            <div id="oc-spot" style="font-size:13px;color:#8b949e;margin-bottom:8px;">Spot: --</div>
-            <div id="oc-scroll-container">
-                <table id="oc-table" style="font-size:12px;">
-                    <thead style="position:sticky;top:0;background:#0d1117;z-index:1;">
-                        <tr>
-                            <th style="text-align:right;color:#3fb950;">CE LTP</th>
-                            <th style="text-align:center;font-weight:700;">Strike</th>
-                            <th style="text-align:left;color:#f85149;">PE LTP</th>
-                        </tr>
-                    </thead>
-                    <tbody id="oc-body">
-                        <tr><td colspan="3" style="text-align:center;color:#484f58;padding:20px;">Loading option chain...</td></tr>
-                    </tbody>
-                </table>
+
+            <!-- Right: Depth of Market -->
+            <div style="flex:1;min-width:0;">
+                <div class="card" id="dom-panel">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                        <h3 style="margin:0;">Depth of Market</h3>
+                        <span id="dom-instrument" style="font-size:12px;color:#8b949e;">Select an option from the chain</span>
+                    </div>
+
+                    <!-- Analysis Summary -->
+                    <div id="dom-analysis" style="display:none;margin-bottom:12px;">
+                        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+                            <div id="dom-sentiment" style="padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.5px;"></div>
+                            <div style="font-size:12px;color:#8b949e;">
+                                Spread: <span id="dom-spread" style="color:#e6edf3;font-weight:600;">--</span>
+                                <span id="dom-spread-pct" style="color:#8b949e;font-size:11px;"></span>
+                            </div>
+                            <div style="font-size:12px;color:#8b949e;">
+                                Imbalance: <span id="dom-imbalance" style="font-weight:600;">--</span>
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;">
+                            <div>
+                                <span style="color:#3fb950;">Buy Wall:</span>
+                                <span id="dom-buy-wall" style="color:#e6edf3;font-weight:600;">--</span>
+                            </div>
+                            <div>
+                                <span style="color:#f85149;">Sell Wall:</span>
+                                <span id="dom-sell-wall" style="color:#e6edf3;font-weight:600;">--</span>
+                            </div>
+                            <div>
+                                <span style="color:#8b949e;">Total Bid:</span>
+                                <span id="dom-total-bid" style="color:#3fb950;">--</span>
+                            </div>
+                            <div>
+                                <span style="color:#8b949e;">Total Ask:</span>
+                                <span id="dom-total-ask" style="color:#f85149;">--</span>
+                            </div>
+                        </div>
+                        <!-- Imbalance bar -->
+                        <div style="margin-top:8px;height:6px;background:#21262d;border-radius:3px;overflow:hidden;display:flex;">
+                            <div id="dom-imbalance-bar-bid" style="height:100%;background:#3fb950;transition:width 0.3s;"></div>
+                            <div id="dom-imbalance-bar-ask" style="height:100%;background:#f85149;transition:width 0.3s;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Depth Chart -->
+                    <div id="dom-chart" style="max-height:400px;overflow-y:auto;">
+                        <div style="color:#484f58;padding:30px;text-align:center;font-size:13px;">
+                            Click any CE or PE price in the option chain to view 20-level market depth
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -2347,8 +2411,9 @@ DASHBOARD_HTML = """
                 triggerAutoCalc();
             }
 
-            // Scroll to order panel
-            document.querySelector('.order-tab').scrollIntoView({behavior: 'smooth', block: 'start'});
+            // Subscribe to depth for this instrument
+            subscribeDepth(securityId, 'NSE_FNO', symbol);
+
             showToast('Selected: ' + symbol + ' @ \\u20B9' + (ltp ? ltp.toFixed(2) : '--'), 'success');
         }
 
@@ -2357,6 +2422,169 @@ DASHBOARD_HTML = """
         });
 
         initOptionChain();
+
+        // ── Depth of Market ─────────────────────────────────────────────
+        var _domCurrentSecurity = null;
+
+        function subscribeDepth(securityId, exchangeSegment, symbol) {
+            _domCurrentSecurity = securityId;
+            document.getElementById('dom-instrument').textContent = symbol || ('Loading ' + securityId + '...');
+            document.getElementById('dom-analysis').style.display = 'none';
+            document.getElementById('dom-chart').innerHTML =
+                '<div style="color:#484f58;padding:30px;text-align:center;font-size:13px;">Connecting to depth feed...</div>';
+            if (socket) {
+                socket.emit('subscribe_depth', {security_id: securityId, exchange_segment: exchangeSegment});
+            }
+        }
+
+        function setupDepthListener() {
+            if (!socket) return;
+            socket.on('depth_update', function(data) {
+                if (data.security_id && data.security_id !== _domCurrentSecurity) return;
+                renderDepthChart(data.bids || [], data.asks || []);
+                renderDepthAnalysis(data.analysis || {});
+            });
+            socket.on('depth_error', function(data) {
+                document.getElementById('dom-chart').innerHTML =
+                    '<div style="color:#f85149;padding:20px;text-align:center;">' + (data.error || 'Depth error') + '</div>';
+            });
+        }
+
+        function fmtQty(n) {
+            if (n >= 100000) return (n / 100000).toFixed(1) + 'L';
+            if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+            return n.toString();
+        }
+
+        function renderDepthChart(bids, asks) {
+            if (!bids.length && !asks.length) return;
+
+            // Find max quantity for bar scaling
+            var maxQty = 1;
+            bids.forEach(function(b) { if (b.quantity > maxQty) maxQty = b.quantity; });
+            asks.forEach(function(a) { if (a.quantity > maxQty) maxQty = a.quantity; });
+
+            // Build combined ladder: asks (descending by price) then bids (descending by price)
+            var askRows = asks.slice().reverse(); // Show highest ask at top
+            var bidRows = bids.slice(); // Best bid first
+
+            var html = '<table style="width:100%;border-collapse:collapse;font-size:11px;font-variant-numeric:tabular-nums;">';
+            html += '<thead style="position:sticky;top:0;background:#0d1117;z-index:1;">';
+            html += '<tr>';
+            html += '<th style="text-align:right;padding:4px 6px;color:#3fb950;font-size:10px;width:25%;">BID QTY</th>';
+            html += '<th style="text-align:center;padding:4px 6px;color:#e6edf3;font-size:10px;width:20%;">PRICE</th>';
+            html += '<th style="text-align:left;padding:4px 6px;color:#f85149;font-size:10px;width:25%;">ASK QTY</th>';
+            html += '<th style="text-align:center;padding:4px 6px;color:#8b949e;font-size:10px;width:15%;">ORDERS</th>';
+            html += '</tr></thead><tbody>';
+
+            // Ask rows (sell side) - top of ladder
+            askRows.forEach(function(a) {
+                var pct = Math.round((a.quantity / maxQty) * 100);
+                html += '<tr style="cursor:pointer;" onclick="domSelectPrice(' + a.price + ')">';
+                html += '<td style="padding:3px 6px;text-align:right;color:#484f58;">-</td>';
+                html += '<td style="padding:3px 6px;text-align:center;color:#f85149;font-weight:600;cursor:pointer;">' + a.price.toFixed(2) + '</td>';
+                html += '<td style="padding:3px 6px;text-align:left;">';
+                html += '<div style="display:flex;align-items:center;gap:4px;">';
+                html += '<div style="background:rgba(248,81,73,0.25);height:16px;width:' + pct + '%;min-width:2px;border-radius:2px;"></div>';
+                html += '<span style="color:#f85149;font-size:10px;white-space:nowrap;">' + fmtQty(a.quantity) + '</span>';
+                html += '</div></td>';
+                html += '<td style="padding:3px 6px;text-align:center;color:#484f58;font-size:10px;">' + a.orders + '</td>';
+                html += '</tr>';
+            });
+
+            // Spread row
+            if (bids.length && asks.length) {
+                var spread = (asks[0].price - bids[0].price).toFixed(2);
+                html += '<tr style="border-top:1px solid #30363d;border-bottom:1px solid #30363d;background:#161b22;">';
+                html += '<td colspan="4" style="padding:4px 6px;text-align:center;color:#8b949e;font-size:10px;">Spread: \\u20B9' + spread + '</td>';
+                html += '</tr>';
+            }
+
+            // Bid rows (buy side) - bottom of ladder
+            bidRows.forEach(function(b) {
+                var pct = Math.round((b.quantity / maxQty) * 100);
+                html += '<tr style="cursor:pointer;" onclick="domSelectPrice(' + b.price + ')">';
+                html += '<td style="padding:3px 6px;text-align:right;">';
+                html += '<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;">';
+                html += '<span style="color:#3fb950;font-size:10px;white-space:nowrap;">' + fmtQty(b.quantity) + '</span>';
+                html += '<div style="background:rgba(63,185,80,0.25);height:16px;width:' + pct + '%;min-width:2px;border-radius:2px;"></div>';
+                html += '</div></td>';
+                html += '<td style="padding:3px 6px;text-align:center;color:#3fb950;font-weight:600;cursor:pointer;">' + b.price.toFixed(2) + '</td>';
+                html += '<td style="padding:3px 6px;text-align:left;color:#484f58;">-</td>';
+                html += '<td style="padding:3px 6px;text-align:center;color:#484f58;font-size:10px;">' + b.orders + '</td>';
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            document.getElementById('dom-chart').innerHTML = html;
+        }
+
+        function renderDepthAnalysis(a) {
+            if (!a || !a.sentiment) return;
+            var el = document.getElementById('dom-analysis');
+            el.style.display = 'block';
+
+            // Sentiment badge
+            var sentEl = document.getElementById('dom-sentiment');
+            sentEl.textContent = a.sentiment;
+            if (a.sentiment === 'BULLISH') {
+                sentEl.style.background = 'rgba(63,185,80,0.15)'; sentEl.style.color = '#3fb950';
+                sentEl.style.border = '1px solid rgba(63,185,80,0.3)';
+            } else if (a.sentiment === 'BEARISH') {
+                sentEl.style.background = 'rgba(248,81,73,0.15)'; sentEl.style.color = '#f85149';
+                sentEl.style.border = '1px solid rgba(248,81,73,0.3)';
+            } else {
+                sentEl.style.background = 'rgba(139,148,158,0.15)'; sentEl.style.color = '#8b949e';
+                sentEl.style.border = '1px solid rgba(139,148,158,0.3)';
+            }
+
+            // Spread
+            document.getElementById('dom-spread').textContent = '\\u20B9' + a.bid_ask_spread;
+            document.getElementById('dom-spread-pct').textContent = ' (' + a.spread_pct + '%)';
+
+            // Imbalance
+            var imbEl = document.getElementById('dom-imbalance');
+            imbEl.textContent = a.imbalance_ratio + 'x';
+            imbEl.style.color = a.imbalance_ratio > 1.2 ? '#3fb950' : a.imbalance_ratio < 0.8 ? '#f85149' : '#8b949e';
+
+            // Walls
+            if (a.max_bid_wall) {
+                document.getElementById('dom-buy-wall').textContent =
+                    '\\u20B9' + a.max_bid_wall.price + ' (' + fmtQty(a.max_bid_wall.quantity) + ', ' + a.max_bid_wall.orders + ' orders)';
+            }
+            if (a.max_ask_wall) {
+                document.getElementById('dom-sell-wall').textContent =
+                    '\\u20B9' + a.max_ask_wall.price + ' (' + fmtQty(a.max_ask_wall.quantity) + ', ' + a.max_ask_wall.orders + ' orders)';
+            }
+
+            // Totals
+            document.getElementById('dom-total-bid').textContent = fmtQty(a.total_bid_qty);
+            document.getElementById('dom-total-ask').textContent = fmtQty(a.total_ask_qty);
+
+            // Imbalance bar
+            var total = a.total_bid_qty + a.total_ask_qty;
+            if (total > 0) {
+                var bidPct = Math.round((a.total_bid_qty / total) * 100);
+                document.getElementById('dom-imbalance-bar-bid').style.width = bidPct + '%';
+                document.getElementById('dom-imbalance-bar-ask').style.width = (100 - bidPct) + '%';
+            }
+        }
+
+        // Click DOM price -> fill order form
+        function domSelectPrice(price) {
+            document.getElementById('order-price').value = price;
+            if (typeof triggerAutoCalc === 'function') triggerAutoCalc();
+            showToast('Price set: \\u20B9' + price.toFixed(2), 'success');
+        }
+
+        // Wire up depth listener when socket connects
+        var _origSetupSocketListeners = (typeof setupSocketListeners === 'function') ? setupSocketListeners : null;
+        setupSocketListeners = function() {
+            if (_origSetupSocketListeners) _origSetupSocketListeners();
+            setupDepthListener();
+        };
+        // If socket is already connected, set up now
+        if (socket) setupDepthListener();
     </script>
 </body>
 </html>
@@ -3247,6 +3475,131 @@ def emit_status_update(status_data: dict):
 def emit_sl_tp_trigger(trigger_data: dict):
     """Push SL/TP trigger notification to dashboard."""
     socketio.emit("sl_tp_triggered", trigger_data)
+
+
+# ── Depth of Market ──────────────────────────────────────────────
+
+def analyze_depth(bids: list, asks: list) -> dict:
+    """Analyze 20-level depth and return key trading insights.
+
+    Each bid/ask is: {price: float, quantity: int, orders: int}
+    bids[0] = best bid (highest price), asks[0] = best ask (lowest price)
+    """
+    if not bids or not asks:
+        return {}
+
+    total_bid_qty = sum(b["quantity"] for b in bids)
+    total_ask_qty = sum(a["quantity"] for a in asks)
+    avg_bid_qty = total_bid_qty / len(bids) if bids else 1
+    avg_ask_qty = total_ask_qty / len(asks) if asks else 1
+    avg_bid_orders = sum(b["orders"] for b in bids) / len(bids) if bids else 1
+    avg_ask_orders = sum(a["orders"] for a in asks) / len(asks) if asks else 1
+
+    # Bid-Ask Spread
+    spread = round(asks[0]["price"] - bids[0]["price"], 2)
+    mid_price = (asks[0]["price"] + bids[0]["price"]) / 2
+    spread_pct = round(spread / mid_price * 100, 3) if mid_price > 0 else 0
+
+    # Buy/Sell Imbalance
+    imbalance = round(total_bid_qty / total_ask_qty, 2) if total_ask_qty > 0 else 999
+
+    # Max walls
+    max_bid_wall = max(bids, key=lambda b: b["quantity"])
+    max_ask_wall = max(asks, key=lambda a: a["quantity"])
+
+    # Support & resistance (qty > 1.5x average)
+    support_levels = [b for b in bids if b["quantity"] > avg_bid_qty * 1.5]
+    resistance_levels = [a for a in asks if a["quantity"] > avg_ask_qty * 1.5]
+
+    # Institutional activity (many orders at a level)
+    institutional_bids = sum(1 for b in bids if b["orders"] > avg_bid_orders * 2)
+    institutional_asks = sum(1 for a in asks if a["orders"] > avg_ask_orders * 2)
+
+    # Sentiment
+    sentiment = "NEUTRAL"
+    if imbalance > 1.2:
+        sentiment = "BULLISH"
+    elif imbalance < 0.8:
+        sentiment = "BEARISH"
+
+    return {
+        "bid_ask_spread": spread,
+        "spread_pct": spread_pct,
+        "mid_price": round(mid_price, 2),
+        "total_bid_qty": total_bid_qty,
+        "total_ask_qty": total_ask_qty,
+        "imbalance_ratio": imbalance,
+        "max_bid_wall": max_bid_wall,
+        "max_ask_wall": max_ask_wall,
+        "support_levels": support_levels,
+        "resistance_levels": resistance_levels,
+        "institutional_bids": institutional_bids,
+        "institutional_asks": institutional_asks,
+        "sentiment": sentiment,
+    }
+
+
+def _depth_emit_loop():
+    """Background loop that reads depth data and emits to frontend every 500ms."""
+    global _depth_timer_running
+    _depth_timer_running = True
+    while _depth_timer_running and _depth_ws:
+        try:
+            depth = _depth_ws.get_depth()
+            if depth["bids"] or depth["asks"]:
+                analysis = analyze_depth(depth["bids"], depth["asks"])
+                socketio.emit("depth_update", {
+                    "bids": depth["bids"],
+                    "asks": depth["asks"],
+                    "analysis": analysis,
+                    "security_id": depth.get("security_id"),
+                })
+        except Exception as e:
+            logger.error("Depth emit error: %s", e)
+        time.sleep(0.5)
+    _depth_timer_running = False
+
+
+@socketio.on("subscribe_depth")
+def handle_subscribe_depth(data):
+    """Client requests depth for an instrument."""
+    global _depth_ws, _depth_timer_running
+    security_id = data.get("security_id")
+    exchange_segment = data.get("exchange_segment", "NSE_FNO")
+
+    if not security_id:
+        return
+
+    if not _monitor:
+        socketio.emit("depth_error", {"error": "Monitor not initialized"})
+        return
+
+    # Create or reuse the DepthWebSocket instance
+    if _depth_ws is None:
+        _depth_ws = DepthWebSocket(
+            access_token=_monitor.api.access_token,
+            client_id=_monitor.api.client_id,
+        )
+
+    # Subscribe to new instrument (stops previous if any)
+    _depth_ws.subscribe(security_id, exchange_segment)
+
+    # Start emit loop if not already running
+    if not _depth_timer_running:
+        t = threading.Thread(target=_depth_emit_loop, daemon=True)
+        t.start()
+
+    logger.info("Depth subscribed: security_id=%s segment=%s", security_id, exchange_segment)
+
+
+@socketio.on("unsubscribe_depth")
+def handle_unsubscribe_depth(data=None):
+    """Client requests to stop depth streaming."""
+    global _depth_ws, _depth_timer_running
+    _depth_timer_running = False
+    if _depth_ws:
+        _depth_ws.stop()
+    logger.info("Depth unsubscribed")
 
 
 def run_dashboard(monitor):

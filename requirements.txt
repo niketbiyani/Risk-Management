@@ -9,3 +9,4 @@ numpy>=1.24.0
 gevent>=23.0.0
 gevent-websocket>=0.10.1
 pyotp>=2.9.0
+websocket-client>=1.6.0
