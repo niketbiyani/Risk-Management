@@ -29,6 +29,7 @@ _instrument_cache = None
 # Depth of Market state
 _depth_ws = None
 _depth_timer_running = False
+_depth_cred_version = 0  # Tracks credential version to detect token refresh
 
 
 def set_monitor(monitor):
@@ -539,7 +540,11 @@ DASHBOARD_HTML = """
                 <div class="card" id="dom-panel">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                         <h3 style="margin:0;">Depth of Market</h3>
-                        <span id="dom-instrument" style="font-size:12px;color:#8b949e;">Select an option from the chain</span>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span id="dom-instrument" style="font-size:12px;color:#8b949e;">Select an option from the chain</span>
+                            <span id="dom-status" style="display:none;font-size:10px;padding:2px 6px;border-radius:8px;background:#0d4429;color:#3fb950;font-weight:600;">LIVE</span>
+                            <button id="dom-close-btn" onclick="domClose()" style="display:none;background:none;border:1px solid #30363d;color:#8b949e;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px;" title="Close DOM panel">✕</button>
+                        </div>
                     </div>
 
                     <!-- Analysis Summary -->
@@ -570,6 +575,14 @@ DASHBOARD_HTML = """
                             <div>
                                 <span style="color:#8b949e;">Total Ask:</span>
                                 <span id="dom-total-ask" style="color:#f85149;">--</span>
+                            </div>
+                            <div>
+                                <span style="color:#58a6ff;">Support:</span>
+                                <span id="dom-support" style="color:#3fb950;font-weight:600;">--</span>
+                            </div>
+                            <div>
+                                <span style="color:#58a6ff;">Resistance:</span>
+                                <span id="dom-resistance" style="color:#f85149;font-weight:600;">--</span>
                             </div>
                         </div>
                         <!-- Imbalance bar -->
@@ -2425,24 +2438,67 @@ DASHBOARD_HTML = """
 
         // ── Depth of Market ─────────────────────────────────────────────
         var _domCurrentSecurity = null;
+        var _domLastUpdate = 0;
+        var _domLastAnalysis = null;
 
         function subscribeDepth(securityId, exchangeSegment, symbol) {
             _domCurrentSecurity = securityId;
+            _domLastUpdate = Date.now();
+            _domLastAnalysis = null;
             document.getElementById('dom-instrument').textContent = symbol || ('Loading ' + securityId + '...');
             document.getElementById('dom-analysis').style.display = 'none';
             document.getElementById('dom-chart').innerHTML =
                 '<div style="color:#484f58;padding:30px;text-align:center;font-size:13px;">Connecting to depth feed...</div>';
+            document.getElementById('dom-status').style.display = 'inline';
+            document.getElementById('dom-close-btn').style.display = 'inline';
+            document.getElementById('dom-status').textContent = 'LIVE';
+            document.getElementById('dom-status').style.background = '#0d4429';
+            document.getElementById('dom-status').style.color = '#3fb950';
             if (socket) {
                 socket.emit('subscribe_depth', {security_id: securityId, exchange_segment: exchangeSegment});
             }
         }
 
+        function domClose() {
+            _domCurrentSecurity = null;
+            _domLastAnalysis = null;
+            if (socket) socket.emit('unsubscribe_depth', {});
+            document.getElementById('dom-instrument').textContent = 'Select an option from the chain';
+            document.getElementById('dom-analysis').style.display = 'none';
+            document.getElementById('dom-status').style.display = 'none';
+            document.getElementById('dom-close-btn').style.display = 'none';
+            document.getElementById('dom-chart').innerHTML =
+                '<div style="color:#484f58;padding:30px;text-align:center;font-size:13px;">Click any CE or PE price in the option chain to view 20-level market depth</div>';
+        }
+
+        // Staleness detection — check every second
+        setInterval(function() {
+            if (!_domCurrentSecurity) return;
+            var elapsed = Date.now() - _domLastUpdate;
+            var statusEl = document.getElementById('dom-status');
+            if (elapsed > 5000) {
+                statusEl.textContent = 'STALE';
+                statusEl.style.background = '#3d1f00';
+                statusEl.style.color = '#d29922';
+            } else if (elapsed > 3000) {
+                statusEl.textContent = 'DELAYED';
+                statusEl.style.background = '#3d2e00';
+                statusEl.style.color = '#d29922';
+            } else {
+                statusEl.textContent = 'LIVE';
+                statusEl.style.background = '#0d4429';
+                statusEl.style.color = '#3fb950';
+            }
+        }, 1000);
+
         function setupDepthListener() {
             if (!socket) return;
             socket.on('depth_update', function(data) {
                 if (data.security_id && data.security_id !== _domCurrentSecurity) return;
-                renderDepthChart(data.bids || [], data.asks || []);
-                renderDepthAnalysis(data.analysis || {});
+                _domLastUpdate = Date.now();
+                _domLastAnalysis = data.analysis || {};
+                renderDepthChart(data.bids || [], data.asks || [], _domLastAnalysis);
+                renderDepthAnalysis(_domLastAnalysis);
             });
             socket.on('depth_error', function(data) {
                 document.getElementById('dom-chart').innerHTML =
@@ -2456,8 +2512,13 @@ DASHBOARD_HTML = """
             return n.toString();
         }
 
-        function renderDepthChart(bids, asks) {
+        function renderDepthChart(bids, asks, analysis) {
             if (!bids.length && !asks.length) return;
+            analysis = analysis || {};
+
+            // Determine wall prices for highlighting
+            var buyWallPrice = (analysis.max_bid_wall && analysis.max_bid_wall.price) || null;
+            var sellWallPrice = (analysis.max_ask_wall && analysis.max_ask_wall.price) || null;
 
             // Find max quantity for bar scaling
             var maxQty = 1;
@@ -2480,13 +2541,15 @@ DASHBOARD_HTML = """
             // Ask rows (sell side) - top of ladder
             askRows.forEach(function(a) {
                 var pct = Math.round((a.quantity / maxQty) * 100);
-                html += '<tr style="cursor:pointer;" onclick="domSelectPrice(' + a.price + ')">';
+                var isWall = sellWallPrice && a.price === sellWallPrice;
+                var rowStyle = 'cursor:pointer;' + (isWall ? 'background:rgba(248,81,73,0.1);' : '');
+                html += '<tr style="' + rowStyle + '" onclick="domSelectPrice(' + a.price + ')">';
                 html += '<td style="padding:3px 6px;text-align:right;color:#484f58;">-</td>';
-                html += '<td style="padding:3px 6px;text-align:center;color:#f85149;font-weight:600;cursor:pointer;">' + a.price.toFixed(2) + '</td>';
+                html += '<td style="padding:3px 6px;text-align:center;color:#f85149;font-weight:' + (isWall ? '800' : '600') + ';cursor:pointer;">' + a.price.toFixed(2) + (isWall ? ' \\u25C0' : '') + '</td>';
                 html += '<td style="padding:3px 6px;text-align:left;">';
                 html += '<div style="display:flex;align-items:center;gap:4px;">';
-                html += '<div style="background:rgba(248,81,73,0.25);height:16px;width:' + pct + '%;min-width:2px;border-radius:2px;"></div>';
-                html += '<span style="color:#f85149;font-size:10px;white-space:nowrap;">' + fmtQty(a.quantity) + '</span>';
+                html += '<div style="background:rgba(248,81,73,' + (isWall ? '0.45' : '0.25') + ');height:16px;width:' + pct + '%;min-width:2px;border-radius:2px;"></div>';
+                html += '<span style="color:#f85149;font-size:10px;white-space:nowrap;' + (isWall ? 'font-weight:700;' : '') + '">' + fmtQty(a.quantity) + '</span>';
                 html += '</div></td>';
                 html += '<td style="padding:3px 6px;text-align:center;color:#484f58;font-size:10px;">' + a.orders + '</td>';
                 html += '</tr>';
@@ -2503,13 +2566,15 @@ DASHBOARD_HTML = """
             // Bid rows (buy side) - bottom of ladder
             bidRows.forEach(function(b) {
                 var pct = Math.round((b.quantity / maxQty) * 100);
-                html += '<tr style="cursor:pointer;" onclick="domSelectPrice(' + b.price + ')">';
+                var isWall = buyWallPrice && b.price === buyWallPrice;
+                var rowStyle = 'cursor:pointer;' + (isWall ? 'background:rgba(63,185,80,0.1);' : '');
+                html += '<tr style="' + rowStyle + '" onclick="domSelectPrice(' + b.price + ')">';
                 html += '<td style="padding:3px 6px;text-align:right;">';
                 html += '<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;">';
-                html += '<span style="color:#3fb950;font-size:10px;white-space:nowrap;">' + fmtQty(b.quantity) + '</span>';
-                html += '<div style="background:rgba(63,185,80,0.25);height:16px;width:' + pct + '%;min-width:2px;border-radius:2px;"></div>';
+                html += '<span style="color:#3fb950;font-size:10px;white-space:nowrap;' + (isWall ? 'font-weight:700;' : '') + '">' + fmtQty(b.quantity) + '</span>';
+                html += '<div style="background:rgba(63,185,80,' + (isWall ? '0.45' : '0.25') + ');height:16px;width:' + pct + '%;min-width:2px;border-radius:2px;"></div>';
                 html += '</div></td>';
-                html += '<td style="padding:3px 6px;text-align:center;color:#3fb950;font-weight:600;cursor:pointer;">' + b.price.toFixed(2) + '</td>';
+                html += '<td style="padding:3px 6px;text-align:center;color:#3fb950;font-weight:' + (isWall ? '800' : '600') + ';cursor:pointer;">' + (isWall ? '\\u25B6 ' : '') + b.price.toFixed(2) + '</td>';
                 html += '<td style="padding:3px 6px;text-align:left;color:#484f58;">-</td>';
                 html += '<td style="padding:3px 6px;text-align:center;color:#484f58;font-size:10px;">' + b.orders + '</td>';
                 html += '</tr>';
@@ -2567,6 +2632,30 @@ DASHBOARD_HTML = """
                 var bidPct = Math.round((a.total_bid_qty / total) * 100);
                 document.getElementById('dom-imbalance-bar-bid').style.width = bidPct + '%';
                 document.getElementById('dom-imbalance-bar-ask').style.width = (100 - bidPct) + '%';
+            }
+
+            // Support levels (bid levels with qty > 1.5x average)
+            var supportEl = document.getElementById('dom-support');
+            if (a.support_levels && a.support_levels.length > 0) {
+                var topSupport = a.support_levels[0];
+                supportEl.textContent = '\\u20B9' + topSupport.price + ' (' + fmtQty(topSupport.quantity) + ')';
+                if (a.support_levels.length > 1) {
+                    supportEl.textContent += ' +' + (a.support_levels.length - 1);
+                }
+            } else {
+                supportEl.textContent = '--';
+            }
+
+            // Resistance levels (ask levels with qty > 1.5x average)
+            var resEl = document.getElementById('dom-resistance');
+            if (a.resistance_levels && a.resistance_levels.length > 0) {
+                var topRes = a.resistance_levels[0];
+                resEl.textContent = '\\u20B9' + topRes.price + ' (' + fmtQty(topRes.quantity) + ')';
+                if (a.resistance_levels.length > 1) {
+                    resEl.textContent += ' +' + (a.resistance_levels.length - 1);
+                }
+            } else {
+                resEl.textContent = '--';
             }
         }
 
@@ -3563,7 +3652,7 @@ def _depth_emit_loop():
 @socketio.on("subscribe_depth")
 def handle_subscribe_depth(data):
     """Client requests depth for an instrument."""
-    global _depth_ws, _depth_timer_running
+    global _depth_ws, _depth_timer_running, _depth_cred_version
     security_id = data.get("security_id")
     exchange_segment = data.get("exchange_segment", "NSE_FNO")
 
@@ -3574,12 +3663,20 @@ def handle_subscribe_depth(data):
         socketio.emit("depth_error", {"error": "Monitor not initialized"})
         return
 
+    # Recreate DepthWebSocket if credentials were refreshed
+    current_cred_ver = getattr(_monitor.api, '_credentials_version', 0)
+    if _depth_ws is not None and _depth_cred_version != current_cred_ver:
+        logger.info("Depth WS: credentials changed, recreating connection")
+        _depth_ws.stop()
+        _depth_ws = None
+
     # Create or reuse the DepthWebSocket instance
     if _depth_ws is None:
         _depth_ws = DepthWebSocket(
             access_token=_monitor.api.access_token,
             client_id=_monitor.api.client_id,
         )
+        _depth_cred_version = current_cred_ver
 
     # Subscribe to new instrument (stops previous if any)
     _depth_ws.subscribe(security_id, exchange_segment)

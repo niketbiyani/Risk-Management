@@ -46,6 +46,7 @@ class DhanAPI:
         self.access_token = access_token
         self._context = DhanContext(client_id, access_token)
         self.dhan = dhanhq(self._context)
+        self._credentials_version = getattr(self, '_credentials_version', 0) + 1
         logger.info("Dhan API reinitialized for client: %s", client_id)
 
     # ── Order Management ───────────────────────────────────────────────
