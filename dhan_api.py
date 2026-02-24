@@ -586,9 +586,12 @@ class DepthWebSocket:
                 break
 
             # Parse header (12 bytes, little-endian): <hBBiI
+            #   msg_len(int16) + feed_code(uint8) + exchange_seg(uint8)
+            #   + security_id(int32) + sequence(uint32)
             header = data[offset:offset + self.HEADER_SIZE]
             msg_len = struct.unpack_from("<h", header, 0)[0]
             feed_code = struct.unpack_from("<B", header, 2)[0]
+            pkt_security_id = struct.unpack_from("<i", header, 4)[0]
 
             if feed_code == self.FEED_DISCONNECT:
                 # Parse disconnect error code from header
@@ -619,6 +622,13 @@ class DepthWebSocket:
 
             if feed_code not in (self.FEED_BID, self.FEED_ASK):
                 # Unknown feed code, skip using msg_len
+                offset += packet_size
+                continue
+
+            # Skip packets for other instruments (Dhan can send stray data)
+            if self._security_id and str(pkt_security_id) != self._security_id:
+                logger.debug("Depth WS: ignoring packet for security_id=%s (subscribed=%s)",
+                             pkt_security_id, self._security_id)
                 offset += packet_size
                 continue
 

@@ -517,6 +517,7 @@ DASHBOARD_HTML = """
                                 <option value="">Loading...</option>
                             </select>
                             <button onclick="loadOptionChain()" class="btn-neutral" style="padding:4px 10px;font-size:11px;">Refresh</button>
+                            <span id="oc-auto-status" style="font-size:10px;color:#3fb950;margin-left:6px;">Auto 5s</span>
                         </div>
                     </div>
                     <div id="oc-spot" style="font-size:13px;color:#8b949e;margin-bottom:8px;">Spot: --</div>
@@ -2353,27 +2354,35 @@ DASHBOARD_HTML = """
                 });
         }
 
-        function loadOptionChain() {
+        var _ocAutoTimer = null;
+        var _ocLastChain = null;  // Cache to avoid flash on auto-refresh
+
+        function loadOptionChain(silent) {
             var sel = document.getElementById('oc-underlying');
             var underlying = sel.options[sel.selectedIndex].text;
             var expiry = document.getElementById('oc-expiry').value;
             if (!expiry) { initOptionChain(); return; }
 
             var body = document.getElementById('oc-body');
-            body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#484f58;padding:20px;">Loading...</td></tr>';
+            if (!silent) {
+                body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#484f58;padding:20px;">Loading...</td></tr>';
+            }
 
             fetch('/api/option_chain/data?underlying=' + underlying + '&expiry=' + expiry)
                 .then(function(r){ return r.json(); })
                 .then(function(d) {
                     if (d.error) {
-                        body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f85149;padding:20px;">' + d.error + '</td></tr>';
+                        if (!silent) body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f85149;padding:20px;">' + d.error + '</td></tr>';
                         return;
                     }
                     var spot = d.spot || 0;
                     _ocLotSize = d.lot_size || 75;
-                    document.getElementById('oc-spot').textContent = 'Spot: \\u20B9' + (spot > 0 ? spot.toFixed(2) : '--') + '  |  Expiry: ' + expiry + '  |  Lot: ' + _ocLotSize;
+                    var now = new Date();
+                    var timeStr = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0') + ':' + now.getSeconds().toString().padStart(2,'0');
+                    document.getElementById('oc-spot').textContent = 'Spot: \\u20B9' + (spot > 0 ? spot.toFixed(2) : '--') + '  |  Expiry: ' + expiry + '  |  Lot: ' + _ocLotSize + '  |  ' + timeStr;
 
                     var chain = d.chain || [];
+                    _ocLastChain = chain;
                     if (chain.length === 0) {
                         body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#484f58;padding:20px;">No strikes found</td></tr>';
                         return;
@@ -2402,8 +2411,13 @@ DASHBOARD_HTML = """
                     body.innerHTML = html;
                 })
                 .catch(function(e) {
-                    body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f85149;padding:20px;">Error: ' + e + '</td></tr>';
+                    if (!silent) body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f85149;padding:20px;">Error: ' + e + '</td></tr>';
                 });
+
+            // Start auto-refresh timer (5s) if not already running
+            if (!_ocAutoTimer) {
+                _ocAutoTimer = setInterval(function() { loadOptionChain(true); }, 5000);
+            }
         }
 
         function ocSelect(securityId, optType, expiry, strike, ltp) {
