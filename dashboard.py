@@ -29,6 +29,7 @@ _instrument_cache = None
 # Depth of Market state
 _depth_ws = None
 _depth_timer_running = False
+_depth_timer_lock = threading.Lock()  # Prevents multiple emit loops
 _depth_cred_version = 0  # Tracks credential version to detect token refresh
 _depth_subscribe_gen = 0  # Incremented on each new subscription to reset no-data state
 
@@ -3661,7 +3662,21 @@ def analyze_depth(bids: list, asks: list) -> dict:
 def _depth_emit_loop():
     """Background loop that reads depth data and emits to frontend every 500ms."""
     global _depth_timer_running
-    _depth_timer_running = True
+    # Prevent multiple emit loops running simultaneously
+    if not _depth_timer_lock.acquire(blocking=False):
+        logger.warning("Depth emit loop: another loop already running, exiting")
+        return
+    try:
+        _depth_timer_running = True
+        _depth_emit_loop_inner()
+    finally:
+        _depth_timer_running = False
+        _depth_timer_lock.release()
+
+
+def _depth_emit_loop_inner():
+    """Inner emit loop (called under _depth_timer_lock)."""
+    global _depth_timer_running
     no_data_notified = False
     connection_notified = False
     loop_count = 0
@@ -3689,6 +3704,9 @@ def _depth_emit_loop():
                 # ~10 seconds with no data
                 connected = depth.get("connected", False)
                 disconnect_reason = depth.get("disconnect_reason", "")
+                attempts = depth.get("connect_attempts", 0)
+                last_error = depth.get("last_error", "")
+                ever_connected = depth.get("ever_connected", False)
                 if disconnect_reason and not connection_notified:
                     # Server sent a disconnect error
                     socketio.emit("depth_status", {
@@ -3700,13 +3718,20 @@ def _depth_emit_loop():
                     logger.warning("Depth emit: server disconnected — %s", disconnect_reason)
                 elif not connected and not connection_notified:
                     # WebSocket never connected or keeps disconnecting
+                    reason = last_error if last_error else "WebSocket connection failed"
+                    if attempts > 0:
+                        reason += f" (attempts: {attempts})"
+                    if ever_connected:
+                        reason = f"Connection lost after connecting. {reason}"
                     socketio.emit("depth_status", {
                         "status": "connection_failed",
-                        "reason": "WebSocket connection failed",
+                        "reason": reason,
                         "security_id": depth.get("security_id"),
                     })
                     connection_notified = True
-                    logger.warning("Depth emit: WebSocket not connected after %d loops", loop_count)
+                    logger.warning("Depth emit: not connected after %d loops — "
+                                   "attempts=%d ever_connected=%s last_error=%s",
+                                   loop_count, attempts, ever_connected, last_error)
                 elif connected:
                     # Connected but no data — market likely closed
                     socketio.emit("depth_status", {
@@ -3719,7 +3744,6 @@ def _depth_emit_loop():
             logger.error("Depth emit error: %s", e)
         loop_count += 1
         time.sleep(0.5)
-    _depth_timer_running = False
 
 
 @socketio.on("subscribe_depth")
@@ -3771,15 +3795,19 @@ def handle_unsubscribe_depth(data=None):
     _depth_timer_running = False
     if _depth_ws:
         _depth_ws.stop()
+        _depth_ws = None  # Ensure fresh instance on next subscribe
     logger.info("Depth unsubscribed")
 
 
 @app.route("/api/depth-diag")
 def api_depth_diag():
-    """Diagnostic endpoint: tests depth WebSocket connectivity step by step."""
+    """Diagnostic endpoint: tests network connectivity and reports WebSocket state.
+
+    Does NOT create a competing WebSocket connection (Dhan limits concurrent connections).
+    Instead, tests TCP/SSL and reports the state of the existing DepthWebSocket.
+    """
     import socket
     import ssl
-    import urllib.parse
 
     results = {"steps": [], "overall": "unknown"}
 
@@ -3828,69 +3856,27 @@ def api_depth_diag():
         results["overall"] = "fail"
         return jsonify(results)
 
-    # Step 5: Quick WebSocket connect test (5 second timeout)
-    import websocket as ws_lib
-    token_encoded = urllib.parse.quote(token, safe="")
-    client_encoded = urllib.parse.quote(client_id, safe="")
-    url = (f"wss://depth-api-feed.dhan.co/twentydepth"
-           f"?token={token_encoded}&clientId={client_encoded}&authType=2")
-
-    ws_result = {"opened": False, "messages": 0, "errors": [], "closed_reason": None}
-
-    def on_open(ws):
-        ws_result["opened"] = True
-        # Subscribe to NIFTY index (13) just to test
-        ws.send(json.dumps({
-            "RequestCode": 23,
-            "InstrumentCount": 1,
-            "InstrumentList": [{"ExchangeSegment": "IDX_I", "SecurityId": "13"}],
-        }))
-
-    def on_message(ws, msg):
-        ws_result["messages"] += 1
-        if isinstance(msg, (bytes, bytearray)):
-            import struct
-            if len(msg) >= 3:
-                feed_code = struct.unpack_from("<B", msg, 2)[0]
-                if feed_code == 50:  # Disconnect
-                    err_code = struct.unpack_from("<I", msg, 8)[0] if len(msg) >= 12 else 0
-                    err_msgs = {805: "max connections exceeded", 806: "subscribe to Data APIs required",
-                                807: "access token expired", 808: "invalid client ID", 809: "auth failed"}
-                    ws_result["errors"].append(f"Server disconnect: {err_msgs.get(err_code, f'code={err_code}')}")
-
-    def on_error(ws, err):
-        ws_result["errors"].append(str(err))
-
-    def on_close(ws, code, msg):
-        ws_result["closed_reason"] = f"code={code} msg={msg}"
-
-    try:
-        ctx = ssl.create_default_context()
-        test_ws = ws_lib.WebSocketApp(url, on_open=on_open, on_message=on_message,
-                                      on_error=on_error, on_close=on_close)
-        import threading
-        t = threading.Thread(target=lambda: test_ws.run_forever(
-            sslopt={"context": ctx}, ping_interval=0), daemon=True)
-        t.start()
-        t.join(timeout=5)
-        try:
-            test_ws.close()
-        except Exception:
-            pass
-
-        if ws_result["errors"]:
-            step("websocket", False, f"Errors: {ws_result['errors']}")
-        elif ws_result["opened"] and ws_result["messages"] > 0:
-            step("websocket", True,
-                 f"Connected OK, received {ws_result['messages']} messages in 5s")
-        elif ws_result["opened"]:
-            step("websocket", True,
-                 f"Connected OK, no data yet (market may be closed). close={ws_result['closed_reason']}")
+    # Step 5: Report current DepthWebSocket state (no new connection created)
+    if _depth_ws is not None:
+        depth = _depth_ws.get_depth()
+        ws_state = {
+            "connected": depth.get("connected"),
+            "ever_connected": depth.get("ever_connected"),
+            "connect_attempts": depth.get("connect_attempts"),
+            "last_error": depth.get("last_error"),
+            "disconnect_reason": depth.get("disconnect_reason"),
+            "security_id": depth.get("security_id"),
+            "has_bids": len(depth.get("bids", [])) > 0,
+            "has_asks": len(depth.get("asks", [])) > 0,
+        }
+        if depth.get("connected"):
+            step("depth_ws", True, f"Connected and streaming. State: {ws_state}")
+        elif depth.get("ever_connected"):
+            step("depth_ws", False, f"Was connected but disconnected. State: {ws_state}")
         else:
-            step("websocket", False,
-                 f"Did not connect in 5s. errors={ws_result['errors']}, close={ws_result['closed_reason']}")
-    except Exception as e:
-        step("websocket", False, f"Exception: {e}")
+            step("depth_ws", False, f"Never connected. State: {ws_state}")
+    else:
+        step("depth_ws", True, "No active subscription (click an option to start)")
 
     # Overall result
     all_ok = all(s["ok"] for s in results["steps"])

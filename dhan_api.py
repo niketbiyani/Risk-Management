@@ -482,6 +482,10 @@ class DepthWebSocket:
         self._lock = threading.Lock()
         self._bids = []  # [{price, quantity, orders}, ...] up to 20
         self._asks = []
+        # Connection diagnostics
+        self._connect_attempts = 0
+        self._last_error = ""
+        self._ever_connected = False
 
     @property
     def security_id(self):
@@ -494,6 +498,9 @@ class DepthWebSocket:
         self._running = True
         self._connected = False
         self._disconnect_reason = ""
+        self._connect_attempts = 0
+        self._last_error = ""
+        self._ever_connected = False
         with self._lock:
             self._bids = []
             self._asks = []
@@ -520,6 +527,9 @@ class DepthWebSocket:
         logger.info("Depth WS: connecting to %s (security=%s, segment=%s)",
                      self.WS_URL, security_id, exchange_segment)
         while self._running:
+            self._connect_attempts += 1
+            logger.info("Depth WS: attempt #%d for %s (%s)",
+                        self._connect_attempts, security_id, exchange_segment)
             try:
                 self._ws = websocket.WebSocketApp(
                     url,
@@ -534,10 +544,12 @@ class DepthWebSocket:
                     sslopt={"context": ssl_context},
                 )
             except Exception as e:
+                self._last_error = f"run_forever: {e}"
                 logger.error("Depth WS run_forever error: %s", e, exc_info=True)
             if self._running:
                 import time
-                logger.info("Depth WS: reconnecting in 2s...")
+                logger.info("Depth WS: reconnecting in 2s (attempt #%d)...",
+                            self._connect_attempts)
                 time.sleep(2)
 
     def _on_open(self, ws, security_id: str, exchange_segment: str):
@@ -554,6 +566,7 @@ class DepthWebSocket:
         })
         ws.send(payload)
         self._connected = True
+        self._ever_connected = True
         logger.info("Depth WS: connected, sent subscription for %s (%s)",
                      security_id, exchange_segment)
 
@@ -635,12 +648,14 @@ class DepthWebSocket:
             offset += packet_size
 
     def _on_error(self, ws, error):
+        self._last_error = f"{type(error).__name__}: {error}"
         logger.error("Depth WS error: %s (%s)", error, type(error).__name__)
 
     def _on_close(self, ws, close_status_code, close_msg):
+        was_connected = self._connected
         self._connected = False
-        logger.warning("Depth WS closed: code=%s msg=%s (was_connected=%s)",
-                       close_status_code, close_msg, self._connected)
+        logger.warning("Depth WS closed: code=%s msg=%s was_connected=%s",
+                       close_status_code, close_msg, was_connected)
 
     def get_depth(self) -> dict:
         """Thread-safe read of current depth data."""
@@ -651,6 +666,9 @@ class DepthWebSocket:
                 "security_id": self._security_id,
                 "connected": self._connected,
                 "disconnect_reason": self._disconnect_reason,
+                "connect_attempts": self._connect_attempts,
+                "last_error": self._last_error,
+                "ever_connected": self._ever_connected,
             }
 
     def stop(self):
