@@ -412,6 +412,17 @@ DASHBOARD_HTML = """
             if (typeof loadJournalHistory === 'function' && tab === 'history') loadJournalHistory();
             if (typeof loadJournalAnalytics === 'function' && tab === 'analytics') loadJournalAnalytics();
         }
+        function switchPage(page) {
+            var risk = document.getElementById('page-risk');
+            var dom = document.getElementById('page-dom');
+            if (risk) risk.style.display = page === 'risk' ? '' : 'none';
+            if (dom) dom.style.display = page === 'dom' ? '' : 'none';
+            document.querySelectorAll('.page-tab').forEach(function(t) {
+                var isActive = t.getAttribute('data-page') === page;
+                t.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
+                t.style.color = isActive ? '#58a6ff' : '#8b949e';
+            });
+        }
     </script>
 </head>
 <body>
@@ -2498,19 +2509,25 @@ DASHBOARD_HTML = """
             el.style.color = '#d29922';
             el.style.borderColor = '#9e6a03';
             el.style.background = '#3d2e00';
-            fetch('/api/token/refresh', {method:'POST', headers:{'Content-Type':'application/json'}})
-                .then(function(r){ return r.json(); })
+            var controller = new AbortController();
+            var timeoutId = setTimeout(function() { controller.abort(); }, 30000);
+            fetch('/api/token/refresh', {method:'POST', headers:{'Content-Type':'application/json'}, signal: controller.signal})
+                .then(function(r){ clearTimeout(timeoutId); return r.json(); })
                 .then(function(d) {
                     if (d.status === 'ok') {
                         showToast('Token refreshed successfully!', 'success');
-                        checkTokenStatus();
                     } else {
                         showToast('Token refresh failed: ' + (d.message || 'Unknown error'), 'error');
-                        checkTokenStatus();
                     }
+                    checkTokenStatus();
                 })
                 .catch(function(e) {
-                    showToast('Token refresh request failed: ' + e, 'error');
+                    clearTimeout(timeoutId);
+                    if (e.name === 'AbortError') {
+                        showToast('Token refresh timed out (30s)', 'error');
+                    } else {
+                        showToast('Token refresh request failed: ' + e, 'error');
+                    }
                     checkTokenStatus();
                 });
         }
@@ -2633,19 +2650,6 @@ DASHBOARD_HTML = """
         });
 
         initOptionChain();
-
-        // ── Page Tab Switching (Risk Dashboard vs DOM Analyzer) ──────
-        function switchPage(page) {
-            var risk = document.getElementById('page-risk');
-            var dom = document.getElementById('page-dom');
-            if (risk) risk.style.display = page === 'risk' ? '' : 'none';
-            if (dom) dom.style.display = page === 'dom' ? '' : 'none';
-            document.querySelectorAll('.page-tab').forEach(function(t) {
-                var isActive = t.getAttribute('data-page') === page;
-                t.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
-                t.style.color = isActive ? '#58a6ff' : '#8b949e';
-            });
-        }
 
         // ── DOM Analyzer Frontend Logic ──────────────────────────────
         (function() {

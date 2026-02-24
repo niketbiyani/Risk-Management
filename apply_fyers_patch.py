@@ -208,6 +208,27 @@ except ImportError as e:
     else:
         errors.append("Could not find <h1>Risk Management Dashboard</h1> anchor")
 
+    # ── Change 3b: Add switchPage to early <script> block (global scope) ──
+    early_script_anchor = "    </script>\n</head>"
+    switchpage_fn = """        function switchPage(page) {
+            var risk = document.getElementById('page-risk');
+            var dom = document.getElementById('page-dom');
+            if (risk) risk.style.display = page === 'risk' ? '' : 'none';
+            if (dom) dom.style.display = page === 'dom' ? '' : 'none';
+            document.querySelectorAll('.page-tab').forEach(function(t) {
+                var isActive = t.getAttribute('data-page') === page;
+                t.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
+                t.style.color = isActive ? '#58a6ff' : '#8b949e';
+            });
+        }
+"""
+    if early_script_anchor in content and "function switchPage" not in content:
+        content = content.replace(early_script_anchor, switchpage_fn + early_script_anchor, 1)
+    elif "function switchPage" in content:
+        pass
+    else:
+        errors.append("Could not find early </script></head> anchor for switchPage")
+
     # ── Change 4: Wrap existing content in page-risk div ──
     lockout_anchor = '    <div id="lockout-banner" class="lockout-banner">'
     page_risk_open = '    <!-- ═══ PAGE: RISK DASHBOARD ═══ -->\n    <div id="page-risk">\n'
@@ -219,24 +240,21 @@ except ImportError as e:
     # ── Change 5: Close page-risk + add DOM Analyzer HTML before footer ──
     dom_html = _get_dom_analyzer_html()
     footer_anchor = '    <div class="footer">'
-    if footer_anchor in content and 'page-dom' not in content:
+    if footer_anchor in content and '<div id="page-dom"' not in content:
         content = content.replace(footer_anchor, dom_html + "\n" + footer_anchor, 1)
     else:
         errors.append("Could not find footer anchor or DOM page already exists")
 
-    # ── Change 6: Add tab switching JS + DOM analyzer JS after initOptionChain() ──
+    # ── Change 6: Add DOM analyzer JS before the final </script> ──
     dom_js = _get_dom_analyzer_js()
-    # Find the standalone initOptionChain(); followed by </script>
-    # Use regex to find the last initOptionChain(); before </script>
-    js_pattern = r"(        initOptionChain\(\);)\n(    </script>)"
-    match = re.search(js_pattern, content)
-    if match and "switchPage" not in content:
-        insert_point = match.start() + len(match.group(1))
-        content = content[:insert_point] + "\n" + dom_js + "\n" + content[insert_point:]
-    elif "switchPage" in content:
+    # Find the last </script> before the closing """ of DASHBOARD_HTML
+    final_script_close = '    </script>\n</body>\n</html>\n"""'
+    if final_script_close in content and "setupDomSocket" not in content:
+        content = content.replace(final_script_close, dom_js + "\n    </script>\n</body>\n</html>\n" + '"""', 1)
+    elif "setupDomSocket" in content:
         pass  # already present
     else:
-        errors.append("Could not find initOptionChain(); before </script> anchor")
+        errors.append("Could not find final </script></body></html> anchor for DOM JS")
 
     # ── Change 7: Add Fyers state to index() function ──
     fyers_state = '''
@@ -576,19 +594,6 @@ def _get_dom_analyzer_html():
 def _get_dom_analyzer_js():
     """Return the DOM Analyzer JavaScript block."""
     return r"""
-        // ── Page Tab Switching (Risk Dashboard vs DOM Analyzer) ──────
-        function switchPage(page) {
-            var risk = document.getElementById('page-risk');
-            var dom = document.getElementById('page-dom');
-            if (risk) risk.style.display = page === 'risk' ? '' : 'none';
-            if (dom) dom.style.display = page === 'dom' ? '' : 'none';
-            document.querySelectorAll('.page-tab').forEach(function(t) {
-                var isActive = t.getAttribute('data-page') === page;
-                t.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
-                t.style.color = isActive ? '#58a6ff' : '#8b949e';
-            });
-        }
-
         // ── DOM Analyzer Frontend Logic ──────────────────────────────
         (function() {
             var domLastPrice = 0;
