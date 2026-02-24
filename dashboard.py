@@ -540,8 +540,8 @@ DASHBOARD_HTML = """
 
             <!-- Right: Depth of Market -->
             <div style="flex:1;min-width:0;">
-                <div class="card" id="dom-panel">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <div class="card" id="dom-panel" style="padding:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <h3 style="margin:0;">Depth of Market</h3>
                         <div style="display:flex;align-items:center;gap:8px;">
                             <span id="dom-instrument" style="font-size:12px;color:#8b949e;">Select an option from the chain</span>
@@ -562,7 +562,7 @@ DASHBOARD_HTML = """
                                 Imbalance: <span id="dom-imbalance" style="font-weight:600;">--</span>
                             </div>
                         </div>
-                        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;">
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:10px;">
                             <div>
                                 <span style="color:#3fb950;">Buy Wall:</span>
                                 <span id="dom-buy-wall" style="color:#e6edf3;font-weight:600;">--</span>
@@ -596,7 +596,7 @@ DASHBOARD_HTML = """
                     </div>
 
                     <!-- Depth Chart -->
-                    <div id="dom-chart" style="max-height:400px;overflow-y:auto;">
+                    <div id="dom-chart" style="overflow-y:auto;">
                         <div style="color:#484f58;padding:30px;text-align:center;font-size:13px;">
                             Click any CE or PE price in the option chain to view 20-level market depth
                         </div>
@@ -2326,6 +2326,8 @@ DASHBOARD_HTML = """
         var _ocLotSize = 75;
 
         function initOptionChain() {
+            // Clear any existing auto-refresh timer
+            if (_ocAutoTimer) { clearInterval(_ocAutoTimer); _ocAutoTimer = null; }
             var sel = document.getElementById('oc-underlying');
             var underlying = sel.options[sel.selectedIndex].text;
             fetch('/api/option_chain/expiries?underlying=' + underlying)
@@ -2355,7 +2357,42 @@ DASHBOARD_HTML = """
         }
 
         var _ocAutoTimer = null;
-        var _ocLastChain = null;  // Cache to avoid flash on auto-refresh
+        var _ocRefreshing = false;  // Prevent overlapping requests
+
+        function renderOcChain(d, expiry) {
+            var body = document.getElementById('oc-body');
+            var spot = d.spot || 0;
+            _ocLotSize = d.lot_size || 75;
+            var now = new Date();
+            var timeStr = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0') + ':' + now.getSeconds().toString().padStart(2,'0');
+            document.getElementById('oc-spot').textContent = 'Spot: \\u20B9' + (spot > 0 ? spot.toFixed(2) : '--') + '  |  Expiry: ' + expiry + '  |  Lot: ' + _ocLotSize + '  |  ' + timeStr;
+
+            var chain = d.chain || [];
+            if (chain.length === 0) {
+                body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#484f58;padding:20px;">No strikes found</td></tr>';
+                return;
+            }
+
+            var atmIdx = Math.floor(chain.length / 2);
+            var html = '';
+            chain.forEach(function(row, i) {
+                var isATM = (i === atmIdx);
+                var rowStyle = isATM ? 'background:#1a2332;' : '';
+                var ceLtp = row.ce_ltp ? row.ce_ltp.toFixed(2) : '-';
+                var peLtp = row.pe_ltp ? row.pe_ltp.toFixed(2) : '-';
+
+                html += '<tr style="cursor:pointer;' + rowStyle + '">';
+                html += '<td style="text-align:right;color:#3fb950;font-weight:600;padding:8px 16px;" ';
+                html += 'onclick="ocSelect(\\'' + row.ce_security_id + '\\',\\'CE\\',\\'' + expiry + '\\',' + row.strike + ',' + (row.ce_ltp || 0) + ')">';
+                html += ceLtp + '</td>';
+                html += '<td style="text-align:center;font-weight:700;color:#e6edf3;background:#161b22;border-left:2px solid #30363d;border-right:2px solid #30363d;padding:8px 16px;">' + row.strike.toFixed(0) + '</td>';
+                html += '<td style="text-align:left;color:#f85149;font-weight:600;padding:8px 16px;" ';
+                html += 'onclick="ocSelect(\\'' + row.pe_security_id + '\\',\\'PE\\',\\'' + expiry + '\\',' + row.strike + ',' + (row.pe_ltp || 0) + ')">';
+                html += peLtp + '</td>';
+                html += '</tr>';
+            });
+            body.innerHTML = html;
+        }
 
         function loadOptionChain(silent) {
             var sel = document.getElementById('oc-underlying');
@@ -2363,61 +2400,52 @@ DASHBOARD_HTML = """
             var expiry = document.getElementById('oc-expiry').value;
             if (!expiry) { initOptionChain(); return; }
 
+            // Skip if a previous silent refresh is still in-flight
+            if (silent && _ocRefreshing) return;
+
             var body = document.getElementById('oc-body');
             if (!silent) {
                 body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#484f58;padding:20px;">Loading...</td></tr>';
             }
 
+            _ocRefreshing = true;
             fetch('/api/option_chain/data?underlying=' + underlying + '&expiry=' + expiry)
                 .then(function(r){ return r.json(); })
                 .then(function(d) {
+                    _ocRefreshing = false;
                     if (d.error) {
                         if (!silent) body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f85149;padding:20px;">' + d.error + '</td></tr>';
                         return;
                     }
-                    var spot = d.spot || 0;
-                    _ocLotSize = d.lot_size || 75;
-                    var now = new Date();
-                    var timeStr = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0') + ':' + now.getSeconds().toString().padStart(2,'0');
-                    document.getElementById('oc-spot').textContent = 'Spot: \\u20B9' + (spot > 0 ? spot.toFixed(2) : '--') + '  |  Expiry: ' + expiry + '  |  Lot: ' + _ocLotSize + '  |  ' + timeStr;
-
-                    var chain = d.chain || [];
-                    _ocLastChain = chain;
-                    if (chain.length === 0) {
-                        body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#484f58;padding:20px;">No strikes found</td></tr>';
-                        return;
-                    }
-
-                    // ATM is the middle row (backend already trimmed to +/- 6)
-                    var atmIdx = Math.floor(chain.length / 2);
-
-                    var html = '';
-                    chain.forEach(function(row, i) {
-                        var isATM = (i === atmIdx);
-                        var rowStyle = isATM ? 'background:#1a2332;' : '';
-                        var ceLtp = row.ce_ltp ? row.ce_ltp.toFixed(2) : '-';
-                        var peLtp = row.pe_ltp ? row.pe_ltp.toFixed(2) : '-';
-
-                        html += '<tr style="cursor:pointer;' + rowStyle + '">';
-                        html += '<td style="text-align:right;color:#3fb950;font-weight:600;padding:8px 16px;" ';
-                        html += 'onclick="ocSelect(\\'' + row.ce_security_id + '\\',\\'CE\\',\\'' + expiry + '\\',' + row.strike + ',' + (row.ce_ltp || 0) + ')">';
-                        html += ceLtp + '</td>';
-                        html += '<td style="text-align:center;font-weight:700;color:#e6edf3;background:#161b22;border-left:2px solid #30363d;border-right:2px solid #30363d;padding:8px 16px;">' + row.strike.toFixed(0) + '</td>';
-                        html += '<td style="text-align:left;color:#f85149;font-weight:600;padding:8px 16px;" ';
-                        html += 'onclick="ocSelect(\\'' + row.pe_security_id + '\\',\\'PE\\',\\'' + expiry + '\\',' + row.strike + ',' + (row.pe_ltp || 0) + ')">';
-                        html += peLtp + '</td>';
-                        html += '</tr>';
-                    });
-                    body.innerHTML = html;
+                    renderOcChain(d, expiry);
                 })
                 .catch(function(e) {
+                    _ocRefreshing = false;
                     if (!silent) body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f85149;padding:20px;">Error: ' + e + '</td></tr>';
                 });
 
             // Start auto-refresh timer (5s) if not already running
-            if (!_ocAutoTimer) {
-                _ocAutoTimer = setInterval(function() { loadOptionChain(true); }, 5000);
+            startOcAutoRefresh();
+        }
+
+        function startOcAutoRefresh() {
+            if (_ocAutoTimer) return;  // Already running
+            _ocAutoTimer = setInterval(function() {
+                loadOptionChain(true);
+            }, 5000);
+            console.log('[OC] Auto-refresh started (5s interval)');
+            var statusEl = document.getElementById('oc-auto-status');
+            if (statusEl) statusEl.style.color = '#3fb950';
+        }
+
+        function stopOcAutoRefresh() {
+            if (_ocAutoTimer) {
+                clearInterval(_ocAutoTimer);
+                _ocAutoTimer = null;
+                console.log('[OC] Auto-refresh stopped');
             }
+            var statusEl = document.getElementById('oc-auto-status');
+            if (statusEl) statusEl.style.color = '#484f58';
         }
 
         function ocSelect(securityId, optType, expiry, strike, ltp) {
@@ -2574,13 +2602,12 @@ DASHBOARD_HTML = """
             var askRows = asks.slice().reverse(); // Show highest ask at top
             var bidRows = bids.slice(); // Best bid first
 
-            var html = '<table style="width:100%;border-collapse:collapse;font-size:11px;font-variant-numeric:tabular-nums;">';
+            var html = '<table style="width:100%;border-collapse:collapse;font-size:10px;font-variant-numeric:tabular-nums;table-layout:fixed;">';
             html += '<thead style="position:sticky;top:0;background:#0d1117;z-index:1;">';
             html += '<tr>';
-            html += '<th style="text-align:right;padding:4px 6px;color:#3fb950;font-size:10px;width:25%;">BID QTY</th>';
-            html += '<th style="text-align:center;padding:4px 6px;color:#e6edf3;font-size:10px;width:20%;">PRICE</th>';
-            html += '<th style="text-align:left;padding:4px 6px;color:#f85149;font-size:10px;width:25%;">ASK QTY</th>';
-            html += '<th style="text-align:center;padding:4px 6px;color:#8b949e;font-size:10px;width:15%;">ORDERS</th>';
+            html += '<th style="text-align:right;padding:2px 4px;color:#3fb950;font-size:9px;width:35%;">BID QTY</th>';
+            html += '<th style="text-align:center;padding:2px 4px;color:#e6edf3;font-size:9px;width:30%;">PRICE</th>';
+            html += '<th style="text-align:left;padding:2px 4px;color:#f85149;font-size:9px;width:35%;">ASK QTY</th>';
             html += '</tr></thead><tbody>';
 
             // Ask rows (sell side) - top of ladder
@@ -2589,14 +2616,13 @@ DASHBOARD_HTML = """
                 var isWall = sellWallPrice && a.price === sellWallPrice;
                 var rowStyle = 'cursor:pointer;' + (isWall ? 'background:rgba(248,81,73,0.1);' : '');
                 html += '<tr style="' + rowStyle + '" onclick="domSelectPrice(' + a.price + ')">';
-                html += '<td style="padding:3px 6px;text-align:right;color:#484f58;">-</td>';
-                html += '<td style="padding:3px 6px;text-align:center;color:#f85149;font-weight:' + (isWall ? '800' : '600') + ';cursor:pointer;">' + a.price.toFixed(2) + (isWall ? ' \\u25C0' : '') + '</td>';
-                html += '<td style="padding:3px 6px;text-align:left;">';
-                html += '<div style="display:flex;align-items:center;gap:4px;">';
-                html += '<div style="background:rgba(248,81,73,' + (isWall ? '0.45' : '0.25') + ');height:16px;width:' + pct + '%;min-width:2px;border-radius:2px;"></div>';
-                html += '<span style="color:#f85149;font-size:10px;white-space:nowrap;' + (isWall ? 'font-weight:700;' : '') + '">' + fmtQty(a.quantity) + '</span>';
+                html += '<td style="padding:1px 4px;text-align:right;color:#484f58;">-</td>';
+                html += '<td style="padding:1px 4px;text-align:center;color:#f85149;font-weight:' + (isWall ? '800' : '600') + ';cursor:pointer;font-size:9px;">' + a.price.toFixed(2) + (isWall ? ' \\u25C0' : '') + '</td>';
+                html += '<td style="padding:1px 4px;text-align:left;">';
+                html += '<div style="display:flex;align-items:center;gap:2px;">';
+                html += '<div style="background:rgba(248,81,73,' + (isWall ? '0.45' : '0.25') + ');height:12px;width:' + pct + '%;min-width:2px;border-radius:1px;"></div>';
+                html += '<span style="color:#f85149;font-size:9px;white-space:nowrap;' + (isWall ? 'font-weight:700;' : '') + '">' + fmtQty(a.quantity) + '</span>';
                 html += '</div></td>';
-                html += '<td style="padding:3px 6px;text-align:center;color:#484f58;font-size:10px;">' + a.orders + '</td>';
                 html += '</tr>';
             });
 
@@ -2604,7 +2630,7 @@ DASHBOARD_HTML = """
             if (bids.length && asks.length) {
                 var spread = (asks[0].price - bids[0].price).toFixed(2);
                 html += '<tr style="border-top:1px solid #30363d;border-bottom:1px solid #30363d;background:#161b22;">';
-                html += '<td colspan="4" style="padding:4px 6px;text-align:center;color:#8b949e;font-size:10px;">Spread: \\u20B9' + spread + '</td>';
+                html += '<td colspan="3" style="padding:2px 4px;text-align:center;color:#8b949e;font-size:9px;">Spread: \\u20B9' + spread + '</td>';
                 html += '</tr>';
             }
 
@@ -2614,14 +2640,13 @@ DASHBOARD_HTML = """
                 var isWall = buyWallPrice && b.price === buyWallPrice;
                 var rowStyle = 'cursor:pointer;' + (isWall ? 'background:rgba(63,185,80,0.1);' : '');
                 html += '<tr style="' + rowStyle + '" onclick="domSelectPrice(' + b.price + ')">';
-                html += '<td style="padding:3px 6px;text-align:right;">';
-                html += '<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;">';
-                html += '<span style="color:#3fb950;font-size:10px;white-space:nowrap;' + (isWall ? 'font-weight:700;' : '') + '">' + fmtQty(b.quantity) + '</span>';
-                html += '<div style="background:rgba(63,185,80,' + (isWall ? '0.45' : '0.25') + ');height:16px;width:' + pct + '%;min-width:2px;border-radius:2px;"></div>';
+                html += '<td style="padding:1px 4px;text-align:right;">';
+                html += '<div style="display:flex;align-items:center;justify-content:flex-end;gap:2px;">';
+                html += '<span style="color:#3fb950;font-size:9px;white-space:nowrap;' + (isWall ? 'font-weight:700;' : '') + '">' + fmtQty(b.quantity) + '</span>';
+                html += '<div style="background:rgba(63,185,80,' + (isWall ? '0.45' : '0.25') + ');height:12px;width:' + pct + '%;min-width:2px;border-radius:1px;"></div>';
                 html += '</div></td>';
-                html += '<td style="padding:3px 6px;text-align:center;color:#3fb950;font-weight:' + (isWall ? '800' : '600') + ';cursor:pointer;">' + (isWall ? '\\u25B6 ' : '') + b.price.toFixed(2) + '</td>';
-                html += '<td style="padding:3px 6px;text-align:left;color:#484f58;">-</td>';
-                html += '<td style="padding:3px 6px;text-align:center;color:#484f58;font-size:10px;">' + b.orders + '</td>';
+                html += '<td style="padding:1px 4px;text-align:center;color:#3fb950;font-weight:' + (isWall ? '800' : '600') + ';cursor:pointer;font-size:9px;">' + (isWall ? '\\u25B6 ' : '') + b.price.toFixed(2) + '</td>';
+                html += '<td style="padding:1px 4px;text-align:left;color:#484f58;">-</td>';
                 html += '</tr>';
             });
 
@@ -2976,6 +3001,11 @@ def api_option_chain_data():
         end = min(len(chain), atm_idx + 7)
         chain = chain[start:end]
 
+        # Log a summary for debugging auto-refresh
+        atm_ce = chain[len(chain)//2]["ce_ltp"] if chain else 0
+        atm_pe = chain[len(chain)//2]["pe_ltp"] if chain else 0
+        logger.info("OC response: spot=%.2f atm_ce=%.2f atm_pe=%.2f strikes=%d",
+                     spot, atm_ce, atm_pe, len(chain))
         return jsonify({"spot": spot, "chain": chain, "expiry": expiry, "lot_size": lot_size})
     except Exception as e:
         logger.error("Option chain error: %s", e)
