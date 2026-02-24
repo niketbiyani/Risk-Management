@@ -199,6 +199,33 @@ def run_full():
     pusher_thread = threading.Thread(target=status_pusher, daemon=True)
     pusher_thread.start()
 
+    # Initialize Fyers DOM Analyzer midnight cleanup if enabled
+    if Config.FYERS_ENABLED:
+        try:
+            from apscheduler.schedulers.background import BackgroundScheduler
+            from apscheduler.triggers.cron import CronTrigger
+            from fyers_database import revoke_all_fyers_tokens
+            from fyers_websocket import disable_websocket as fyers_disable_ws
+
+            def fyers_midnight_cleanup():
+                logger.info("[SEBI COMPLIANCE] Running Fyers midnight token cleanup")
+                count = revoke_all_fyers_tokens()
+                fyers_disable_ws()
+                logger.info("[SEBI COMPLIANCE] Revoked %d Fyers token(s)", count)
+
+            fyers_scheduler = BackgroundScheduler(daemon=True)
+            fyers_scheduler.add_job(
+                func=fyers_midnight_cleanup,
+                trigger=CronTrigger(hour=3, minute=0),
+                id='fyers_midnight_cleanup',
+                name='SEBI Compliance - Fyers Midnight Token Cleanup',
+                replace_existing=True
+            )
+            fyers_scheduler.start()
+            logger.info("Fyers midnight token cleanup scheduled for 3:00 AM daily")
+        except Exception as e:
+            logger.warning("Failed to set up Fyers scheduler: %s", e)
+
     logger.info("Dashboard starting on http://%s:%d", Config.DASHBOARD_HOST, Config.DASHBOARD_PORT)
 
     # Dashboard runs in main thread (Flask).
