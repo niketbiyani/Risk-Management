@@ -2446,10 +2446,14 @@ DASHBOARD_HTML = """
             _domCurrentSecurity = securityId;
             _domLastUpdate = Date.now();
             _domLastAnalysis = null;
+            console.log('[DOM] Subscribing:', securityId, exchangeSegment, symbol);
             document.getElementById('dom-instrument').textContent = symbol || ('Loading ' + securityId + '...');
             document.getElementById('dom-analysis').style.display = 'none';
             document.getElementById('dom-chart').innerHTML =
-                '<div style="color:#484f58;padding:30px;text-align:center;font-size:13px;">Connecting to depth feed...</div>';
+                '<div style="color:#484f58;padding:30px;text-align:center;font-size:13px;">' +
+                'Connecting to depth feed...' +
+                '<div style="margin-top:8px;font-size:11px;"><a href="/api/depth-diag" target="_blank" style="color:#58a6ff;">Run diagnostics</a></div>' +
+                '</div>';
             document.getElementById('dom-status').style.display = 'inline';
             document.getElementById('dom-close-btn').style.display = 'inline';
             document.getElementById('dom-status').textContent = 'LIVE';
@@ -2457,6 +2461,10 @@ DASHBOARD_HTML = """
             document.getElementById('dom-status').style.color = '#3fb950';
             if (socket) {
                 socket.emit('subscribe_depth', {security_id: securityId, exchange_segment: exchangeSegment});
+            } else {
+                console.error('[DOM] No socket connection!');
+                document.getElementById('dom-chart').innerHTML =
+                    '<div style="color:#f85149;padding:20px;text-align:center;">Socket not connected. Refresh the page.</div>';
             }
         }
 
@@ -2493,7 +2501,8 @@ DASHBOARD_HTML = """
         }, 1000);
 
         function setupDepthListener() {
-            if (!socket) return;
+            if (!socket) { console.error('[DOM] setupDepthListener: no socket'); return; }
+            console.log('[DOM] Setting up depth listeners');
             socket.on('depth_update', function(data) {
                 if (data.security_id && data.security_id !== _domCurrentSecurity) return;
                 _domLastUpdate = Date.now();
@@ -2502,15 +2511,26 @@ DASHBOARD_HTML = """
                 renderDepthAnalysis(_domLastAnalysis);
             });
             socket.on('depth_error', function(data) {
+                console.error('[DOM] depth_error:', data);
                 document.getElementById('dom-chart').innerHTML =
                     '<div style="color:#f85149;padding:20px;text-align:center;">' + (data.error || 'Depth error') + '</div>';
             });
             socket.on('depth_status', function(data) {
+                console.warn('[DOM] depth_status:', data);
                 if (data.status === 'no_data') {
                     document.getElementById('dom-chart').innerHTML =
                         '<div style="color:#d29922;padding:30px;text-align:center;font-size:13px;">' +
-                        'No depth data received \\u2014 market may be closed' +
+                        'No depth data received \u2014 market may be closed' +
                         '<div style="color:#484f58;font-size:11px;margin-top:6px;">Data will appear automatically when the market opens</div>' +
+                        '</div>';
+                } else if (data.status === 'connection_failed') {
+                    var reason = data.reason || 'unknown';
+                    document.getElementById('dom-chart').innerHTML =
+                        '<div style="color:#f85149;padding:30px;text-align:center;font-size:13px;">' +
+                        'Depth feed connection failed' +
+                        '<div style="color:#d29922;font-size:11px;margin-top:6px;">' + reason + '</div>' +
+                        '<div style="color:#484f58;font-size:10px;margin-top:4px;">Check Dhan depth API subscription and access token</div>' +
+                        '<div style="margin-top:8px;"><a href="/api/depth-diag" target="_blank" style="color:#58a6ff;font-size:11px;">Run diagnostics</a></div>' +
                         '</div>';
                 }
             });
@@ -3643,6 +3663,7 @@ def _depth_emit_loop():
     global _depth_timer_running
     _depth_timer_running = True
     no_data_notified = False
+    connection_notified = False
     loop_count = 0
     last_gen = _depth_subscribe_gen
     while _depth_timer_running and _depth_ws:
@@ -3650,11 +3671,13 @@ def _depth_emit_loop():
         if _depth_subscribe_gen != last_gen:
             last_gen = _depth_subscribe_gen
             no_data_notified = False
+            connection_notified = False
             loop_count = 0
         try:
             depth = _depth_ws.get_depth()
             if depth["bids"] or depth["asks"]:
                 no_data_notified = False
+                connection_notified = False
                 analysis = analyze_depth(depth["bids"], depth["asks"])
                 socketio.emit("depth_update", {
                     "bids": depth["bids"],
@@ -3662,13 +3685,36 @@ def _depth_emit_loop():
                     "analysis": analysis,
                     "security_id": depth.get("security_id"),
                 })
-            elif not no_data_notified and loop_count >= 10:
-                # ~5 seconds with no data — likely market closed
-                socketio.emit("depth_status", {
-                    "status": "no_data",
-                    "security_id": depth.get("security_id"),
-                })
-                no_data_notified = True
+            elif not no_data_notified and loop_count >= 20:
+                # ~10 seconds with no data
+                connected = depth.get("connected", False)
+                disconnect_reason = depth.get("disconnect_reason", "")
+                if disconnect_reason and not connection_notified:
+                    # Server sent a disconnect error
+                    socketio.emit("depth_status", {
+                        "status": "connection_failed",
+                        "reason": disconnect_reason,
+                        "security_id": depth.get("security_id"),
+                    })
+                    connection_notified = True
+                    logger.warning("Depth emit: server disconnected — %s", disconnect_reason)
+                elif not connected and not connection_notified:
+                    # WebSocket never connected or keeps disconnecting
+                    socketio.emit("depth_status", {
+                        "status": "connection_failed",
+                        "reason": "WebSocket connection failed",
+                        "security_id": depth.get("security_id"),
+                    })
+                    connection_notified = True
+                    logger.warning("Depth emit: WebSocket not connected after %d loops", loop_count)
+                elif connected:
+                    # Connected but no data — market likely closed
+                    socketio.emit("depth_status", {
+                        "status": "no_data",
+                        "security_id": depth.get("security_id"),
+                    })
+                    no_data_notified = True
+                    logger.info("Depth emit: connected but no data after %d loops", loop_count)
         except Exception as e:
             logger.error("Depth emit error: %s", e)
         loop_count += 1
@@ -3714,7 +3760,8 @@ def handle_subscribe_depth(data):
         t = threading.Thread(target=_depth_emit_loop, daemon=True)
         t.start()
 
-    logger.info("Depth subscribed: security_id=%s segment=%s", security_id, exchange_segment)
+    logger.info("Depth subscribed: security_id=%s segment=%s timer_running=%s",
+                security_id, exchange_segment, _depth_timer_running)
 
 
 @socketio.on("unsubscribe_depth")
@@ -3725,6 +3772,130 @@ def handle_unsubscribe_depth(data=None):
     if _depth_ws:
         _depth_ws.stop()
     logger.info("Depth unsubscribed")
+
+
+@app.route("/api/depth-diag")
+def api_depth_diag():
+    """Diagnostic endpoint: tests depth WebSocket connectivity step by step."""
+    import socket
+    import ssl
+    import urllib.parse
+
+    results = {"steps": [], "overall": "unknown"}
+
+    def step(name, ok, detail=""):
+        results["steps"].append({"name": name, "ok": ok, "detail": detail})
+        return ok
+
+    # Step 1: Check credentials
+    if not _monitor:
+        step("credentials", False, "Monitor not initialized — start the system first")
+        results["overall"] = "fail"
+        return jsonify(results)
+    token = _monitor.api.access_token
+    client_id = _monitor.api.client_id
+    step("credentials", True, f"client_id={client_id}, token_len={len(token) if token else 0}")
+
+    # Step 2: DNS resolution
+    host = "depth-api-feed.dhan.co"
+    try:
+        ip = socket.gethostbyname(host)
+        step("dns", True, f"{host} → {ip}")
+    except Exception as e:
+        step("dns", False, f"Cannot resolve {host}: {e}")
+        results["overall"] = "fail"
+        return jsonify(results)
+
+    # Step 3: TCP connection
+    try:
+        s = socket.create_connection((host, 443), timeout=5)
+        s.close()
+        step("tcp", True, f"Connected to {host}:443")
+    except Exception as e:
+        step("tcp", False, f"TCP connection failed: {e}")
+        results["overall"] = "fail"
+        return jsonify(results)
+
+    # Step 4: SSL handshake
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((host, 443), timeout=5) as raw:
+            with ctx.wrap_socket(raw, server_hostname=host) as ss:
+                cert = ss.getpeercert()
+                step("ssl", True, f"SSL OK, cert subject={cert.get('subject', 'N/A')}")
+    except Exception as e:
+        step("ssl", False, f"SSL handshake failed: {e}")
+        results["overall"] = "fail"
+        return jsonify(results)
+
+    # Step 5: Quick WebSocket connect test (5 second timeout)
+    import websocket as ws_lib
+    token_encoded = urllib.parse.quote(token, safe="")
+    client_encoded = urllib.parse.quote(client_id, safe="")
+    url = (f"wss://depth-api-feed.dhan.co/twentydepth"
+           f"?token={token_encoded}&clientId={client_encoded}&authType=2")
+
+    ws_result = {"opened": False, "messages": 0, "errors": [], "closed_reason": None}
+
+    def on_open(ws):
+        ws_result["opened"] = True
+        # Subscribe to NIFTY index (13) just to test
+        ws.send(json.dumps({
+            "RequestCode": 23,
+            "InstrumentCount": 1,
+            "InstrumentList": [{"ExchangeSegment": "IDX_I", "SecurityId": "13"}],
+        }))
+
+    def on_message(ws, msg):
+        ws_result["messages"] += 1
+        if isinstance(msg, (bytes, bytearray)):
+            import struct
+            if len(msg) >= 3:
+                feed_code = struct.unpack_from("<B", msg, 2)[0]
+                if feed_code == 50:  # Disconnect
+                    err_code = struct.unpack_from("<I", msg, 8)[0] if len(msg) >= 12 else 0
+                    err_msgs = {805: "max connections exceeded", 806: "subscribe to Data APIs required",
+                                807: "access token expired", 808: "invalid client ID", 809: "auth failed"}
+                    ws_result["errors"].append(f"Server disconnect: {err_msgs.get(err_code, f'code={err_code}')}")
+
+    def on_error(ws, err):
+        ws_result["errors"].append(str(err))
+
+    def on_close(ws, code, msg):
+        ws_result["closed_reason"] = f"code={code} msg={msg}"
+
+    try:
+        ctx = ssl.create_default_context()
+        test_ws = ws_lib.WebSocketApp(url, on_open=on_open, on_message=on_message,
+                                      on_error=on_error, on_close=on_close)
+        import threading
+        t = threading.Thread(target=lambda: test_ws.run_forever(
+            sslopt={"context": ctx}, ping_interval=0), daemon=True)
+        t.start()
+        t.join(timeout=5)
+        try:
+            test_ws.close()
+        except Exception:
+            pass
+
+        if ws_result["errors"]:
+            step("websocket", False, f"Errors: {ws_result['errors']}")
+        elif ws_result["opened"] and ws_result["messages"] > 0:
+            step("websocket", True,
+                 f"Connected OK, received {ws_result['messages']} messages in 5s")
+        elif ws_result["opened"]:
+            step("websocket", True,
+                 f"Connected OK, no data yet (market may be closed). close={ws_result['closed_reason']}")
+        else:
+            step("websocket", False,
+                 f"Did not connect in 5s. errors={ws_result['errors']}, close={ws_result['closed_reason']}")
+    except Exception as e:
+        step("websocket", False, f"Exception: {e}")
+
+    # Overall result
+    all_ok = all(s["ok"] for s in results["steps"])
+    results["overall"] = "pass" if all_ok else "fail"
+    return jsonify(results)
 
 
 def run_dashboard(monitor):

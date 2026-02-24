@@ -6,8 +6,10 @@ for the risk management system.
 
 import json
 import logging
+import ssl
 import struct
 import threading
+import urllib.parse
 from datetime import datetime
 from typing import Any
 
@@ -474,6 +476,8 @@ class DepthWebSocket:
         self._ws = None
         self._thread = None
         self._running = False
+        self._connected = False
+        self._disconnect_reason = ""
         self._security_id = None
         self._lock = threading.Lock()
         self._bids = []  # [{price, quantity, orders}, ...] up to 20
@@ -488,6 +492,8 @@ class DepthWebSocket:
         self.stop()
         self._security_id = str(security_id)
         self._running = True
+        self._connected = False
+        self._disconnect_reason = ""
         with self._lock:
             self._bids = []
             self._asks = []
@@ -501,12 +507,18 @@ class DepthWebSocket:
 
     def _run(self, security_id: str, exchange_segment: str):
         """WebSocket connection loop with auto-reconnect."""
+        token_encoded = urllib.parse.quote(self._token, safe="")
+        client_encoded = urllib.parse.quote(self._client_id, safe="")
         url = (
             f"{self.WS_URL}"
-            f"?token={self._token}"
-            f"&clientId={self._client_id}"
+            f"?token={token_encoded}"
+            f"&clientId={client_encoded}"
             f"&authType=2"
         )
+        # SSL context for environments where default certs may not work
+        ssl_context = ssl.create_default_context()
+        logger.info("Depth WS: connecting to %s (security=%s, segment=%s)",
+                     self.WS_URL, security_id, exchange_segment)
         while self._running:
             try:
                 self._ws = websocket.WebSocketApp(
@@ -516,9 +528,13 @@ class DepthWebSocket:
                     on_error=self._on_error,
                     on_close=self._on_close,
                 )
-                self._ws.run_forever(ping_interval=10, ping_timeout=30)
+                self._ws.run_forever(
+                    ping_interval=10,
+                    ping_timeout=30,
+                    sslopt={"context": ssl_context},
+                )
             except Exception as e:
-                logger.error("Depth WS run_forever error: %s", e)
+                logger.error("Depth WS run_forever error: %s", e, exc_info=True)
             if self._running:
                 import time
                 logger.info("Depth WS: reconnecting in 2s...")
@@ -537,11 +553,14 @@ class DepthWebSocket:
             ],
         })
         ws.send(payload)
-        logger.info("Depth WS: connected, subscribed to %s", security_id)
+        self._connected = True
+        logger.info("Depth WS: connected, sent subscription for %s (%s)",
+                     security_id, exchange_segment)
 
     def _on_message(self, ws, message):
         """Parse binary depth packets."""
         if not isinstance(message, (bytes, bytearray)):
+            logger.info("Depth WS: received text message: %s", str(message)[:500])
             return
 
         offset = 0
@@ -553,31 +572,53 @@ class DepthWebSocket:
             if remaining < self.HEADER_SIZE:
                 break
 
-            # Parse header (12 bytes, little-endian)
+            # Parse header (12 bytes, little-endian): <hBBiI
             header = data[offset:offset + self.HEADER_SIZE]
-            msg_len = struct.unpack_from("<H", header, 0)[0]
+            msg_len = struct.unpack_from("<h", header, 0)[0]
             feed_code = struct.unpack_from("<B", header, 2)[0]
-            # exchange_seg = struct.unpack_from("<B", header, 3)[0]
-            # sec_id = struct.unpack_from("<i", header, 4)[0]
-            # sequence = struct.unpack_from("<I", header, 8)[0]
 
             if feed_code == self.FEED_DISCONNECT:
-                logger.warning("Depth WS: server disconnect packet received")
-                offset += self.HEADER_SIZE
+                # Parse disconnect error code from header
+                err_code = struct.unpack_from("<I", header, 8)[0] if remaining >= 12 else 0
+                err_msgs = {
+                    805: "max active WS connections exceeded",
+                    806: "subscribe to Data APIs required",
+                    807: "access token expired",
+                    808: "invalid client ID",
+                    809: "authentication failed",
+                }
+                err_msg = err_msgs.get(err_code, f"code={err_code}")
+                self._disconnect_reason = err_msg
+                self._connected = False
+                logger.warning("Depth WS: server disconnect — %s", err_msg)
+                # Use msg_len if valid, otherwise skip header only
+                offset += max(msg_len, self.HEADER_SIZE) if msg_len > 0 else self.HEADER_SIZE
                 continue
 
-            # Expect 20 levels after header
-            packet_size = self.HEADER_SIZE + (self.NUM_LEVELS * self.LEVEL_SIZE)
-            if remaining < packet_size:
-                break
+            # Use msg_len from header (like Dhan's SDK) to determine packet size
+            if msg_len > 0 and offset + msg_len <= total_len:
+                packet_size = msg_len
+            else:
+                # Fallback to fixed size
+                packet_size = self.HEADER_SIZE + (self.NUM_LEVELS * self.LEVEL_SIZE)
+                if remaining < packet_size:
+                    break
 
+            if feed_code not in (self.FEED_BID, self.FEED_ASK):
+                # Unknown feed code, skip using msg_len
+                offset += packet_size
+                continue
+
+            # Parse depth levels from body (after 12-byte header)
+            body = data[offset + self.HEADER_SIZE:offset + packet_size]
             levels = []
-            level_offset = offset + self.HEADER_SIZE
             for i in range(self.NUM_LEVELS):
-                base = level_offset + (i * self.LEVEL_SIZE)
-                price = struct.unpack_from("<d", data, base)[0]
-                quantity = struct.unpack_from("<I", data, base + 8)[0]
-                orders = struct.unpack_from("<I", data, base + 12)[0]
+                base = i * self.LEVEL_SIZE
+                if base + self.LEVEL_SIZE > len(body):
+                    break
+                price = struct.unpack_from("<d", body, base)[0]
+                quantity = struct.unpack_from("<I", body, base + 8)[0]
+                orders = struct.unpack_from("<I", body, base + 12)[0]
                 if price > 0 or quantity > 0:
                     levels.append({
                         "price": round(price, 2),
@@ -594,10 +635,12 @@ class DepthWebSocket:
             offset += packet_size
 
     def _on_error(self, ws, error):
-        logger.error("Depth WS error: %s", error)
+        logger.error("Depth WS error: %s (%s)", error, type(error).__name__)
 
     def _on_close(self, ws, close_status_code, close_msg):
-        logger.info("Depth WS closed: code=%s msg=%s", close_status_code, close_msg)
+        self._connected = False
+        logger.warning("Depth WS closed: code=%s msg=%s (was_connected=%s)",
+                       close_status_code, close_msg, self._connected)
 
     def get_depth(self) -> dict:
         """Thread-safe read of current depth data."""
@@ -606,6 +649,8 @@ class DepthWebSocket:
                 "bids": list(self._bids),
                 "asks": list(self._asks),
                 "security_id": self._security_id,
+                "connected": self._connected,
+                "disconnect_reason": self._disconnect_reason,
             }
 
     def stop(self):
