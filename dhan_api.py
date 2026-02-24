@@ -539,8 +539,8 @@ class DepthWebSocket:
                     on_close=self._on_close,
                 )
                 self._ws.run_forever(
-                    ping_interval=10,
-                    ping_timeout=30,
+                    ping_interval=30,
+                    ping_timeout=10,
                     sslopt={"context": ssl_context},
                 )
             except Exception as e:
