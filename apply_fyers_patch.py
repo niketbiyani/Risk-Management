@@ -332,7 +332,130 @@ except ImportError as e:
     write_file("dashboard.py", content)
 
 
-def _get_dom_analyzer_html():
+def repair_dashboard():
+    """Fix known issues on already-patched dashboard.py files.
+
+    This runs AFTER patch_dashboard() and handles:
+    1. switchPage defined in wrong scope (move to early <script> block)
+    2. refreshToken missing timeout (add AbortController timeout)
+    """
+    content = read_file("dashboard.py")
+    if "FYERS_IMPORTS_OK" not in content:
+        return  # not patched yet, nothing to repair
+
+    fixed = []
+
+    # ── Fix 1: Ensure switchPage is in early <script> block ──
+    # If switchPage is missing entirely or is NOT in the early script block
+    # (before </head>), the onclick handlers can't find it.
+    head_end = content.find('</head>')
+    if head_end > 0:
+        early_section = content[:head_end]
+        if 'function switchPage' not in early_section:
+            # Remove switchPage from wherever it is in the main script (if present)
+            old_switchpage_block = """        // ── Page Tab Switching (Risk Dashboard vs DOM Analyzer) ──────
+        function switchPage(page) {
+            var risk = document.getElementById('page-risk');
+            var dom = document.getElementById('page-dom');
+            if (risk) risk.style.display = page === 'risk' ? '' : 'none';
+            if (dom) dom.style.display = page === 'dom' ? '' : 'none';
+            document.querySelectorAll('.page-tab').forEach(function(t) {
+                var isActive = t.getAttribute('data-page') === page;
+                t.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
+                t.style.color = isActive ? '#58a6ff' : '#8b949e';
+            });
+        }
+
+"""
+            if old_switchpage_block in content:
+                content = content.replace(old_switchpage_block, '', 1)
+
+            # Add it to the early <script> block
+            early_anchor = '    </script>\n</head>'
+            new_switchpage = """        function switchPage(page) {
+            var risk = document.getElementById('page-risk');
+            var dom = document.getElementById('page-dom');
+            if (risk) risk.style.display = page === 'risk' ? '' : 'none';
+            if (dom) dom.style.display = page === 'dom' ? '' : 'none';
+            document.querySelectorAll('.page-tab').forEach(function(t) {
+                var isActive = t.getAttribute('data-page') === page;
+                t.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
+                t.style.color = isActive ? '#58a6ff' : '#8b949e';
+            });
+        }
+"""
+            if early_anchor in content:
+                content = content.replace(early_anchor, new_switchpage + early_anchor, 1)
+                was_missing = 'function switchPage' not in content.replace(new_switchpage, '', 1)
+                if was_missing:
+                    fixed.append("Added missing switchPage() to early <script> block")
+                else:
+                    fixed.append("Moved switchPage() to early <script> block (global scope)")
+
+    # ── Fix 2: Add timeout to refreshToken fetch ──
+    old_refresh = "fetch('/api/token/refresh', {method:'POST', headers:{'Content-Type':'application/json'}})"
+    if old_refresh in content and 'AbortController' not in content:
+        new_refresh_fn = """        function refreshToken() {
+            var el = document.getElementById('token-status');
+            el.textContent = 'Refreshing...';
+            el.style.color = '#d29922';
+            el.style.borderColor = '#9e6a03';
+            el.style.background = '#3d2e00';
+            var controller = new AbortController();
+            var timeoutId = setTimeout(function() { controller.abort(); }, 30000);
+            fetch('/api/token/refresh', {method:'POST', headers:{'Content-Type':'application/json'}, signal: controller.signal})
+                .then(function(r){ clearTimeout(timeoutId); return r.json(); })
+                .then(function(d) {
+                    if (d.status === 'ok') {
+                        showToast('Token refreshed successfully!', 'success');
+                    } else {
+                        showToast('Token refresh failed: ' + (d.message || 'Unknown error'), 'error');
+                    }
+                    checkTokenStatus();
+                })
+                .catch(function(e) {
+                    clearTimeout(timeoutId);
+                    if (e.name === 'AbortError') {
+                        showToast('Token refresh timed out (30s)', 'error');
+                    } else {
+                        showToast('Token refresh request failed: ' + e, 'error');
+                    }
+                    checkTokenStatus();
+                });
+        }"""
+        old_refresh_fn = """        function refreshToken() {
+            var el = document.getElementById('token-status');
+            el.textContent = 'Refreshing...';
+            el.style.color = '#d29922';
+            el.style.borderColor = '#9e6a03';
+            el.style.background = '#3d2e00';
+            fetch('/api/token/refresh', {method:'POST', headers:{'Content-Type':'application/json'}})
+                .then(function(r){ return r.json(); })
+                .then(function(d) {
+                    if (d.status === 'ok') {
+                        showToast('Token refreshed successfully!', 'success');
+                        checkTokenStatus();
+                    } else {
+                        showToast('Token refresh failed: ' + (d.message || 'Unknown error'), 'error');
+                        checkTokenStatus();
+                    }
+                })
+                .catch(function(e) {
+                    showToast('Token refresh request failed: ' + e, 'error');
+                    checkTokenStatus();
+                });
+        }"""
+        if old_refresh_fn in content:
+            content = content.replace(old_refresh_fn, new_refresh_fn, 1)
+            fixed.append("Added 30s timeout to token refresh (prevents stuck Refreshing...)")
+
+    if fixed:
+        write_file("dashboard.py", content)
+        print("  [FIX] dashboard.py - Repaired " + str(len(fixed)) + " issues:")
+        for f in fixed:
+            print("         - " + f)
+    else:
+        print("  [OK]  dashboard.py - No repairs needed")
     """Return the DOM Analyzer HTML block."""
     return r"""    </div><!-- end page-risk -->
 
@@ -997,6 +1120,7 @@ def main():
     patch_main()
     patch_env_example()
     patch_dashboard()
+    repair_dashboard()
 
     print()
     print("=" * 50)
