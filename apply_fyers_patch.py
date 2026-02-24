@@ -153,14 +153,14 @@ FYERS_API_KEY_PEPPER=your_secure_pepper_key_change_in_production
 
 
 def patch_dashboard():
-    """Apply all Fyers changes to dashboard.py."""
+    """Apply all Fyers changes to dashboard.py.
+
+    Each change is individually idempotent — safe to re-run on partially
+    patched files. Missing changes will be applied, existing ones skipped.
+    """
     content = read_file("dashboard.py")
-
-    if "FYERS_IMPORTS_OK" in content:
-        print("  [SKIP] dashboard.py - Fyers changes already present")
-        return
-
     errors = []
+    applied = []
 
     # ── Change 1: Add redirect, session to flask imports ──
     old_import = "from flask import Flask, render_template_string, jsonify, request"
@@ -186,7 +186,9 @@ except ImportError as e:
 
 """
     anchor2 = "from config import Config\n"
-    if anchor2 in content:
+    if "FYERS_IMPORTS_OK" in content:
+        pass  # already present
+    elif anchor2 in content:
         content = content.replace(anchor2, anchor2 + fyers_imports, 1)
     else:
         errors.append("Could not find 'from config import Config' anchor")
@@ -232,18 +234,22 @@ except ImportError as e:
     # ── Change 4: Wrap existing content in page-risk div ──
     lockout_anchor = '    <div id="lockout-banner" class="lockout-banner">'
     page_risk_open = '    <!-- ═══ PAGE: RISK DASHBOARD ═══ -->\n    <div id="page-risk">\n'
-    if lockout_anchor in content and 'id="page-risk"' not in content:
+    if 'id="page-risk"' in content:
+        pass  # already present
+    elif lockout_anchor in content:
         content = content.replace(lockout_anchor, page_risk_open + lockout_anchor, 1)
     else:
-        errors.append("Could not find lockout-banner anchor or page-risk already exists")
+        errors.append("Could not find lockout-banner anchor for page-risk wrapper")
 
     # ── Change 5: Close page-risk + add DOM Analyzer HTML before footer ──
     dom_html = _get_dom_analyzer_html()
     footer_anchor = '    <div class="footer">'
-    if footer_anchor in content and '<div id="page-dom"' not in content:
+    if '<div id="page-dom"' in content:
+        pass  # already present
+    elif footer_anchor in content:
         content = content.replace(footer_anchor, dom_html + "\n" + footer_anchor, 1)
     else:
-        errors.append("Could not find footer anchor or DOM page already exists")
+        errors.append("Could not find footer anchor for DOM HTML")
 
     # ── Change 6: Add DOM analyzer JS before the final </script> ──
     dom_js = _get_dom_analyzer_js()
@@ -296,10 +302,10 @@ except ImportError as e:
     # ── Change 9: Add Fyers routes before SocketIO Emitters ──
     fyers_routes = _get_fyers_routes()
     emitters_anchor = "# ── SocketIO Emitters"
-    if emitters_anchor in content and "fyers/connect" not in content:
+    if "def fyers_connect()" in content:
+        pass  # routes already present
+    elif emitters_anchor in content:
         content = content.replace(emitters_anchor, fyers_routes + "\n" + emitters_anchor, 1)
-    elif "fyers/connect" in content:
-        pass
     else:
         errors.append("Could not find SocketIO Emitters anchor")
 
@@ -325,11 +331,17 @@ except ImportError as e:
     else:
         errors.append("Could not find socketio.run anchor in run_dashboard()")
 
+    # Check if anything actually changed
+    original = read_file("dashboard.py")
+    changed = content != original
+    if changed:
+        write_file("dashboard.py", content)
     if errors:
         print(f"  [WARN] dashboard.py - Applied with {len(errors)} warnings:")
         for e in errors:
             print(f"         - {e}")
-    write_file("dashboard.py", content)
+    elif changed:
+        print("  [OK]  dashboard.py - Fyers changes applied")
 
 
 def repair_dashboard():
@@ -454,8 +466,9 @@ def repair_dashboard():
         print("  [FIX] dashboard.py - Repaired " + str(len(fixed)) + " issues:")
         for f in fixed:
             print("         - " + f)
-    else:
-        print("  [OK]  dashboard.py - No repairs needed")
+
+
+def _get_dom_analyzer_html():
     """Return the DOM Analyzer HTML block."""
     return r"""    </div><!-- end page-risk -->
 
