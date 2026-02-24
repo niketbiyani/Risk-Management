@@ -205,7 +205,9 @@ except ImportError as e:
             </div>
             {% endif %}
         </div>'''
-    if old_header in content:
+    if "<!-- Main Page Tabs -->" in content:
+        pass  # already present
+    elif old_header in content:
         content = content.replace(old_header, new_header, 1)
     else:
         errors.append("Could not find <h1>Risk Management Dashboard</h1> anchor")
@@ -460,6 +462,31 @@ def repair_dashboard():
         if old_refresh_fn in content:
             content = content.replace(old_refresh_fn, new_refresh_fn, 1)
             fixed.append("Added 30s timeout to token refresh (prevents stuck Refreshing...)")
+
+    # ── Fix 3: Remove duplicate page tabs (double-wrapped header) ──
+    # If patcher ran twice without the idempotency guard, the <h1> got
+    # wrapped in nested flex divs with duplicate tab buttons.
+    import re as _re
+    dup_marker = '<!-- Main Page Tabs -->'
+    if content.count(dup_marker) > 1:
+        # Replace everything from the outermost flex wrapper through all
+        # duplicates with a single correct header block.
+        correct_header = '''<div style="display:flex;align-items:center;gap:24px;">
+            <h1>Risk Management Dashboard</h1>
+            <!-- Main Page Tabs -->
+            {% if fyers_enabled %}
+            <div style="display:flex;gap:0;margin-left:16px;">
+                <div class="page-tab active" data-page="risk" onclick="switchPage('risk')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>
+                <div class="page-tab" data-page="dom" onclick="switchPage('dom')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>
+            </div>
+            {% endif %}
+        </div>'''
+        # Match the outermost flex wrapper through all nested duplicates and closing divs
+        pattern = r'<div style="display:flex;align-items:center;gap:24px;">.*?<!-- Main Page Tabs -->.*?</div>\s*(?:\{%\s*endif\s*%\}\s*</div>\s*)+'
+        match = _re.search(pattern, content, _re.DOTALL)
+        if match:
+            content = content[:match.start()] + correct_header + content[match.end():]
+            fixed.append("Removed duplicate page tab navigation (double-wrapped header)")
 
     if fixed:
         write_file("dashboard.py", content)
