@@ -1,6 +1,6 @@
 # Trade Management Platform
 
-Prop-firm style risk management for Nifty options trading on Dhan. Enforces daily loss limits, profit locks, trailing drawdowns, and cooldowns with tamper-proof state that **cannot be overridden** once triggered.
+Prop-firm style risk management for Nifty options trading on Dhan. Enforces daily loss limits, profit locks, and trailing drawdowns with tamper-proof state that **cannot be overridden** once triggered.
 
 ## Features
 
@@ -8,8 +8,7 @@ Prop-firm style risk management for Nifty options trading on Dhan. Enforces dail
 - **Daily Max Loss Limit** — Locks out trading when total P&L hits the loss limit
 - **Profit Target** — Optional lockout when profit target is reached (prevent giving back gains)
 - **Profit Lock** — Once realized P&L crosses a threshold (e.g. ₹10,000), locks a percentage (e.g. 50%) as a floor. If P&L falls below the floor, account locks for the day
-- **Trailing Drawdown** — Tracks high water mark of realized P&L. If drawdown from HWM exceeds the configured percentage, locks out
-- **Cooldown Timer** — Enforced pause after losses or consecutive losing trades
+- **Trailing Drawdown** — Tracks high water mark of total P&L. If drawdown from HWM exceeds the configured percentage, locks out
 - **Max Open Positions** — Prevents overexposure
 - **Max Order Quantity** — Hard limit per order
 - **Max Single Trade Risk** — Blocks orders exceeding individual trade risk limit
@@ -32,9 +31,10 @@ When lockout triggers:
 ### Dashboard
 - Real-time web dashboard with live P&L, risk meters, and position tracking
 - Color-coded risk indicators (green → yellow → red)
-- Cooldown timer display
 - Lockout banner when account is locked
 - Spread visualization with leg-level details
+- Market Depth tab with 20-level order book, wall detection, and imbalance analysis
+- Live option chain with auto-refresh
 
 ## Setup (First Time Only)
 
@@ -69,10 +69,9 @@ MAX_SINGLE_TRADE_RISK=2000
 PROFIT_LOCK_THRESHOLD=10000
 PROFIT_LOCK_PERCENTAGE=50
 
-# Cooldown: 5 min after loss, 10 min after 3 consecutive losses
-COOLDOWN_AFTER_LOSS=300
-COOLDOWN_AFTER_CONSECUTIVE_LOSSES=600
-CONSECUTIVE_LOSS_COUNT=3
+# Trailing drawdown: lock out if drawdown exceeds 50% from high water mark
+TRAILING_DRAWDOWN_ENABLED=true
+TRAILING_DRAWDOWN_PERCENTAGE=50
 ```
 
 Get your Dhan access token from https://web.dhan.co (API section).
@@ -124,7 +123,7 @@ Dashboard opens at `http://localhost:5555`
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                    Web Dashboard (:5555)                  │
-│         Real-time P&L / Risk / Positions / Spreads       │
+│      Real-time P&L / Risk / Positions / Spreads / DOM    │
 └─────────────────────────┬────────────────────────────────┘
                           │ SocketIO
 ┌─────────────────────────▼────────────────────────────────┐
@@ -137,7 +136,7 @@ Dashboard opens at `http://localhost:5555`
 │  │• Loss limit │  │• SL/TP mgmt  │  │• Pre-trade checks ││
 │  │• Profit lock│  │• Spread      │  │• Risk estimation  ││
 │  │• Drawdown   │  │  detection   │  │• Order blocking   ││
-│  │• Cooldowns  │  │• Projections │  │                   ││
+│  │             │  │• Projections │  │                   ││
 │  └──────┬──────┘  └──────────────┘  └──────────────────┘│
 │         │                                                 │
 │  ┌──────▼──────┐                                         │
@@ -145,11 +144,11 @@ Dashboard opens at `http://localhost:5555`
 │  │ (AES-128)   │  ← Auto-resets daily                     │
 │  │             │  ← Cannot bypass lockout                  │
 │  └─────────────┘                                          │
-└─────────────────────────┬────────────────────────────────┘
-                          │ REST API
-┌─────────────────────────▼────────────────────────────────┐
+└────────────┬─────────────────────────┬───────────────────┘
+             │ REST API                │ WebSocket
+┌────────────▼─────────────────────────▼───────────────────┐
 │                      Dhan API                             │
-│  Orders / Positions / Kill Switch / Option Chain          │
+│  Orders / Positions / Kill Switch / Option Chain / Depth  │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -182,10 +181,10 @@ Timeline:
 Config: TRAILING_DRAWDOWN_PERCENTAGE=50, PROFIT_LOCK_THRESHOLD=10000
 
 Timeline:
-10:00  Realized P&L = ₹15,000 → HWM = ₹15,000, drawdown limit = ₹7,500
-10:30  Realized P&L = ₹12,000 → Drawdown = ₹3,000 (within limit)
-11:00  Realized P&L = ₹18,000 → HWM moves to ₹18,000, limit = ₹9,000
-11:30  Realized P&L = ₹8,500  → Drawdown = ₹9,500 > ₹9,000 → LOCKOUT
+10:00  Total P&L = ₹15,000 → HWM = ₹15,000, drawdown limit = ₹7,500
+10:30  Total P&L = ₹12,000 → Drawdown = ₹3,000 (within limit)
+11:00  Total P&L = ₹18,000 → HWM moves to ₹18,000, limit = ₹9,000
+11:30  Total P&L = ₹8,500  → Drawdown = ₹9,500 > ₹9,000 → LOCKOUT
 ```
 
 ## Dashboard API
@@ -200,6 +199,7 @@ The dashboard exposes REST endpoints for programmatic access:
 | `/api/exit` | POST | Exit single position |
 | `/api/exit_all` | POST | Emergency close all |
 | `/api/projections` | POST | Calculate option P&L projections |
+| `/api/depth-diag` | GET | Depth WebSocket diagnostics |
 
 ## Options-Specific Notes
 
@@ -237,16 +237,10 @@ from Dhan's WebSocket feed. Uses the same Dhan access token — no extra API key
 
 ### Setup
 
+The Market Depth tab is included by default. If it's not showing after an update, run the patcher:
+
 ```bash
-# Copy depth files from the feature branch
-git fetch origin claude/integrate-fyers-websockets-wDrFY
-git checkout origin/claude/integrate-fyers-websockets-wDrFY -- \
-  dhan_depth.py apply_depth_patch.py
-
-# Run the patcher (modifies dashboard.py, config.py)
 python3 apply_depth_patch.py
-
-# Restart
 bash stop.sh && bash start.sh
 ```
 
