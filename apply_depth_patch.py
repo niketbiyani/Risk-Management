@@ -135,9 +135,33 @@ def patch_dashboard():
 
     # ── Change 3: Add Market Depth tab button in header ──
     if 'data-page="depth"' not in content:
-        # Check if page tabs already exist (from Fyers patcher)
-        if "<!-- Main Page Tabs -->" in content:
-            # Tabs exist — add depth tab after "Risk Dashboard" tab
+        # Check if Fyers patcher already added tabs wrapped in {% if fyers_enabled %}
+        # The Fyers patcher creates tabs inside a fyers_enabled conditional — we need
+        # to restructure so each tab has its own conditional instead.
+        fyers_tab_block = """            <!-- Main Page Tabs -->
+            {% if fyers_enabled %}
+            <div style="display:flex;gap:0;margin-left:16px;">
+                <div class="page-tab active" data-page="risk" onclick="switchPage('risk')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>
+                <div class="page-tab" data-page="dom" onclick="switchPage('dom')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>
+            </div>
+            {% endif %}"""
+
+        correct_3tab_block = """            <!-- Main Page Tabs -->
+            <div style="display:flex;gap:0;margin-left:16px;">
+                <div class="page-tab active" data-page="risk" onclick="switchPage('risk')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>
+                {% if depth_enabled %}
+                <div class="page-tab" data-page="depth" onclick="switchPage('depth')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">Market Depth</div>
+                {% endif %}
+                {% if fyers_enabled %}
+                <div class="page-tab" data-page="dom" onclick="switchPage('dom')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>
+                {% endif %}
+            </div>"""
+
+        if fyers_tab_block in content:
+            # Fyers patcher applied — replace entire block with correct 3-tab version
+            content = content.replace(fyers_tab_block, correct_3tab_block, 1)
+        elif "<!-- Main Page Tabs -->" in content:
+            # Tabs exist in some other format — try inserting depth tab after Risk Dashboard
             old_risk_tab = '<div class="page-tab active" data-page="risk" onclick="switchPage(\'risk\')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>'
             depth_tab = '\n                {% if depth_enabled %}\n                <div class="page-tab" data-page="depth" onclick="switchPage(\'depth\')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">Market Depth</div>\n                {% endif %}'
             if old_risk_tab in content:

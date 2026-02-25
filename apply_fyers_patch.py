@@ -194,30 +194,43 @@ except ImportError as e:
         errors.append("Could not find 'from config import Config' anchor")
 
     # ── Change 3: Add page tab navigation to header ──
-    old_header = '<h1>Risk Management Dashboard</h1>'
-    new_header = '''<div style="display:flex;align-items:center;gap:24px;">
+    dom_tab_line = '                {% if fyers_enabled %}\n                <div class="page-tab" data-page="dom" onclick="switchPage(\'dom\')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>\n                {% endif %}'
+    if 'data-page="dom"' in content:
+        pass  # DOM Analyzer tab already present
+    elif "<!-- Main Page Tabs -->" in content:
+        # Tab system already exists (e.g. from depth patcher) — add DOM Analyzer tab
+        # Insert before the closing </div> of the tab container
+        tab_close = '            </div>\n        </div>'
+        if tab_close in content:
+            content = content.replace(tab_close, dom_tab_line + '\n' + tab_close, 1)
+        else:
+            errors.append("Could not find tab container closing div to insert DOM Analyzer tab")
+    else:
+        # No tabs at all — create full tab system with DOM Analyzer
+        old_header = '<h1>Risk Management Dashboard</h1>'
+        new_header = '''<div style="display:flex;align-items:center;gap:24px;">
             <h1>Risk Management Dashboard</h1>
             <!-- Main Page Tabs -->
-            {% if fyers_enabled %}
             <div style="display:flex;gap:0;margin-left:16px;">
                 <div class="page-tab active" data-page="risk" onclick="switchPage('risk')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>
+                {% if fyers_enabled %}
                 <div class="page-tab" data-page="dom" onclick="switchPage('dom')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>
+                {% endif %}
             </div>
-            {% endif %}
         </div>'''
-    if "<!-- Main Page Tabs -->" in content:
-        pass  # already present
-    elif old_header in content:
-        content = content.replace(old_header, new_header, 1)
-    else:
-        errors.append("Could not find <h1>Risk Management Dashboard</h1> anchor")
+        if old_header in content:
+            content = content.replace(old_header, new_header, 1)
+        else:
+            errors.append("Could not find <h1>Risk Management Dashboard</h1> anchor")
 
     # ── Change 3b: Add switchPage to early <script> block (global scope) ──
     early_script_anchor = "    </script>\n</head>"
     switchpage_fn = """        function switchPage(page) {
             var risk = document.getElementById('page-risk');
+            var depth = document.getElementById('page-depth');
             var dom = document.getElementById('page-dom');
             if (risk) risk.style.display = page === 'risk' ? '' : 'none';
+            if (depth) depth.style.display = page === 'depth' ? '' : 'none';
             if (dom) dom.style.display = page === 'dom' ? '' : 'none';
             document.querySelectorAll('.page-tab').forEach(function(t) {
                 var isActive = t.getAttribute('data-page') === page;
@@ -388,8 +401,10 @@ def repair_dashboard():
             early_anchor = '    </script>\n</head>'
             new_switchpage = """        function switchPage(page) {
             var risk = document.getElementById('page-risk');
+            var depth = document.getElementById('page-depth');
             var dom = document.getElementById('page-dom');
             if (risk) risk.style.display = page === 'risk' ? '' : 'none';
+            if (depth) depth.style.display = page === 'depth' ? '' : 'none';
             if (dom) dom.style.display = page === 'dom' ? '' : 'none';
             document.querySelectorAll('.page-tab').forEach(function(t) {
                 var isActive = t.getAttribute('data-page') === page;
@@ -469,24 +484,41 @@ def repair_dashboard():
     import re as _re
     dup_marker = '<!-- Main Page Tabs -->'
     if content.count(dup_marker) > 1:
-        # Replace everything from the outermost flex wrapper through all
-        # duplicates with a single correct header block.
-        correct_header = '''<div style="display:flex;align-items:center;gap:24px;">
-            <h1>Risk Management Dashboard</h1>
-            <!-- Main Page Tabs -->
-            {% if fyers_enabled %}
-            <div style="display:flex;gap:0;margin-left:16px;">
-                <div class="page-tab active" data-page="risk" onclick="switchPage('risk')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>
-                <div class="page-tab" data-page="dom" onclick="switchPage('dom')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>
-            </div>
-            {% endif %}
-        </div>'''
-        # Match the outermost flex wrapper through all nested duplicates and closing divs
+        # Build correct header with all present tabs individually conditional
+        has_depth = 'data-page="depth"' in content
+        has_dom = 'data-page="dom"' in content
+        tabs = '                <div class="page-tab active" data-page="risk" onclick="switchPage(\'risk\')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>\n'
+        if has_depth:
+            tabs += '                {% if depth_enabled %}\n                <div class="page-tab" data-page="depth" onclick="switchPage(\'depth\')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">Market Depth</div>\n                {% endif %}\n'
+        if has_dom:
+            tabs += '                {% if fyers_enabled %}\n                <div class="page-tab" data-page="dom" onclick="switchPage(\'dom\')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>\n                {% endif %}\n'
+        correct_header = '<div style="display:flex;align-items:center;gap:24px;">\n            <h1>Risk Management Dashboard</h1>\n            <!-- Main Page Tabs -->\n            <div style="display:flex;gap:0;margin-left:16px;">\n' + tabs + '            </div>\n        </div>'
         pattern = r'<div style="display:flex;align-items:center;gap:24px;">.*?<!-- Main Page Tabs -->.*?</div>\s*(?:\{%\s*endif\s*%\}\s*</div>\s*)+'
         match = _re.search(pattern, content, _re.DOTALL)
         if match:
             content = content[:match.start()] + correct_header + content[match.end():]
             fixed.append("Removed duplicate page tab navigation (double-wrapped header)")
+
+    # ── Fix 4: Fix {% if fyers_enabled %} wrapping ALL tabs ──
+    # Old patcher versions wrapped the entire tab container in fyers_enabled,
+    # which hides all tabs (including Risk Dashboard) when Fyers is disabled.
+    old_fyers_wrapped = """            <!-- Main Page Tabs -->
+            {% if fyers_enabled %}
+            <div style="display:flex;gap:0;margin-left:16px;">
+                <div class="page-tab active" data-page="risk" onclick="switchPage('risk')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>
+                <div class="page-tab" data-page="dom" onclick="switchPage('dom')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>
+            </div>
+            {% endif %}"""
+    correct_unwrapped = """            <!-- Main Page Tabs -->
+            <div style="display:flex;gap:0;margin-left:16px;">
+                <div class="page-tab active" data-page="risk" onclick="switchPage('risk')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>
+                {% if fyers_enabled %}
+                <div class="page-tab" data-page="dom" onclick="switchPage('dom')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>
+                {% endif %}
+            </div>"""
+    if old_fyers_wrapped in content:
+        content = content.replace(old_fyers_wrapped, correct_unwrapped, 1)
+        fixed.append("Fixed tabs: removed fyers_enabled wrapper from tab container")
 
     if fixed:
         write_file("dashboard.py", content)
