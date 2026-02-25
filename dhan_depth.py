@@ -34,7 +34,9 @@ FEED_CODE_ASK = 51
 
 # Analytics constants
 WALL_THRESHOLD_MULTIPLIER = 3.0   # Qty > 3x average = wall
+STACKING_THRESHOLD_MULTIPLIER = 2.5  # New qty > 2.5x avg = stacking
 DELTA_HISTORY_SIZE = 300          # ~5 min at 1s intervals
+TICK_HISTORY_SIZE = 600           # ~10 min of inferred trades
 ALERT_HISTORY_SIZE = 50           # Keep last 50 alerts
 
 
@@ -72,6 +74,10 @@ class DhanDepthAnalyzer:
         self._delta_history = deque(maxlen=DELTA_HISTORY_SIZE)
         self._cumulative_delta = 0.0
         self._alerts = deque(maxlen=ALERT_HISTORY_SIZE)
+
+        # Tick reconstruction (inferred trades from book changes)
+        self._tick_history = deque(maxlen=TICK_HISTORY_SIZE)
+        self._volume_profile = {}  # price -> {"buy": qty, "sell": qty}
 
         # Throttle SocketIO emissions to max ~4/sec
         self._last_emit = 0.0
@@ -191,6 +197,8 @@ class DhanDepthAnalyzer:
             "cumulative_delta": self._cumulative_delta,
             "delta_history": list(self._delta_history)[-60:],  # last 60 points
             "alerts": list(self._alerts)[-20:],  # last 20 alerts
+            "tick_history": list(self._tick_history)[-120:],  # last 120 ticks
+            "volume_profile": self._get_volume_profile(),
         }
 
     # ── WebSocket Client ─────────────────────────────────────────────
@@ -328,6 +336,7 @@ class DhanDepthAnalyzer:
 
         # Analytics
         self._update_delta()
+        self._reconstruct_ticks()
         self._track_wall_changes()
 
         # Throttled SocketIO emit
@@ -417,6 +426,53 @@ class DhanDepthAnalyzer:
             "d": round(self._cumulative_delta),
         })
 
+    def _reconstruct_ticks(self):
+        """Infer trades from order book changes at best bid/ask.
+
+        When qty at best bid drops (same price) → seller hit the bid.
+        When qty at best ask drops (same price) → buyer lifted the ask.
+        These are the same signals used for delta, but here we store
+        each inferred trade with price, volume, and aggressor side
+        for Bookmap-style visualization.
+        """
+        if not self._prev_bids or not self._prev_asks:
+            return
+
+        now = round(time.time(), 1)
+
+        # Seller hit bid: qty decreased at same best-bid price
+        if (self._prev_bids[0]["price"] > 0
+                and self._prev_bids[0]["price"] == self._bids[0]["price"]):
+            change = self._prev_bids[0]["qty"] - self._bids[0]["qty"]
+            if change > 0:
+                price = self._bids[0]["price"]
+                self._tick_history.append({
+                    "t": now, "p": price, "v": change, "s": "sell",
+                })
+                vp = self._volume_profile.setdefault(price, {"buy": 0, "sell": 0})
+                vp["sell"] += change
+
+        # Buyer lifted ask: qty decreased at same best-ask price
+        if (self._prev_asks[0]["price"] > 0
+                and self._prev_asks[0]["price"] == self._asks[0]["price"]):
+            change = self._prev_asks[0]["qty"] - self._asks[0]["qty"]
+            if change > 0:
+                price = self._asks[0]["price"]
+                self._tick_history.append({
+                    "t": now, "p": price, "v": change, "s": "buy",
+                })
+                vp = self._volume_profile.setdefault(price, {"buy": 0, "sell": 0})
+                vp["buy"] += change
+
+    def _get_volume_profile(self):
+        """Return volume profile sorted by price (for Bookmap sidebar)."""
+        if not self._volume_profile:
+            return []
+        return [
+            {"price": p, "buy": v["buy"], "sell": v["sell"]}
+            for p, v in sorted(self._volume_profile.items())
+        ]
+
     def _track_wall_changes(self):
         """Detect wall absorption and pulling."""
         if not self._prev_bids or not self._prev_asks:
@@ -465,6 +521,34 @@ class DhanDepthAnalyzer:
                     "side": side,
                     "price": prev["price"],
                     "qty": prev["qty"],
+                })
+
+        # Stacking detection: check for NEW walls that weren't walls before
+        curr_all_qty = [l["qty"] for l in curr_levels if l["qty"] > 0]
+        curr_avg = sum(curr_all_qty) / len(curr_all_qty) if curr_all_qty else 0
+
+        for curr in curr_levels:
+            if curr["price"] <= 0 or curr["qty"] <= 0:
+                continue
+            if curr_avg <= 0 or curr["qty"] <= curr_avg * STACKING_THRESHOLD_MULTIPLIER:
+                continue  # not large enough to be notable
+
+            # Find same price in previous levels
+            was_wall = False
+            for prev in prev_levels:
+                if prev["price"] == curr["price"]:
+                    if avg_qty > 0 and prev["qty"] > avg_qty * STACKING_THRESHOLD_MULTIPLIER:
+                        was_wall = True  # was already a wall
+                    break
+
+            if not was_wall:
+                self._alerts.appendleft({
+                    "time": now,
+                    "type": "stacking",
+                    "side": side,
+                    "price": curr["price"],
+                    "qty": curr["qty"],
+                    "strength": round(curr["qty"] / curr_avg, 1) if curr_avg > 0 else 0,
                 })
 
     # ── SocketIO Push ────────────────────────────────────────────────
