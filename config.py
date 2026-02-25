@@ -58,6 +58,9 @@ class Config:
     MARKET_CLOSE_HOUR: int = 15
     MARKET_CLOSE_MINUTE: int = 30
 
+    # Dhan Market Depth (20-level order book)
+    DEPTH_ENABLED: bool = os.getenv("DEPTH_ENABLED", "true").lower() == "true"
+
     # Fyers DOM Analyzer
     FYERS_API_KEY: str = os.getenv("FYERS_API_KEY", "")
     FYERS_API_SECRET: str = os.getenv("FYERS_API_SECRET", "")

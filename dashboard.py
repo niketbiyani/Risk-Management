@@ -31,9 +31,10 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = "risk-mgmt-dashboard"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
-# Reference to monitor instance and instrument cache (set at startup)
+# Reference to monitor instance, instrument cache, and depth analyzer (set at startup)
 _monitor = None
 _instrument_cache = None
+_depth_analyzer = None
 
 
 def set_monitor(monitor):
@@ -414,8 +415,10 @@ DASHBOARD_HTML = """
         }
         function switchPage(page) {
             var risk = document.getElementById('page-risk');
+            var depth = document.getElementById('page-depth');
             var dom = document.getElementById('page-dom');
             if (risk) risk.style.display = page === 'risk' ? '' : 'none';
+            if (depth) depth.style.display = page === 'depth' ? '' : 'none';
             if (dom) dom.style.display = page === 'dom' ? '' : 'none';
             document.querySelectorAll('.page-tab').forEach(function(t) {
                 var isActive = t.getAttribute('data-page') === page;
@@ -434,12 +437,15 @@ DASHBOARD_HTML = """
         <div style="display:flex;align-items:center;gap:24px;">
             <h1>Risk Management Dashboard</h1>
             <!-- Main Page Tabs -->
-            {% if fyers_enabled %}
             <div style="display:flex;gap:0;margin-left:16px;">
                 <div class="page-tab active" data-page="risk" onclick="switchPage('risk')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>
+                {% if depth_enabled %}
+                <div class="page-tab" data-page="depth" onclick="switchPage('depth')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">Market Depth</div>
+                {% endif %}
+                {% if fyers_enabled %}
                 <div class="page-tab" data-page="dom" onclick="switchPage('dom')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>
+                {% endif %}
             </div>
-            {% endif %}
         </div>
         <div style="display:flex;align-items:center;gap:16px;">
             <span id="market-time" style="color:#8b949e;font-size:13px;"></span>
@@ -856,6 +862,139 @@ DASHBOARD_HTML = """
 
     </div><!-- end page-risk -->
 
+    <!-- ═══ PAGE: MARKET DEPTH (Dhan 20-Level) ═══ -->
+    {% if depth_enabled %}
+    <div id="page-depth" style="display:none;">
+        <div style="padding:20px 24px;">
+
+            <!-- Connection Status Banner -->
+            <div id="depth-disconnected" style="background:#3d2e00;border:1px solid #9e6a03;color:#d29922;padding:10px 20px;border-radius:8px;margin-bottom:16px;font-size:13px;display:none;">
+                <strong>Disconnected</strong> — Depth feed not connected. Waiting for market hours or reconnecting...
+            </div>
+
+            <!-- Top Stats Row -->
+            <div class="grid grid-main" style="margin-bottom:16px;">
+                <div class="card">
+                    <h3>Symbol</h3>
+                    <div class="value" id="depth-symbol" style="font-size:20px;color:#58a6ff;">--</div>
+                    <div class="sub" id="depth-expiry">Expiry: --</div>
+                </div>
+                <div class="card">
+                    <h3>Last Price</h3>
+                    <div class="value" id="depth-ltp" style="font-size:22px;">--</div>
+                    <div class="sub" id="depth-spread">Spread: --</div>
+                </div>
+                <div class="card">
+                    <h3>Total Bid Qty</h3>
+                    <div class="value" id="depth-total-bid" style="font-size:22px;color:#3fb950;">--</div>
+                    <div class="sub">Buy side (all 20 levels)</div>
+                </div>
+                <div class="card">
+                    <h3>Total Ask Qty</h3>
+                    <div class="value" id="depth-total-ask" style="font-size:22px;color:#f85149;">--</div>
+                    <div class="sub">Sell side (all 20 levels)</div>
+                </div>
+            </div>
+
+            <!-- Imbalance Meters -->
+            <div class="card" style="margin-bottom:16px;padding:16px 20px;">
+                <h3 style="margin-bottom:12px;">Order Book Imbalance</h3>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+                    <div>
+                        <div style="font-size:11px;color:#8b949e;margin-bottom:6px;">5-Level Depth</div>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <div style="flex:1;height:10px;background:#21262d;border-radius:5px;overflow:hidden;position:relative;">
+                                <div id="imb5-bid-bar" style="position:absolute;right:50%;height:100%;background:#3fb950;border-radius:5px 0 0 5px;transition:width 0.3s;width:0;"></div>
+                                <div id="imb5-ask-bar" style="position:absolute;left:50%;height:100%;background:#f85149;border-radius:0 5px 5px 0;transition:width 0.3s;width:0;"></div>
+                                <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#484f58;"></div>
+                            </div>
+                            <span id="imb5-pct" style="font-size:13px;font-weight:600;min-width:70px;text-align:right;">--</span>
+                        </div>
+                        <div id="imb5-text" style="font-size:11px;color:#8b949e;margin-top:2px;">--</div>
+                    </div>
+                    <div>
+                        <div style="font-size:11px;color:#8b949e;margin-bottom:6px;">10-Level Depth</div>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <div style="flex:1;height:10px;background:#21262d;border-radius:5px;overflow:hidden;position:relative;">
+                                <div id="imb10-bid-bar" style="position:absolute;right:50%;height:100%;background:#3fb950;border-radius:5px 0 0 5px;transition:width 0.3s;width:0;"></div>
+                                <div id="imb10-ask-bar" style="position:absolute;left:50%;height:100%;background:#f85149;border-radius:0 5px 5px 0;transition:width 0.3s;width:0;"></div>
+                                <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#484f58;"></div>
+                            </div>
+                            <span id="imb10-pct" style="font-size:13px;font-weight:600;min-width:70px;text-align:right;">--</span>
+                        </div>
+                        <div id="imb10-text" style="font-size:11px;color:#8b949e;margin-top:2px;">--</div>
+                    </div>
+                    <div>
+                        <div style="font-size:11px;color:#8b949e;margin-bottom:6px;">20-Level Depth (Full)</div>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <div style="flex:1;height:10px;background:#21262d;border-radius:5px;overflow:hidden;position:relative;">
+                                <div id="imb20-bid-bar" style="position:absolute;right:50%;height:100%;background:#3fb950;border-radius:5px 0 0 5px;transition:width 0.3s;width:0;"></div>
+                                <div id="imb20-ask-bar" style="position:absolute;left:50%;height:100%;background:#f85149;border-radius:0 5px 5px 0;transition:width 0.3s;width:0;"></div>
+                                <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#484f58;"></div>
+                            </div>
+                            <span id="imb20-pct" style="font-size:13px;font-weight:600;min-width:70px;text-align:right;">--</span>
+                        </div>
+                        <div id="imb20-text" style="font-size:11px;color:#8b949e;margin-top:2px;">--</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Order Book (Bid / Ask side by side) -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;margin-bottom:16px;">
+                <!-- Bid Side -->
+                <div class="card" style="border-radius:12px 0 0 12px;border-right:none;padding:0;overflow:hidden;">
+                    <div style="padding:10px 16px;border-bottom:1px solid #21262d;display:flex;justify-content:space-between;align-items:center;">
+                        <h3 style="color:#3fb950;font-size:13px;">BID (Buyers)</h3>
+                        <span style="font-size:11px;color:#8b949e;">Orders | Qty | Price</span>
+                    </div>
+                    <div style="max-height:520px;overflow-y:auto;">
+                        <table style="width:100%;border-collapse:collapse;">
+                            <tbody id="depth-bid-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <!-- Ask Side -->
+                <div class="card" style="border-radius:0 12px 12px 0;padding:0;overflow:hidden;">
+                    <div style="padding:10px 16px;border-bottom:1px solid #21262d;display:flex;justify-content:space-between;align-items:center;">
+                        <h3 style="color:#f85149;font-size:13px;">ASK (Sellers)</h3>
+                        <span style="font-size:11px;color:#8b949e;">Price | Qty | Orders</span>
+                    </div>
+                    <div style="max-height:520px;overflow-y:auto;">
+                        <table style="width:100%;border-collapse:collapse;">
+                            <tbody id="depth-ask-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analytics Row: Delta + Alerts -->
+            <div class="grid grid-detail">
+                <!-- Cumulative Delta -->
+                <div class="card">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <h3>Cumulative Delta</h3>
+                        <div id="depth-delta-value" style="font-size:18px;font-weight:700;">--</div>
+                    </div>
+                    <div style="font-size:11px;color:#8b949e;margin-bottom:8px;">
+                        Rising = buyers aggressive | Falling = sellers aggressive
+                    </div>
+                    <canvas id="depth-delta-canvas" style="width:100%;height:100px;"></canvas>
+                </div>
+                <!-- Wall Alerts -->
+                <div class="card">
+                    <h3 style="margin-bottom:8px;">Wall Alerts</h3>
+                    <div style="font-size:11px;color:#8b949e;margin-bottom:8px;">
+                        Absorption = wall being eaten | Pull = wall removed before hit
+                    </div>
+                    <div id="depth-alerts-feed" style="max-height:180px;overflow-y:auto;font-size:12px;font-family:monospace;">
+                        <div style="color:#484f58;padding:4px 0;">Waiting for data...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- ═══ PAGE: DOM ANALYZER ═══ -->
     {% if fyers_enabled %}
     <div id="page-dom" style="display:none;">
@@ -1134,6 +1273,7 @@ DASHBOARD_HTML = """
             if (ok && typeof io !== 'undefined') {
                 try {
                     socket = io();
+                    window._socket = socket;
                     if (typeof setupSocketListeners === 'function') setupSocketListeners();
                     console.log('Socket.IO connected');
                 } catch(e) {
@@ -2943,6 +3083,267 @@ DASHBOARD_HTML = """
                 });
             }
         })();
+
+        // ═══ DHAN MARKET DEPTH (20-Level) ═══════════════════════════════
+        (function() {
+            if (!document.getElementById('page-depth')) return;
+
+            var depthData = null;
+            var deltaCanvas = document.getElementById('depth-delta-canvas');
+
+            // Format quantity with commas
+            function fmtQty(n) {
+                if (!n) return '0';
+                return n.toLocaleString('en-IN');
+            }
+
+            // Format price
+            function fmtPrice(p) {
+                if (!p) return '--';
+                return p.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            }
+
+            // Update imbalance bar (centered diverging bar)
+            function updateImbalance(prefix, data) {
+                var pctEl = document.getElementById(prefix + '-pct');
+                var textEl = document.getElementById(prefix + '-text');
+                var bidBar = document.getElementById(prefix + '-bid-bar');
+                var askBar = document.getElementById(prefix + '-ask-bar');
+                if (!pctEl || !data) return;
+
+                var pct = data.pct || 0;
+                var color = pct > 5 ? '#3fb950' : pct < -5 ? '#f85149' : '#8b949e';
+                pctEl.textContent = (pct > 0 ? '+' : '') + pct.toFixed(1) + '%';
+                pctEl.style.color = color;
+                textEl.textContent = data.text || '';
+
+                // Bars grow from center outward
+                var absPct = Math.min(Math.abs(pct), 100);
+                var barWidth = (absPct / 100) * 50; // max 50% of bar width
+                if (pct >= 0) {
+                    bidBar.style.width = barWidth + '%';
+                    askBar.style.width = '0%';
+                } else {
+                    bidBar.style.width = '0%';
+                    askBar.style.width = barWidth + '%';
+                }
+            }
+
+            // Render order book table for one side
+            function renderBookSide(bodyId, levels, side, walls) {
+                var body = document.getElementById(bodyId);
+                if (!body || !levels) return;
+
+                var maxQty = 0;
+                levels.forEach(function(l) { if (l.qty > maxQty) maxQty = l.qty; });
+
+                // Build wall price set for quick lookup
+                var wallPrices = {};
+                if (walls) {
+                    walls.forEach(function(w) { wallPrices[w.price] = w.strength; });
+                }
+
+                var html = '';
+                levels.forEach(function(l, i) {
+                    if (l.price <= 0) return;
+                    var intensity = maxQty > 0 ? (l.qty / maxQty) : 0;
+                    var isWall = wallPrices[l.price];
+                    var bgColor, wallStyle = '';
+
+                    if (side === 'bid') {
+                        bgColor = 'rgba(63,185,80,' + (0.05 + intensity * 0.25) + ')';
+                    } else {
+                        bgColor = 'rgba(248,81,73,' + (0.05 + intensity * 0.25) + ')';
+                    }
+
+                    if (isWall) {
+                        wallStyle = 'border-left:3px solid ' + (side === 'bid' ? '#3fb950' : '#f85149') + ';font-weight:700;';
+                        bgColor = side === 'bid'
+                            ? 'rgba(63,185,80,' + (0.15 + intensity * 0.35) + ')'
+                            : 'rgba(248,81,73,' + (0.15 + intensity * 0.35) + ')';
+                    }
+
+                    var tdStyle = 'padding:3px 8px;font-family:monospace;font-size:12px;white-space:nowrap;';
+                    var wallBadge = isWall ? ' <span style="font-size:10px;color:' + (side === 'bid' ? '#3fb950' : '#f85149') + ';">' + isWall.toFixed(1) + 'x</span>' : '';
+
+                    if (side === 'bid') {
+                        // Orders | Qty | Price (right-aligned, bid on left)
+                        html += '<tr style="background:' + bgColor + ';' + wallStyle + '">'
+                            + '<td style="' + tdStyle + 'text-align:right;color:#8b949e;">' + fmtQty(l.orders) + '</td>'
+                            + '<td style="' + tdStyle + 'text-align:right;color:#3fb950;">' + fmtQty(l.qty) + wallBadge + '</td>'
+                            + '<td style="' + tdStyle + 'text-align:right;color:#e0e6ed;">' + fmtPrice(l.price) + '</td>'
+                            + '</tr>';
+                    } else {
+                        // Price | Qty | Orders (left-aligned, ask on right)
+                        html += '<tr style="background:' + bgColor + ';' + wallStyle + '">'
+                            + '<td style="' + tdStyle + 'color:#e0e6ed;">' + fmtPrice(l.price) + '</td>'
+                            + '<td style="' + tdStyle + 'color:#f85149;">' + fmtQty(l.qty) + wallBadge + '</td>'
+                            + '<td style="' + tdStyle + 'color:#8b949e;">' + fmtQty(l.orders) + '</td>'
+                            + '</tr>';
+                    }
+                });
+
+                body.innerHTML = html;
+            }
+
+            // Draw cumulative delta chart on canvas
+            function drawDeltaChart(history) {
+                if (!deltaCanvas) return;
+                var ctx = deltaCanvas.getContext('2d');
+                var w = deltaCanvas.width = deltaCanvas.offsetWidth;
+                var h = deltaCanvas.height = 100;
+                ctx.clearRect(0, 0, w, h);
+
+                if (!history || history.length < 2) {
+                    ctx.fillStyle = '#484f58';
+                    ctx.font = '12px monospace';
+                    ctx.fillText('Collecting data...', 10, h / 2);
+                    return;
+                }
+
+                var values = history.map(function(d) { return d.d; });
+                var min = Math.min.apply(null, values);
+                var max = Math.max.apply(null, values);
+                var range = max - min;
+                if (range === 0) range = 1;
+
+                // Zero line
+                var zeroY = h - ((0 - min) / range) * (h - 10) - 5;
+                ctx.strokeStyle = '#30363d';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(0, zeroY);
+                ctx.lineTo(w, zeroY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Fill area
+                var lastVal = values[values.length - 1];
+                var fillColor = lastVal >= 0
+                    ? 'rgba(63,185,80,0.1)'
+                    : 'rgba(248,81,73,0.1)';
+                var lineColor = lastVal >= 0 ? '#3fb950' : '#f85149';
+
+                ctx.fillStyle = fillColor;
+                ctx.beginPath();
+                ctx.moveTo(0, zeroY);
+                for (var i = 0; i < values.length; i++) {
+                    var x = (i / (values.length - 1)) * w;
+                    var y = h - ((values[i] - min) / range) * (h - 10) - 5;
+                    ctx.lineTo(x, y);
+                }
+                ctx.lineTo(w, zeroY);
+                ctx.closePath();
+                ctx.fill();
+
+                // Line
+                ctx.strokeStyle = lineColor;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                for (var j = 0; j < values.length; j++) {
+                    var lx = (j / (values.length - 1)) * w;
+                    var ly = h - ((values[j] - min) / range) * (h - 10) - 5;
+                    if (j === 0) ctx.moveTo(lx, ly);
+                    else ctx.lineTo(lx, ly);
+                }
+                ctx.stroke();
+            }
+
+            // Render alerts feed
+            function renderAlerts(alerts) {
+                var feed = document.getElementById('depth-alerts-feed');
+                if (!feed || !alerts || alerts.length === 0) return;
+
+                var html = '';
+                var now = Date.now() / 1000;
+                alerts.forEach(function(a) {
+                    var ago = Math.round(now - a.time);
+                    var agoStr = ago < 60 ? ago + 's ago' : Math.round(ago / 60) + 'm ago';
+                    var icon, msg, color;
+
+                    if (a.type === 'absorption') {
+                        icon = a.side === 'bid' ? '&#9660;' : '&#9650;';
+                        color = a.side === 'bid' ? '#f85149' : '#3fb950';
+                        msg = (a.side === 'bid' ? 'Bid' : 'Ask') + ' wall at '
+                            + fmtPrice(a.price) + ' absorbed ' + a.pct + '% ('
+                            + fmtQty(a.prev_qty) + '&rarr;' + fmtQty(a.curr_qty) + ')';
+                    } else {
+                        icon = '&#10005;';
+                        color = '#d29922';
+                        msg = (a.side === 'bid' ? 'Bid' : 'Ask') + ' wall at '
+                            + fmtPrice(a.price) + ' pulled (' + fmtQty(a.qty) + ' removed)';
+                    }
+
+                    html += '<div style="padding:4px 0;border-bottom:1px solid #21262d;display:flex;justify-content:space-between;">'
+                        + '<span><span style="color:' + color + ';">' + icon + '</span> ' + msg + '</span>'
+                        + '<span style="color:#484f58;min-width:50px;text-align:right;">' + agoStr + '</span>'
+                        + '</div>';
+                });
+                feed.innerHTML = html;
+            }
+
+            // Main update handler
+            function handleDepthUpdate(data) {
+                depthData = data;
+
+                // Status banner
+                var banner = document.getElementById('depth-disconnected');
+                if (banner) banner.style.display = data.connected ? 'none' : 'block';
+
+                // Top stats
+                var symEl = document.getElementById('depth-symbol');
+                if (symEl) symEl.textContent = data.symbol || '--';
+                var expEl = document.getElementById('depth-expiry');
+                if (expEl) expEl.textContent = 'Expiry: ' + (data.expiry || '--') + '  |  Lot: ' + (data.lot_size || '--');
+                var ltpEl = document.getElementById('depth-ltp');
+                if (ltpEl) ltpEl.textContent = data.ltp ? fmtPrice(data.ltp) : '--';
+                var spreadEl = document.getElementById('depth-spread');
+                if (spreadEl) spreadEl.textContent = 'Spread: ' + (data.spread != null ? fmtPrice(data.spread) : '--');
+                var bidEl = document.getElementById('depth-total-bid');
+                if (bidEl) bidEl.textContent = fmtQty(data.total_bid_qty);
+                var askEl = document.getElementById('depth-total-ask');
+                if (askEl) askEl.textContent = fmtQty(data.total_ask_qty);
+
+                // Imbalance
+                updateImbalance('imb5', data.imbalance_5);
+                updateImbalance('imb10', data.imbalance_10);
+                updateImbalance('imb20', data.imbalance_20);
+
+                // Order book tables
+                var bidWalls = data.walls ? data.walls.bids : [];
+                var askWalls = data.walls ? data.walls.asks : [];
+                renderBookSide('depth-bid-body', data.bids, 'bid', bidWalls);
+                renderBookSide('depth-ask-body', data.asks, 'ask', askWalls);
+
+                // Delta
+                var deltaValEl = document.getElementById('depth-delta-value');
+                if (deltaValEl) {
+                    var d = data.cumulative_delta || 0;
+                    deltaValEl.textContent = (d >= 0 ? '+' : '') + fmtQty(Math.round(d));
+                    deltaValEl.style.color = d >= 0 ? '#3fb950' : '#f85149';
+                }
+                drawDeltaChart(data.delta_history);
+
+                // Alerts
+                renderAlerts(data.alerts);
+            }
+
+            // Listen for SocketIO depth updates
+            function waitForSocket() {
+                if (typeof io !== 'undefined' && window._socket) {
+                    window._socket.on('depth_update', handleDepthUpdate);
+                } else {
+                    setTimeout(waitForSocket, 500);
+                }
+            }
+            waitForSocket();
+
+            // Also fetch initial snapshot on page load
+            fetch('/api/depth/snapshot').then(function(r) { return r.json(); }).then(function(data) {
+                if (data && data.symbol) handleDepthUpdate(data);
+            }).catch(function() {});
+        })();
     </script>
 </body>
 </html>
@@ -2977,6 +3378,7 @@ def index():
         loss_limit_fmt=fmt_inr(Config.DAILY_MAX_LOSS),
         profit_lock_threshold_fmt=fmt_inr(Config.PROFIT_LOCK_THRESHOLD),
         profit_lock_distance_fmt=fmt_inr(Config.PROFIT_LOCK_THRESHOLD),
+        depth_enabled=Config.DEPTH_ENABLED,
         fyers_enabled=fyers_enabled,
         fyers_logged_in=fyers_logged_in,
         fyers_symbol=Config.FYERS_SYMBOL,
@@ -3740,6 +4142,9 @@ def api_update_token():
         if _monitor:
             _monitor.api.reinitialize(Config.DHAN_CLIENT_ID, new_token)
             Config.DHAN_ACCESS_TOKEN = new_token
+        # Reconnect depth WebSocket with new token
+        if _depth_analyzer:
+            _depth_analyzer.reconnect()
 
         logger.info("Access token updated successfully")
         return jsonify({"status": "ok", "message": "Token updated and API reinitialized"})
@@ -3789,6 +4194,9 @@ def api_token_refresh():
             from dotenv import load_dotenv
             load_dotenv(override=True)
             Config.DHAN_ACCESS_TOKEN = _os.getenv("DHAN_ACCESS_TOKEN", "")
+            # Reconnect depth WebSocket with new token
+            if _depth_analyzer:
+                _depth_analyzer.reconnect()
             return jsonify({"status": "ok", "message": "Token refreshed successfully"})
         else:
             return jsonify({"status": "error", "message": "Token refresh failed. Check server logs."}), 500
@@ -3838,6 +4246,33 @@ def api_cancel_pending_order():
     except Exception as e:
         logger.error("Order cancel error: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ── Dhan Market Depth Routes ──────────────────────────────────────
+
+@app.route("/api/depth/config")
+def depth_config():
+    """Get depth analyzer configuration."""
+    if _depth_analyzer:
+        return jsonify(_depth_analyzer.get_config())
+    return jsonify({"running": False, "connected": False})
+
+
+@app.route("/api/depth/snapshot")
+def depth_snapshot():
+    """Get current order book snapshot with analytics."""
+    if _depth_analyzer:
+        return jsonify(_depth_analyzer.get_snapshot())
+    return jsonify({"symbol": "", "connected": False, "bids": [], "asks": []})
+
+
+@app.route("/api/depth/reconnect", methods=["POST"])
+def depth_reconnect():
+    """Force reconnect the depth WebSocket (e.g. after token refresh)."""
+    if _depth_analyzer:
+        _depth_analyzer.reconnect()
+        return jsonify({"status": "ok", "message": "Reconnect requested"})
+    return jsonify({"status": "error", "message": "Depth analyzer not running"}), 400
 
 
 # ── Fyers DOM Analyzer Routes ─────────────────────────────────────
@@ -3930,7 +4365,18 @@ def emit_sl_tp_trigger(trigger_data: dict):
 
 def run_dashboard(monitor):
     """Start the dashboard web server."""
+    global _depth_analyzer
     set_monitor(monitor)
+
+    # Initialize Dhan Market Depth Analyzer if enabled
+    if Config.DEPTH_ENABLED:
+        try:
+            from dhan_depth import DhanDepthAnalyzer
+            _depth_analyzer = DhanDepthAnalyzer(socketio, _instrument_cache)
+            _depth_analyzer.start()
+            logger.info("Dhan Market Depth Analyzer initialized")
+        except Exception as e:
+            logger.error("Failed to initialize Dhan Depth Analyzer: %s", e)
 
     # Initialize Fyers DOM Analyzer if enabled
     if Config.FYERS_ENABLED and FYERS_IMPORTS_OK:
