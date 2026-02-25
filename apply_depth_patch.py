@@ -35,6 +35,188 @@ def write_file(name, content):
     print(f"  [OK] {name}")
 
 
+def cleanup_fyers():
+    """Remove all Fyers DOM Analyzer code if present.
+
+    The Fyers integration has been replaced by Dhan Market Depth.
+    This runs before depth patching to strip old Fyers code from
+    files that were previously patched with apply_fyers_patch.py.
+    """
+    import re
+
+    cleaned = []
+
+    # ── Clean dashboard.py ──
+    content = read_file("dashboard.py")
+    original = content
+
+    # 1. Remove Fyers imports block
+    fyers_import_block = re.compile(
+        r'\n?# Fyers DOM Analyzer imports \(conditional\)\n'
+        r'try:\n'
+        r'    from fyers_database import.*?\n'
+        r'    from fyers_auth import.*?\n'
+        r'    from fyers_websocket import.*?\n'
+        r'    FYERS_IMPORTS_OK = True\n'
+        r'except ImportError as e:\n'
+        r'    FYERS_IMPORTS_OK = False\n'
+        r'    logging\.getLogger\(__name__\)\.warning\("Fyers modules not available: %s", e\)\n',
+        re.DOTALL
+    )
+    content = fyers_import_block.sub('\n', content)
+
+    # 2. Remove ', redirect, session' from Flask import (if present)
+    content = content.replace(
+        'from flask import Flask, render_template_string, jsonify, request, redirect, session',
+        'from flask import Flask, render_template_string, jsonify, request'
+    )
+
+    # 3. Remove DOM Analyzer tab button from nav
+    dom_tab_patterns = [
+        # With newlines around it
+        '\n                {% if fyers_enabled %}\n                <div class="page-tab" data-page="dom" onclick="switchPage(\'dom\')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>\n                {% endif %}',
+    ]
+    for pat in dom_tab_patterns:
+        content = content.replace(pat, '')
+
+    # 4. Remove {% if fyers_enabled %} wrapper around ALL tabs (old patcher bug)
+    #    This replaces the wrapped block with an unwrapped version
+    fyers_wrapped_tabs = re.compile(
+        r'(            <!-- Main Page Tabs -->\n)'
+        r'            \{% if fyers_enabled %\}\n'
+        r'(            <div style="display:flex;gap:0;.*?>\n)'
+        r'(                <div class="page-tab active" data-page="risk".*?Risk Dashboard</div>\n)'
+        r'                <div class="page-tab" data-page="dom".*?DOM Analyzer</div>\n'
+        r'(            </div>\n)'
+        r'            \{% endif %\}',
+        re.DOTALL
+    )
+    match = fyers_wrapped_tabs.search(content)
+    if match:
+        content = content[:match.start()] + match.group(1) + match.group(2) + match.group(3) + match.group(4) + content[match.end():]
+
+    # 5. Remove 'page-dom' from switchPage function
+    content = content.replace("            var dom = document.getElementById('page-dom');\n", '')
+    content = content.replace("            if (dom) dom.style.display = page === 'dom' ? '' : 'none';\n", '')
+
+    # 6. Remove entire DOM Analyzer HTML section
+    dom_html_pattern = re.compile(
+        r'\n    <!-- ═══ PAGE: DOM ANALYZER ═══ -->.*?'
+        r'(?=\n    <div class="footer">|\n    <!-- ═══ PAGE: MARKET DEPTH)',
+        re.DOTALL
+    )
+    content = dom_html_pattern.sub('', content)
+
+    # 7. Remove DOM Analyzer JavaScript IIFE
+    #    It starts with the comment and ends with })();
+    dom_js_start = content.find('        // ── DOM Analyzer Frontend Logic')
+    if dom_js_start < 0:
+        # Try alternate: the IIFE with domLastPrice
+        dom_js_start = content.find('        (function() {\n            var domLastPrice = 0;')
+    if dom_js_start >= 0:
+        # Find the matching })(); ending
+        depth_marker = content.find('        // ═══ DHAN MARKET DEPTH', dom_js_start)
+        end_script = content.find('    </script>\n</body>', dom_js_start)
+        if depth_marker > dom_js_start:
+            # Remove up to the depth marker
+            content = content[:dom_js_start] + content[depth_marker:]
+        elif end_script > dom_js_start:
+            # Find the last })(); before </script>
+            search_area = content[dom_js_start:end_script]
+            last_iife_end = search_area.rfind('        })();')
+            if last_iife_end >= 0:
+                content = content[:dom_js_start] + content[dom_js_start + last_iife_end + len('        })();\n'):]
+
+    # 8. Remove Fyers Flask routes
+    fyers_routes_pattern = re.compile(
+        r'\n*# ── Fyers DOM Analyzer Routes[^\n]*\n'
+        r'.*?'
+        r'(?=\n# ── |ndef run_dashboard|ndef [a-z]|\nif __name__)',
+        re.DOTALL
+    )
+    content = fyers_routes_pattern.sub('\n', content)
+
+    # Also remove individual routes if the block pattern didn't match
+    for route in ['/fyers/connect', '/fyers/callback', '/fyers/logout', '/api/fyers/config']:
+        route_pattern = re.compile(
+            r'\n@app\.route\("' + re.escape(route) + r'".*?\n'
+            r'def \w+\(.*?\):\n'
+            r'    """.*?"""\n'
+            r'.*?(?=\n@app\.route|\ndef |\n# ──)',
+            re.DOTALL
+        )
+        content = route_pattern.sub('', content)
+
+    # 9. Remove Fyers state initialization in index()
+    fyers_state_pattern = re.compile(
+        r'\n    # Fyers DOM Analyzer state\n'
+        r'    fyers_enabled = Config\.FYERS_ENABLED.*?\n'
+        r'    fyers_logged_in = False\n'
+        r'    if fyers_enabled.*?fyers_disable_ws\(\)\n',
+        re.DOTALL
+    )
+    content = fyers_state_pattern.sub('\n', content)
+
+    # 10. Remove Fyers template variables from render_template_string
+    for var in ['fyers_enabled=', 'fyers_logged_in=', 'fyers_symbol=', 'fyers_lot_size=']:
+        var_pattern = re.compile(r'\n\s+' + re.escape(var) + r'[^\n]*,?')
+        content = var_pattern.sub('', content)
+
+    # 11. Remove Fyers init block in run_dashboard()
+    fyers_init_pattern = re.compile(
+        r'\n    # Initialize Fyers DOM Analyzer if enabled\n'
+        r'    if Config\.FYERS_ENABLED.*?\n'
+        r'        (?:try|except).*?'
+        r'(?=\n    socketio\.run|\n    # )',
+        re.DOTALL
+    )
+    content = fyers_init_pattern.sub('\n', content)
+
+    if content != original:
+        write_file("dashboard.py", content)
+        cleaned.append("dashboard.py — removed Fyers DOM Analyzer code")
+
+    # ── Clean config.py ──
+    content = read_file("config.py")
+    original = content
+    # Remove Fyers config block
+    fyers_config_pattern = re.compile(
+        r'\n    # Fyers DOM Analyzer\n'
+        r'(?:    FYERS_\w+[^\n]*\n)+',
+        re.DOTALL
+    )
+    content = fyers_config_pattern.sub('\n', content)
+    # Also remove individual FYERS_ lines that might not be under the comment
+    content = re.sub(r'    FYERS_\w+: \w+ = os\.getenv\([^\n]+\n', '', content)
+    if content != original:
+        write_file("config.py", content)
+        cleaned.append("config.py — removed FYERS_* config variables")
+
+    # ── Clean main.py ──
+    content = read_file("main.py")
+    original = content
+    fyers_scheduler_pattern = re.compile(
+        r'\n    # Initialize Fyers DOM Analyzer midnight cleanup.*?\n'
+        r'    if Config\.FYERS_ENABLED:\n'
+        r'        try:\n'
+        r'.*?'
+        r'        except.*?:.*?\n'
+        r'            logger\.warning\("Failed to set up Fyers scheduler.*?\n',
+        re.DOTALL
+    )
+    content = fyers_scheduler_pattern.sub('\n', content)
+    if content != original:
+        write_file("main.py", content)
+        cleaned.append("main.py — removed Fyers midnight scheduler")
+
+    if cleaned:
+        print("  [CLEANUP] Removed old Fyers DOM Analyzer:")
+        for c in cleaned:
+            print(f"         - {c}")
+    else:
+        print("  [SKIP] No Fyers code found to clean up")
+
+
 def patch_config():
     """Add DEPTH_ENABLED to config.py."""
     content = read_file("config.py")
@@ -730,6 +912,12 @@ def main():
         print("  git fetch origin claude/integrate-fyers-websockets-wDrFY")
         print("  git checkout origin/claude/integrate-fyers-websockets-wDrFY -- dhan_depth.py apply_depth_patch.py")
         sys.exit(1)
+
+    # First: clean up any old Fyers DOM Analyzer code
+    print("Checking for old Fyers code...")
+    print()
+    cleanup_fyers()
+    print()
 
     print("Patching files...")
     print()
