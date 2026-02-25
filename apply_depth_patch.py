@@ -44,16 +44,7 @@ def patch_config():
 
     depth_line = '    DEPTH_ENABLED: bool = os.getenv("DEPTH_ENABLED", "true").lower() == "true"\n'
 
-    # Try to insert before FYERS_ENABLED if it exists
-    if "FYERS_ENABLED" in content:
-        # Insert right before the Fyers section
-        anchor = "    # Fyers DOM Analyzer"
-        if anchor in content:
-            content = content.replace(anchor, "    # Dhan Market Depth\n" + depth_line + "\n" + anchor)
-            write_file("config.py", content)
-            return
-
-    # Otherwise insert before @classmethod validate
+    # Insert before @classmethod validate
     anchor = "    @classmethod\n    def validate(cls)"
     if anchor in content:
         content = content.replace(anchor, "    # Dhan Market Depth\n" + depth_line + "\n" + anchor)
@@ -91,36 +82,14 @@ def patch_dashboard():
         else:
             errors.append("Could not find _instrument_cache global for _depth_analyzer")
 
-    # ── Change 2: Update switchPage to include 'depth' page ──
-    if "function switchPage" in content and "page-depth" not in content.split("function switchPage")[1].split("}")[0]:
-        # switchPage exists but doesn't handle 'depth' — update it
-        old_switchpage = """        function switchPage(page) {
-            var risk = document.getElementById('page-risk');
-            var dom = document.getElementById('page-dom');
-            if (risk) risk.style.display = page === 'risk' ? '' : 'none';
-            if (dom) dom.style.display = page === 'dom' ? '' : 'none';"""
-        new_switchpage = """        function switchPage(page) {
-            var risk = document.getElementById('page-risk');
-            var depth = document.getElementById('page-depth');
-            var dom = document.getElementById('page-dom');
-            if (risk) risk.style.display = page === 'risk' ? '' : 'none';
-            if (depth) depth.style.display = page === 'depth' ? '' : 'none';
-            if (dom) dom.style.display = page === 'dom' ? '' : 'none';"""
-        if old_switchpage in content:
-            content = content.replace(old_switchpage, new_switchpage, 1)
-        else:
-            # Try alternate: maybe it's the version without dom
-            errors.append("switchPage exists but could not update to include depth (update manually)")
-    elif "function switchPage" not in content:
-        # switchPage doesn't exist at all — add it to early <script> block
+    # ── Change 2: Add switchPage to early <script> block ──
+    if "function switchPage" not in content:
         early_anchor = "    </script>\n</head>"
         switchpage_fn = """        function switchPage(page) {
             var risk = document.getElementById('page-risk');
             var depth = document.getElementById('page-depth');
-            var dom = document.getElementById('page-dom');
             if (risk) risk.style.display = page === 'risk' ? '' : 'none';
             if (depth) depth.style.display = page === 'depth' ? '' : 'none';
-            if (dom) dom.style.display = page === 'dom' ? '' : 'none';
             document.querySelectorAll('.page-tab').forEach(function(t) {
                 var isActive = t.getAttribute('data-page') === page;
                 t.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
@@ -132,36 +101,14 @@ def patch_dashboard():
             content = content.replace(early_anchor, switchpage_fn + early_anchor, 1)
         else:
             errors.append("Could not find early </script></head> anchor for switchPage")
+    elif "page-depth" not in content.split("function switchPage")[1].split("}")[0]:
+        # switchPage exists but doesn't handle 'depth' — add depth var/toggle
+        errors.append("switchPage exists but does not handle page-depth (update manually)")
 
     # ── Change 3: Add Market Depth tab button in header ──
     if 'data-page="depth"' not in content:
-        # Check if Fyers patcher already added tabs wrapped in {% if fyers_enabled %}
-        # The Fyers patcher creates tabs inside a fyers_enabled conditional — we need
-        # to restructure so each tab has its own conditional instead.
-        fyers_tab_block = """            <!-- Main Page Tabs -->
-            {% if fyers_enabled %}
-            <div style="display:flex;gap:0;margin-left:16px;">
-                <div class="page-tab active" data-page="risk" onclick="switchPage('risk')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>
-                <div class="page-tab" data-page="dom" onclick="switchPage('dom')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>
-            </div>
-            {% endif %}"""
-
-        correct_3tab_block = """            <!-- Main Page Tabs -->
-            <div style="display:flex;gap:0;margin-left:16px;">
-                <div class="page-tab active" data-page="risk" onclick="switchPage('risk')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>
-                {% if depth_enabled %}
-                <div class="page-tab" data-page="depth" onclick="switchPage('depth')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">Market Depth</div>
-                {% endif %}
-                {% if fyers_enabled %}
-                <div class="page-tab" data-page="dom" onclick="switchPage('dom')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">DOM Analyzer</div>
-                {% endif %}
-            </div>"""
-
-        if fyers_tab_block in content:
-            # Fyers patcher applied — replace entire block with correct 3-tab version
-            content = content.replace(fyers_tab_block, correct_3tab_block, 1)
-        elif "<!-- Main Page Tabs -->" in content:
-            # Tabs exist in some other format — try inserting depth tab after Risk Dashboard
+        if "<!-- Main Page Tabs -->" in content:
+            # Tabs already exist — add depth tab after Risk Dashboard
             old_risk_tab = '<div class="page-tab active" data-page="risk" onclick="switchPage(\'risk\')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;transition:all 0.2s;">Risk Dashboard</div>'
             depth_tab = '\n                {% if depth_enabled %}\n                <div class="page-tab" data-page="depth" onclick="switchPage(\'depth\')" style="padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;transition:all 0.2s;">Market Depth</div>\n                {% endif %}'
             if old_risk_tab in content:
@@ -198,26 +145,16 @@ def patch_dashboard():
     # ── Change 5: Close page-risk and add depth HTML before footer ──
     depth_html = _get_depth_html()
     if '<div id="page-depth"' not in content:
-        # Find where to close page-risk and add depth HTML
         footer_anchor = '    <div class="footer">'
 
         if 'id="page-risk"' in content and '</div><!-- end page-risk -->' not in content:
-            # page-risk was opened but not closed — close it before footer/dom
-            if '<div id="page-dom"' in content:
-                # DOM analyzer exists — insert before it
-                dom_anchor = '    <!-- ═══ PAGE: DOM ANALYZER ═══ -->'
-                if dom_anchor not in content:
-                    dom_anchor = '    {% if fyers_enabled %}\n    <div id="page-dom"'
-                if dom_anchor in content:
-                    content = content.replace(dom_anchor, "    </div><!-- end page-risk -->\n\n" + depth_html + "\n\n" + dom_anchor, 1)
-                else:
-                    errors.append("Could not find DOM anchor to insert depth HTML before")
-            elif footer_anchor in content:
+            # page-risk was opened but not closed — close it before footer
+            if footer_anchor in content:
                 content = content.replace(footer_anchor, "    </div><!-- end page-risk -->\n\n" + depth_html + "\n\n" + footer_anchor, 1)
             else:
-                errors.append("Could not find footer/dom anchor for depth HTML")
+                errors.append("Could not find footer anchor for depth HTML")
         elif '</div><!-- end page-risk -->' in content:
-            # page-risk already closed (by Fyers patcher) — insert depth after close
+            # page-risk already closed — insert depth after close
             close_anchor = '    </div><!-- end page-risk -->'
             content = content.replace(close_anchor, close_anchor + "\n\n" + depth_html, 1)
         elif footer_anchor in content:
@@ -228,13 +165,10 @@ def patch_dashboard():
     # ── Change 6: Add depth JavaScript before final </script> ──
     depth_js = _get_depth_js()
     if "depth_update" not in content or "handleDepthUpdate" not in content:
-        # Find the end of the main <script> block
-        # Try the exact pattern from Fyers-patched file
         final_script = '    </script>\n</body>\n</html>'
         if final_script in content:
             content = content.replace(final_script, "\n" + depth_js + "\n" + final_script, 1)
         else:
-            # Try without leading spaces
             final_script2 = '</script>\n</body>\n</html>'
             if final_script2 in content:
                 content = content.replace(final_script2, "\n" + depth_js + "\n" + final_script2, 1)
@@ -243,15 +177,9 @@ def patch_dashboard():
 
     # ── Change 7: Add depth_enabled to template variables ──
     if "depth_enabled=" not in content:
-        # Find the render_template_string call and add depth_enabled
-        # Look for the last template variable before the closing paren
         if "profit_lock_distance_fmt=" in content:
             anchor = "        profit_lock_distance_fmt=fmt_inr(Config.PROFIT_LOCK_THRESHOLD),"
-            if "fyers_enabled=" in content:
-                # Fyers vars already there — insert before fyers_enabled
-                fyers_anchor = "        fyers_enabled="
-                content = content.replace(fyers_anchor, "        depth_enabled=Config.DEPTH_ENABLED,\n" + fyers_anchor, 1)
-            elif anchor in content:
+            if anchor in content:
                 content = content.replace(anchor, anchor + "\n        depth_enabled=Config.DEPTH_ENABLED,", 1)
             else:
                 errors.append("Could not find template variable anchor for depth_enabled")
@@ -261,15 +189,10 @@ def patch_dashboard():
     # ── Change 8: Add depth API routes ──
     depth_routes = _get_depth_routes()
     if "/api/depth/config" not in content:
-        # Insert before SocketIO Emitters section
         emitters_anchor = "# ── SocketIO Emitters"
-        fyers_routes_anchor = "# ── Fyers DOM Analyzer Routes"
-        if fyers_routes_anchor in content:
-            content = content.replace(fyers_routes_anchor, depth_routes + "\n\n" + fyers_routes_anchor, 1)
-        elif emitters_anchor in content:
+        if emitters_anchor in content:
             content = content.replace(emitters_anchor, depth_routes + "\n\n" + emitters_anchor, 1)
         else:
-            # Insert before run_dashboard
             run_anchor = "def run_dashboard(monitor):"
             if run_anchor in content:
                 content = content.replace(run_anchor, depth_routes + "\n\n" + run_anchor, 1)
@@ -292,24 +215,17 @@ def patch_dashboard():
 """
         socketio_run_anchor = "    socketio.run(app,"
         if socketio_run_anchor in content:
-            # Also need 'global _depth_analyzer' in run_dashboard
             run_dashboard_anchor = "def run_dashboard(monitor):"
             if run_dashboard_anchor in content:
-                # Add global declaration
                 old_run = "def run_dashboard(monitor):\n"
                 next_line_match = content.split(old_run, 1)
                 if len(next_line_match) == 2:
                     after = next_line_match[1]
-                    # Check if 'global _depth_analyzer' already there
                     if "global _depth_analyzer" not in content:
-                        # Find the first line after def run_dashboard
                         first_line = after.split('\n')[0]
                         if first_line.strip().startswith('global'):
-                            # Append to existing global
                             content = content.replace(first_line, first_line.rstrip() + "\n    global _depth_analyzer", 1)
                         elif first_line.strip().startswith('"""'):
-                            # docstring — insert global after docstring
-                            # Find end of docstring
                             docstring_end = after.find('"""', after.find('"""') + 3)
                             if docstring_end >= 0:
                                 insert_point = after[docstring_end:].find('\n') + docstring_end + 1
@@ -329,7 +245,6 @@ def patch_dashboard():
         # Token update route
         token_update_marker = "Reinitialize the Dhan API client"
         if token_update_marker in content and "_depth_analyzer" not in content.split(token_update_marker)[1].split("def ")[0]:
-            # Find the reinitialize block and add depth reconnect after it
             reinit_anchor = '            _monitor.api.reinitialize(Config.DHAN_CLIENT_ID, new_token)\n            Config.DHAN_ACCESS_TOKEN = new_token'
             if reinit_anchor in content:
                 content = content.replace(
@@ -341,21 +256,15 @@ def patch_dashboard():
         # Token refresh route
         refresh_marker = "Token refreshed successfully"
         if refresh_marker in content:
-            refresh_block = content.split(refresh_marker)
-            if len(refresh_block) >= 2:
-                # Check if depth reconnect already exists near the refresh
-                before_refresh = refresh_block[0]
-                # Find the load_dotenv section in the refresh route
-                load_dotenv_in_refresh = 'Config.DHAN_ACCESS_TOKEN = _os.getenv("DHAN_ACCESS_TOKEN", "")'
-                if load_dotenv_in_refresh in content:
-                    sections = content.split(load_dotenv_in_refresh)
-                    for i in range(1, len(sections)):
-                        # Check if depth reconnect is already in the next few lines
-                        next_chunk = sections[i][:200]
-                        if '_depth_analyzer' not in next_chunk and 'return jsonify' in next_chunk:
-                            sections[i] = '\n            # Reconnect depth WebSocket with new token\n            if _depth_analyzer:\n                _depth_analyzer.reconnect()' + sections[i]
-                            content = load_dotenv_in_refresh.join(sections)
-                            break
+            load_dotenv_in_refresh = 'Config.DHAN_ACCESS_TOKEN = _os.getenv("DHAN_ACCESS_TOKEN", "")'
+            if load_dotenv_in_refresh in content:
+                sections = content.split(load_dotenv_in_refresh)
+                for i in range(1, len(sections)):
+                    next_chunk = sections[i][:200]
+                    if '_depth_analyzer' not in next_chunk and 'return jsonify' in next_chunk:
+                        sections[i] = '\n            # Reconnect depth WebSocket with new token\n            if _depth_analyzer:\n                _depth_analyzer.reconnect()' + sections[i]
+                        content = load_dotenv_in_refresh.join(sections)
+                        break
 
     # Write result
     original = read_file("dashboard.py")

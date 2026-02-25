@@ -6,11 +6,9 @@ work on this project without needing the previous conversation history.
 ## Project Overview
 
 **Trade Management Platform** — A prop-firm style risk management system for
-Nifty options trading on Dhan (primary broker). Enforces daily loss limits,
-profit locks, trailing drawdowns, and cooldowns with tamper-proof encrypted
-state. Optionally integrates Fyers DOM Analyzer for real-time 50-level market
-depth, and Dhan Market Depth for native 20-level depth with wall/absorption
-analytics.
+Nifty options trading on Dhan broker. Enforces daily loss limits, profit locks,
+trailing drawdowns, and cooldowns with tamper-proof encrypted state. Includes
+Dhan Market Depth for real-time 20-level depth with wall/absorption analytics.
 
 **Owner/User:** Niket Biyani
 **Deployment:** VPS (manual + systemd), accessed via web dashboard
@@ -24,15 +22,15 @@ analytics.
 
 - **Remote:** `origin` (GitHub)
 - **Active development branch:** `claude/integrate-fyers-websockets-wDrFY`
-  - This branch contains ALL Fyers + Dhan Depth features, patchers, and new files
+  - This branch contains ALL Dhan Depth features, patcher, and new files
   - The `dashboard.py` on this branch is the "fully patched" reference version
-    (has Fyers DOM + Dhan Depth already integrated)
+    (has Dhan Depth already integrated)
 - **User's VPS** runs `master` branch with local commits not on the remote
-  - The user pulls new files from the feature branch and applies patchers
+  - The user pulls new files from the feature branch and applies the patcher
   - See "Deployment Workflow" section below
 
 **Important:** Always develop on `claude/integrate-fyers-websockets-wDrFY`.
-Never push to `master`. The user merges manually on their VPS via patchers.
+Never push to `master`. The user merges manually on their VPS via the patcher.
 
 ---
 
@@ -44,7 +42,7 @@ Risk-Management/
 ├── CORE APPLICATION
 │   ├── main.py                 # Entry point. Starts monitor thread + Flask dashboard
 │   ├── config.py               # All settings from .env (typed, with defaults)
-│   ├── dashboard.py            # Flask web UI (~4000+ lines). SocketIO real-time updates
+│   ├── dashboard.py            # Flask web UI (~3500+ lines). SocketIO real-time updates
 │   │                           # Contains ALL HTML/CSS/JS inline as a Python string
 │   │                           # (DASHBOARD_HTML template + Flask routes)
 │   └── .env.example            # Template for environment variables
@@ -72,14 +70,6 @@ Risk-Management/
 │   │                           # cumulative delta, order book imbalance
 │   └── apply_depth_patch.py    # Patcher: adds Dhan depth to base dashboard.py
 │
-├── FYERS DOM ANALYZER (OPTIONAL — enabled by FYERS_ENABLED=true in .env)
-│   ├── fyers_auth.py           # OAuth 2.0 flow with Fyers API
-│   ├── fyers_database.py       # Encrypted token storage (SQLAlchemy + Fernet)
-│   ├── fyers_websocket.py      # Real-time 50-level order book via WebSocket
-│   ├── msg.proto               # Protobuf schema for Fyers TBT data
-│   ├── msg_pb2.py              # Compiled protobuf (DO NOT edit, regenerate from .proto)
-│   └── apply_fyers_patch.py    # Patcher: adds Fyers to base dashboard.py
-│
 ├── STARTUP & SERVICE
 │   ├── start.sh                # Launch in background, health check, PID tracking
 │   ├── stop.sh                 # Graceful shutdown
@@ -105,19 +95,19 @@ The dashboard is a **single-file Flask app** with an inline HTML template
 (`DASHBOARD_HTML` — a large triple-quoted Python string). It contains:
 
 - **HTML/CSS** for the entire UI (risk meters, positions, spreads, option chain,
-  order placement, trade journal, Market Depth tab, DOM Analyzer tab)
+  order placement, trade journal, Market Depth tab)
 - **JavaScript** inline in `<script>` blocks:
   - First `<script>` in `<head>`: Global functions (switchOrderTab,
     switchJournalTab, switchPage) — must be globally accessible for onclick handlers
   - Second `<script>` before `</body>`: CDN loaders (Socket.IO, Chart.js),
-    all application logic (polling, SL/TP, option chain, depth handler, DOM analyzer)
+    all application logic (polling, SL/TP, option chain, depth handler)
 - **Flask routes** for REST API endpoints
 - **SocketIO** for real-time push updates
 
 ### Important: Two `<script>` blocks
 
 1. **Early block (in `<head>`)** — tab switching functions defined here so they're
-   globally available for `onclick="switchPage('dom')"` etc. These MUST stay
+   globally available for `onclick="switchPage('depth')"` etc. These MUST stay
    in the early block or onclick handlers can't find them.
 
 2. **Main block (before `</body>`)** — all app logic, event handlers, API calls.
@@ -125,15 +115,14 @@ The dashboard is a **single-file Flask app** with an inline HTML template
 
 ### Dashboard Page Tab System
 
-The dashboard has up to 3 pages/tabs, controlled by `switchPage()`:
+The dashboard has 2 pages/tabs, controlled by `switchPage()`:
 
 | Tab | div ID | Condition | Source |
 |-----|--------|-----------|--------|
 | Risk Dashboard | `page-risk` | Always shown | Base dashboard |
 | Market Depth | `page-depth` | `{% if depth_enabled %}` | Dhan depth patcher |
-| DOM Analyzer | `page-dom` | `{% if fyers_enabled %}` | Fyers patcher |
 
-The tab navigation HTML (in the header) must have this structure:
+The tab navigation HTML (in the header):
 ```html
 <!-- Main Page Tabs -->
 <div style="display:flex;gap:0;margin-left:16px;">
@@ -141,14 +130,8 @@ The tab navigation HTML (in the header) must have this structure:
     {% if depth_enabled %}
     <div class="page-tab" data-page="depth" ...>Market Depth</div>
     {% endif %}
-    {% if fyers_enabled %}
-    <div class="page-tab" data-page="dom" ...>DOM Analyzer</div>
-    {% endif %}
 </div>
 ```
-
-**Critical:** The tab container `<div>` must NOT be inside `{% if fyers_enabled %}`.
-Each individual tab has its own conditional. The Risk Dashboard tab is always visible.
 
 ---
 
@@ -205,125 +188,43 @@ Market Depth tab: bids/asks table, imbalance bars, delta chart, wall alerts
 
 ---
 
-## Fyers Integration Architecture
-
-The Fyers DOM Analyzer is an **optional addon** that adds a third tab to the
-dashboard. It's integrated via `apply_fyers_patch.py` — a patcher that modifies
-the base dashboard.py to add Fyers support without merge conflicts.
-
-### How the Fyers Patcher Works
-
-`apply_fyers_patch.py` modifies 5 files:
-1. **requirements.txt** — adds websockets, protobuf, argon2-cffi, sqlalchemy
-2. **config.py** — adds FYERS_ENABLED, FYERS_API_KEY, etc.
-3. **main.py** — adds Fyers midnight cleanup scheduler
-4. **.env.example** — adds Fyers configuration section
-5. **dashboard.py** — adds:
-   - Fyers conditional imports
-   - Page tab navigation (Risk Dashboard / DOM Analyzer tabs)
-   - switchPage() in early `<script>` block
-   - page-risk wrapper div
-   - DOM Analyzer HTML (page-dom div)
-   - DOM Analyzer JavaScript
-   - Fyers Flask routes (/fyers/connect, /fyers/callback, /fyers/logout, etc.)
-   - Fyers state in index() template variables
-
-The patcher is **idempotent** (safe to run multiple times) and includes a
-**repair function** that fixes known issues on already-patched files.
-
-### Fyers Data Flow
-
-```
-Fyers OAuth Login ──→ fyers_auth.py ──→ access_token stored in fyers_database.py
-                                                    │
-                                                    ▼
-dashboard.py ────→ fyers_websocket.py ────→ Fyers WebSocket (wss://rtsocket-api.fyers.in)
-      │                    │
-      │                    │ protobuf messages (msg_pb2.py)
-      │                    ▼
-      │           50-level order book maintained in memory
-      │                    │
-      │                    │ SocketIO emit('dom_update', data)
-      ◄────────────────────┘
-      │
-      ▼
-DOM Analyzer tab shows: bids/asks, imbalance %, spread, LTP
-```
-
----
-
-## How the Patchers Work Together
-
-### Patcher Execution Order on VPS
-
-The user runs BOTH patchers on their VPS. The **intended order** is:
-1. `python3 apply_fyers_patch.py` — adds Fyers tabs + DOM page
-2. `python3 apply_depth_patch.py` — adds depth tab + depth page
-
-### How the Depth Patcher Handles Fyers-Patched Files
+## How the Depth Patcher Works
 
 `apply_depth_patch.py` modifies 2 files:
 1. **config.py** — adds `DEPTH_ENABLED` (defaults to `true`)
 2. **dashboard.py** — adds:
    - `_depth_analyzer` global variable
-   - Updates `switchPage()` to handle `page-depth`
-   - Adds Market Depth tab button in header navigation
+   - `switchPage()` in early `<script>` block (if not present)
+   - Market Depth tab button in header navigation
    - Wraps existing content in `page-risk` div (if not already done)
-   - Adds Market Depth HTML (`page-depth` div)
-   - Adds depth JavaScript (handles `depth_update` SocketIO events)
-   - Adds `depth_enabled` template variable
-   - Adds depth Flask routes (`/api/depth/config`, `/api/depth/snapshot`, `/api/depth/reconnect`)
-   - Adds `DhanDepthAnalyzer` init in `run_dashboard()`
-   - Adds depth reconnect on token update/refresh
+   - Market Depth HTML (`page-depth` div)
+   - Depth JavaScript (handles `depth_update` SocketIO events)
+   - `depth_enabled` template variable
+   - Depth Flask routes (`/api/depth/config`, `/api/depth/snapshot`, `/api/depth/reconnect`)
+   - `DhanDepthAnalyzer` init in `run_dashboard()`
+   - Depth reconnect on token update/refresh
 
-### Critical: Tab Structure When Both Patchers Applied
-
-When the Fyers patcher runs first, it wraps tabs in `{% if fyers_enabled %}`.
-The depth patcher MUST restructure this so each tab has its own conditional:
-
-**Fyers patcher creates:**
-```html
-{% if fyers_enabled %}
-<div style="display:flex;gap:0;margin-left:16px;">
-    <div ...>Risk Dashboard</div>
-    <div ...>DOM Analyzer</div>
-</div>
-{% endif %}
-```
-
-**Depth patcher must transform to:**
-```html
-<div style="display:flex;gap:0;margin-left:16px;">
-    <div ...>Risk Dashboard</div>
-    {% if depth_enabled %}<div ...>Market Depth</div>{% endif %}
-    {% if fyers_enabled %}<div ...>DOM Analyzer</div>{% endif %}
-</div>
-```
-
-If the depth patcher only inserts a tab without restructuring, the Market Depth
-tab ends up inside `{% if fyers_enabled %}` and duplicate tabs may appear.
+The patcher is **idempotent** (safe to run multiple times).
 
 ### Patcher Anchors
 
-| File | Anchor | Used By | Purpose |
-|------|--------|---------|---------|
-| dashboard.py | `</script>\n</head>` | Both | Insert switchPage() |
-| dashboard.py | `<h1>Risk Management Dashboard</h1>` | Both | Add page tabs |
-| dashboard.py | `<!-- Main Page Tabs -->` | Both | Detect if tabs already exist |
-| dashboard.py | `<div id="lockout-banner"...>` | Both | Open page-risk wrapper |
-| dashboard.py | `<div class="footer">` | Fyers | Close page-risk + add DOM HTML |
-| dashboard.py | `</div><!-- end page-risk -->` | Depth | Insert depth HTML after page-risk close |
-| dashboard.py | `</script>\n</body>\n</html>` | Both | Insert JS before end |
-| dashboard.py | `socketio.run(app` | Both | Add routes/init |
-| config.py | `@classmethod validate` | Both | Insert config vars |
-| main.py | `pusher_thread.start()` | Fyers | Add midnight scheduler |
+| File | Anchor | Purpose |
+|------|--------|---------|
+| dashboard.py | `</script>\n</head>` | Insert switchPage() |
+| dashboard.py | `<h1>Risk Management Dashboard</h1>` | Add page tabs |
+| dashboard.py | `<!-- Main Page Tabs -->` | Detect if tabs already exist |
+| dashboard.py | `<div id="lockout-banner"...>` | Open page-risk wrapper |
+| dashboard.py | `<div class="footer">` | Close page-risk + add depth HTML |
+| dashboard.py | `</script>\n</body>\n</html>` | Insert depth JS before end |
+| dashboard.py | `socketio.run(app` | Add routes/init |
+| config.py | `@classmethod validate` | Insert config vars |
 
 ---
 
 ## User's VPS Setup
 
 The user's VPS runs from commit that includes their own local changes.
-Key thing to know: **the user applies changes via the patchers on their VPS**.
+Key thing to know: **the user applies changes via the patcher on their VPS**.
 
 ### Deployment Workflow
 
@@ -333,13 +234,10 @@ Key thing to know: **the user applies changes via the patchers on their VPS**.
    ```bash
    git fetch origin claude/integrate-fyers-websockets-wDrFY
    git checkout origin/claude/integrate-fyers-websockets-wDrFY -- \
-     apply_fyers_patch.py fyers_auth.py fyers_database.py \
-     fyers_websocket.py msg.proto msg_pb2.py \
      dhan_depth.py apply_depth_patch.py
    ```
-4. Patchers modify existing files (order matters):
+4. Patcher modifies existing files:
    ```bash
-   python3 apply_fyers_patch.py
    python3 apply_depth_patch.py
    ```
 5. Restart:
@@ -347,38 +245,12 @@ Key thing to know: **the user applies changes via the patchers on their VPS**.
    bash stop.sh && bash start.sh
    ```
 
-### Important: Why the Patchers Exist
+### Important: Why the Patcher Exists
 
 The user has local commits on `master` that aren't on the remote. A simple
 merge/rebase of the feature branch would conflict with their changes. The
 patcher approach lets us inject code into their modified files without knowing
 the exact state of their local copies.
-
----
-
-## Current Work In Progress
-
-### Active Issue: Duplicate Nav Tabs When Both Patchers Applied
-
-**Problem:** When the user runs `apply_fyers_patch.py` then `apply_depth_patch.py`
-on their VPS, the dashboard shows duplicate navigation tabs ("Risk Dashboard"
-and "DOM Analyzer" appear twice — once on the left and once on the right side
-of the header).
-
-**Root Cause:** The Fyers patcher wraps ALL tabs (including Risk Dashboard) in
-`{% if fyers_enabled %}`. When the depth patcher adds the Market Depth tab,
-it inserts inside this conditional. The tab structure is malformed, causing
-the duplicate rendering.
-
-**Fix Needed:** Update `apply_depth_patch.py` Change 3 (tab insertion) to:
-1. Detect the Fyers patcher's tab block (with `{% if fyers_enabled %}` wrapper)
-2. Replace the ENTIRE block with the correct 3-tab version where each tab
-   has its own individual conditional
-3. The tab container div must NOT be inside any conditional
-4. Also update `apply_fyers_patch.py` to be aware of depth patcher (if depth
-   tabs already exist, restructure to include DOM Analyzer properly)
-
-**Status:** Fix is in progress on `claude/integrate-fyers-websockets-wDrFY`
 
 ---
 
@@ -389,8 +261,8 @@ the duplicate rendering.
 1. **switchPage not defined** — Function was originally placed inside the main
    `<script>` block. If the patcher's regex anchor didn't match (user had code
    between `initOptionChain();` and `</script>`), the function was never
-   inserted but the tab buttons were. Fixed by: (a) moving switchPage to early
-   `<script>` block, (b) adding repair_dashboard() to fix already-patched files.
+   inserted but the tab buttons were. Fixed by moving switchPage to early
+   `<script>` block.
 
 2. **API refresh stuck on "Refreshing..."** — The fetch call to
    `/api/token/refresh` had no timeout. If Dhan API hung, the button stayed
@@ -400,19 +272,13 @@ the duplicate rendering.
    `initOptionChain();\n    </script>` to be adjacent. Changed to use
    `</script>\n</body>\n</html>` (end of file) which is always stable.
 
-### In Progress
-
-4. **Duplicate nav tabs** — Both patchers create/modify navigation independently.
-   When both are applied on the VPS, tabs get duplicated. Fix: update depth
-   patcher to properly restructure the Fyers tab block.
+4. **Duplicate nav tabs (Fyers era)** — Both patchers (old Fyers + Depth)
+   created/modified navigation independently. When both were applied on the
+   VPS, tabs got duplicated. Fixed by removing Fyers integration entirely
+   (Dhan depth provides equivalent functionality with simpler auth).
 
 ### Configuration Notes
 
-- **FYERS_SYMBOL** must match Fyers format: `NSE:NIFTY25JULFUT` (update monthly)
-- **FYERS_LOT_SIZE** must match the symbol's lot size (NIFTY=75, BANKNIFTY=15)
-- **FYERS_REDIRECT_URL** must match what's configured in Fyers API app settings
-- Fyers tokens are daily (expire at midnight). Midnight cleanup in main.py
-  handles logout automatically
 - **DEPTH_ENABLED** defaults to `true` — the Dhan depth WebSocket uses the
   same access token as the main Dhan API (no extra auth needed)
 
@@ -453,19 +319,6 @@ git show master:dashboard.py > /tmp/test_dash.py
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEPTH_ENABLED` | `true` | Enable 20-level Dhan market depth tab |
-
-### Optional (Fyers DOM Analyzer)
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FYERS_ENABLED` | `false` | Enable Fyers DOM Analyzer |
-| `FYERS_API_KEY` | — | Fyers App ID |
-| `FYERS_API_SECRET` | — | Fyers App Secret |
-| `FYERS_REDIRECT_URL` | `http://127.0.0.1:5555/fyers/callback` | OAuth callback URL |
-| `FYERS_WEBSOCKET_URL` | `wss://rtsocket-api.fyers.in/versova` | WebSocket endpoint |
-| `FYERS_SYMBOL` | `NSE:NIFTY25JULFUT` | Symbol for DOM analysis |
-| `FYERS_LOT_SIZE` | `50` | Lot size for the symbol |
-| `FYERS_DATABASE_URL` | `sqlite:///fyers_auth.db` | Token storage location |
-| `FYERS_API_KEY_PEPPER` | — | Encryption pepper for token storage |
 
 ### Risk Settings
 | Variable | Default | Description |

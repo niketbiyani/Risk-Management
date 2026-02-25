@@ -61,15 +61,6 @@ class Config:
     # Dhan Market Depth (20-level order book)
     DEPTH_ENABLED: bool = os.getenv("DEPTH_ENABLED", "true").lower() == "true"
 
-    # Fyers DOM Analyzer
-    FYERS_API_KEY: str = os.getenv("FYERS_API_KEY", "")
-    FYERS_API_SECRET: str = os.getenv("FYERS_API_SECRET", "")
-    FYERS_REDIRECT_URL: str = os.getenv("FYERS_REDIRECT_URL", "http://127.0.0.1:5555/fyers/callback")
-    FYERS_WEBSOCKET_URL: str = os.getenv("FYERS_WEBSOCKET_URL", "wss://rtsocket-api.fyers.in/versova")
-    FYERS_SYMBOL: str = os.getenv("FYERS_SYMBOL", "NSE:NIFTY25JULFUT")
-    FYERS_LOT_SIZE: int = int(os.getenv("FYERS_LOT_SIZE", "50"))
-    FYERS_ENABLED: bool = os.getenv("FYERS_ENABLED", "false").lower() == "true"
-
     @classmethod
     def validate(cls) -> list[str]:
         """Validate required configuration. Returns list of errors."""

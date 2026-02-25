@@ -221,105 +221,44 @@ The system respects Dhan's slice order API for quantities exceeding exchange fre
 
 ---
 
-## Fyers DOM Analyzer (Optional)
+## Dhan Market Depth (20-Level)
 
-An optional second tab on the dashboard that shows real-time 50-level market depth
-(order book) from Fyers. Useful for reading institutional order flow, bid/ask
-imbalances, and spread analysis on the Nifty futures contract.
+A second tab on the dashboard that shows real-time 20-level market depth (order book)
+from Dhan's WebSocket feed. Uses the same Dhan access token — no extra API keys needed.
 
 ### What It Shows
 
-- **50-level order book** — full depth of bids and asks with quantity bars
-- **Bid/Ask imbalance** — percentage metric showing buying vs selling pressure
-- **Spread** — current bid-ask spread
-- **LTP** — last traded price with change indicator
-- **Lot/Qty toggle** — view quantities in lots or raw units
-
-### Prerequisites
-
-1. A **Fyers API account** (separate from Dhan)
-2. Create an app at https://myapi.fyers.in/dashboard with:
-   - Redirect URL: `http://YOUR_SERVER_IP:5555/fyers/callback`
-   - Permissions: Transaction + Market Data
+- **20-level order book** — bids and asks with heatmap coloring and wall markers
+- **Order book imbalance** — at 5, 10, and 20 levels (centered diverging bars)
+- **Wall detection** — highlights abnormally large orders (3x avg)
+- **Absorption tracking** — alerts when a wall is being eaten through
+- **Pull detection** — alerts when a wall disappears before price reaches it
+- **Cumulative delta** — chart of bid vs ask aggression over time
 
 ### Setup
 
-#### Step 1: Install Fyers Dependencies
-
 ```bash
-# Copy Fyers files from the feature branch
+# Copy depth files from the feature branch
 git fetch origin claude/integrate-fyers-websockets-wDrFY
 git checkout origin/claude/integrate-fyers-websockets-wDrFY -- \
-  apply_fyers_patch.py fyers_auth.py fyers_database.py \
-  fyers_websocket.py msg.proto msg_pb2.py
+  dhan_depth.py apply_depth_patch.py
 
-# Run the patcher (modifies dashboard.py, config.py, main.py, etc.)
-python3 apply_fyers_patch.py
+# Run the patcher (modifies dashboard.py, config.py)
+python3 apply_depth_patch.py
 
-# Install new dependencies
-source venv/bin/activate && pip install -r requirements.txt
-```
-
-#### Step 2: Configure
-
-Add to `.env`:
-```
-FYERS_ENABLED=true
-FYERS_API_KEY=your_fyers_app_id         # e.g. ABCDEF-100
-FYERS_API_SECRET=your_fyers_secret_key
-FYERS_REDIRECT_URL=http://YOUR_IP:5555/fyers/callback
-FYERS_SYMBOL=NSE:NIFTY25JULFUT          # Update monthly for current expiry
-FYERS_LOT_SIZE=75                       # Match the symbol's lot size
-FYERS_API_KEY_PEPPER=any-random-string  # Encryption pepper
-```
-
-#### Step 3: Restart
-
-```bash
+# Restart
 bash stop.sh && bash start.sh
 ```
 
-### Daily Usage
-
-1. Open the dashboard — you'll see **Risk Dashboard** and **DOM Analyzer** tabs
-2. Click **DOM Analyzer** tab
-3. Click **Connect to Fyers** — this opens the Fyers OAuth login
-4. After login, the WebSocket connects and market depth streams in real-time
-5. Fyers tokens expire at midnight — the platform auto-disconnects and you
-   re-login next trading day
-
-### Updating the Symbol
-
-When futures contracts roll over (monthly), update `.env`:
+`DEPTH_ENABLED` defaults to `true`. To disable, add to `.env`:
 ```
-FYERS_SYMBOL=NSE:NIFTY25AUGFUT    # New month
+DEPTH_ENABLED=false
 ```
-Then restart: `bash stop.sh && bash start.sh`
 
 ### Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
-| DOM Analyzer tab not showing | Check `FYERS_ENABLED=true` in .env, restart |
-| "Connect to Fyers" fails | Verify FYERS_API_KEY, FYERS_API_SECRET, and redirect URL match Fyers app settings |
-| WebSocket disconnects | Token may have expired. Re-login via the dashboard |
-| "switchPage is not defined" | Re-run `python3 apply_fyers_patch.py` — the repair function fixes this |
+| Market Depth tab not showing | Check `DEPTH_ENABLED=true` in .env (default), restart |
+| Data shows "--" | Market may be closed (9:15-15:30 IST), or depth WebSocket is reconnecting |
 | Patcher shows warnings | Safe to ignore if the feature works. Check specific warning messages |
-
-### Re-applying Patcher After Updates
-
-If you update the base code or pull new patcher changes:
-
-```bash
-# Get latest patcher + Fyers files
-git fetch origin claude/integrate-fyers-websockets-wDrFY
-git checkout origin/claude/integrate-fyers-websockets-wDrFY -- \
-  apply_fyers_patch.py fyers_auth.py fyers_database.py \
-  fyers_websocket.py msg.proto msg_pb2.py
-
-# Re-run (idempotent — safe to run multiple times)
-python3 apply_fyers_patch.py
-
-# Restart
-bash stop.sh && bash start.sh
-```
