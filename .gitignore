@@ -1,17 +1,2 @@
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.env
-*.egg-info/
-dist/
-build/
-.eggs/
-venv/
-.venv/
-state/
-*.log
-.DS_Store
-*.db
-*.sqlite3
-platform.pid
+# Documentation
+SAAS_TRANSFORMATION_CHECKLIST.md
