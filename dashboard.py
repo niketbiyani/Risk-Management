@@ -54,6 +54,7 @@ DASHBOARD_HTML = """
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Trade Risk Management</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -227,6 +228,12 @@ DASHBOARD_HTML = """
         .btn-neutral { background: #30363d; color: #e0e6ed; }
         .btn-sm { padding: 4px 10px; font-size: 12px; }
         .btn-xs { padding: 2px 8px; font-size: 11px; border-radius: 4px; }
+        .oc-s-btn { color:#f85149; border:1px solid #f85149; border-radius:3px; padding:1px 4px; font-size:10px; font-weight:700; cursor:pointer; margin-right:2px; background:#1a0808; line-height:1.4; transition:background 0.15s; }
+        .oc-b-btn { color:#3fb950; border:1px solid #3fb950; border-radius:3px; padding:1px 4px; font-size:10px; font-weight:700; cursor:pointer; margin-right:3px; background:#081a08; line-height:1.4; transition:background 0.15s; }
+        .oc-s-btn:hover, .oc-s-active { background:#6b1a1a !important; }
+        .oc-b-btn:hover, .oc-b-active { background:#1a4d1a !important; }
+        .oc-leg-sell-selected { background:#2d1117 !important; }
+        .oc-leg-buy-selected  { background:#0d2117 !important; }
 
         .trade-log {
             max-height: 300px;
@@ -525,15 +532,53 @@ DASHBOARD_HTML = """
                         <table id="oc-table" style="font-size:12px;">
                             <thead style="position:sticky;top:0;background:#0d1117;z-index:1;">
                                 <tr>
-                                    <th style="text-align:right;color:#3fb950;">CE LTP</th>
+                                    <th style="text-align:right;color:#3fb950;">CE LTP <span style="font-size:9px;color:#484f58;">S/B</span></th>
                                     <th style="text-align:center;font-weight:700;">Strike</th>
-                                    <th style="text-align:left;color:#f85149;">PE LTP</th>
+                                    <th style="text-align:left;color:#f85149;"><span style="font-size:9px;color:#484f58;">S/B</span> PE LTP</th>
                                 </tr>
                             </thead>
                             <tbody id="oc-body">
                                 <tr><td colspan="3" style="text-align:center;color:#484f58;padding:20px;">Loading option chain...</td></tr>
                             </tbody>
                         </table>
+                    </div>
+
+                    <!-- Spread Quick Bar (shown when legs are selected) -->
+                    <div id="sqb-panel" style="display:none;border-top:1px solid #21262d;margin-top:8px;padding-top:8px;">
+                        <!-- Leg labels row -->
+                        <div style="display:flex;gap:10px;margin-bottom:5px;font-size:11px;align-items:center;flex-wrap:wrap;">
+                            <div style="border-left:3px solid #f85149;padding-left:6px;">
+                                <span style="color:#f85149;font-weight:700;font-size:10px;">SELL</span>
+                                <span id="sqb-sell-label" style="color:#e6edf3;font-weight:600;margin-left:4px;">--</span>
+                            </div>
+                            <span style="color:#484f58;">→</span>
+                            <div style="border-left:3px solid #3fb950;padding-left:6px;">
+                                <span style="color:#3fb950;font-weight:700;font-size:10px;">BUY</span>
+                                <span id="sqb-buy-label" style="color:#e6edf3;font-weight:600;margin-left:4px;">--</span>
+                            </div>
+                            <span id="sqb-net-credit" style="font-weight:700;"></span>
+                            <span id="sqb-max-loss-label" style="color:#f85149;font-size:10px;"></span>
+                            <button onclick="clearSpreadQuickBar()" style="margin-left:auto;background:none;border:none;color:#484f58;cursor:pointer;font-size:11px;padding:0;" title="Clear spread selection">✕ clear</button>
+                        </div>
+                        <!-- Action row -->
+                        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                            <input id="sqb-risk" class="form-input" type="number" placeholder="Max Loss ₹" style="width:90px;font-size:11px;padding:4px 6px;" oninput="spreadQuickCalc()">
+                            <span style="font-size:11px;color:#8b949e;">Qty:</span>
+                            <strong id="sqb-qty" style="font-size:12px;color:#e6edf3;">-</strong>
+                            <span id="sqb-lots" style="font-size:10px;color:#484f58;"></span>
+                            <input id="sqb-qty-override" class="form-input" type="number" placeholder="Override" style="width:72px;font-size:11px;padding:4px 6px;" oninput="spreadQuickCalc()">
+                            <button id="sqb-execute-btn" onclick="executeSpreadNow()" disabled class="btn-sell" style="padding:5px 12px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;">&#9889; EXECUTE NOW</button>
+                            <button id="sqb-arm-btn" onclick="toggleSqbTrigger()" disabled style="padding:5px 12px;font-size:12px;font-weight:700;background:#5a3e00;color:#d29922;border:1px solid #d29922;border-radius:6px;cursor:pointer;opacity:0.5;">ARM TRIGGER</button>
+                        </div>
+                        <!-- Trigger sub-form -->
+                        <div id="sqb-trigger-form" style="display:none;margin-top:5px;padding:5px 8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;align-items:center;gap:6px;font-size:11px;">
+                            <span style="color:#8b949e;">Trigger when SELL LTP ≤</span>
+                            <input id="sqb-trigger-price" class="form-input" type="number" step="0.05" style="width:75px;font-size:11px;padding:3px 6px;">
+                            <span style="color:#8b949e;margin-left:6px;">SL (opt):</span>
+                            <input id="sqb-sell-sl" class="form-input" type="number" step="0.05" placeholder="SL" style="width:65px;font-size:11px;padding:3px 6px;">
+                            <button onclick="confirmArmTrigger()" style="padding:3px 10px;font-size:11px;font-weight:700;background:#9e6a03;color:#fff;border:none;border-radius:4px;cursor:pointer;">CONFIRM</button>
+                            <button onclick="cancelArmTrigger()" style="background:none;border:1px solid #30363d;color:#8b949e;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px;">Cancel</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -542,7 +587,13 @@ DASHBOARD_HTML = """
             <div style="flex:1;min-width:0;">
                 <div class="card" id="dom-panel" style="padding:12px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <h3 style="margin:0;">Depth of Market</h3>
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <h3 style="margin:0;">Depth of Market</h3>
+                            <div style="display:flex;gap:2px;">
+                                <button id="dom-tab-depth" onclick="switchDomTab('depth')" style="background:none;border:none;color:#3fb950;cursor:pointer;font-size:11px;font-weight:700;padding:2px 8px;border-bottom:2px solid #3fb950;">Depth</button>
+                                <button id="dom-tab-chart" onclick="switchDomTab('chart')" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:11px;font-weight:400;padding:2px 8px;border-bottom:2px solid transparent;">Chart</button>
+                            </div>
+                        </div>
                         <div style="display:flex;align-items:center;gap:8px;">
                             <span id="dom-instrument" style="font-size:12px;color:#8b949e;">Select an option from the chain</span>
                             <span id="dom-status" style="display:none;font-size:10px;padding:2px 6px;border-radius:8px;background:#0d4429;color:#3fb950;font-weight:600;">LIVE</span>
@@ -594,6 +645,9 @@ DASHBOARD_HTML = """
                             <div id="dom-imbalance-bar-ask" style="height:100%;background:#f85149;transition:width 0.3s;"></div>
                         </div>
                     </div>
+
+                    <!-- Chart Canvas (hidden by default, shown on Chart tab) -->
+                    <div id="dom-chart-canvas" style="display:none;height:240px;width:100%;"></div>
 
                     <!-- Depth Chart -->
                     <div id="dom-chart" style="overflow-y:auto;">
@@ -2378,20 +2432,49 @@ DASHBOARD_HTML = """
             chain.forEach(function(row, i) {
                 var isATM = (i === atmIdx);
                 var rowStyle = isATM ? 'background:#1a2332;' : '';
-                var ceLtp = row.ce_ltp ? row.ce_ltp.toFixed(2) : '-';
-                var peLtp = row.pe_ltp ? row.pe_ltp.toFixed(2) : '-';
+                var ceLtp    = row.ce_ltp ? row.ce_ltp.toFixed(2) : '-';
+                var peLtp    = row.pe_ltp ? row.pe_ltp.toFixed(2) : '-';
+                var ceSid    = row.ce_security_id || '';
+                var peSid    = row.pe_security_id || '';
+                var ceLtpVal = row.ce_ltp || 0;
+                var peLtpVal = row.pe_ltp || 0;
+                var stk      = row.strike;
 
-                html += '<tr style="cursor:pointer;' + rowStyle + '">';
-                html += '<td style="text-align:right;color:#3fb950;font-weight:600;padding:8px 16px;" ';
-                html += 'onclick="ocSelect(\\'' + row.ce_security_id + '\\',\\'CE\\',\\'' + expiry + '\\',' + row.strike + ',' + (row.ce_ltp || 0) + ')">';
-                html += ceLtp + '</td>';
-                html += '<td style="text-align:center;font-weight:700;color:#e6edf3;background:#161b22;border-left:2px solid #30363d;border-right:2px solid #30363d;padding:8px 16px;">' + row.strike.toFixed(0) + '</td>';
-                html += '<td style="text-align:left;color:#f85149;font-weight:600;padding:8px 16px;" ';
-                html += 'onclick="ocSelect(\\'' + row.pe_security_id + '\\',\\'PE\\',\\'' + expiry + '\\',' + row.strike + ',' + (row.pe_ltp || 0) + ')">';
-                html += peLtp + '</td>';
+                html += '<tr id="oc-row-' + stk.toFixed(0) + '" style="' + rowStyle + '">';
+
+                // CE cell: [S][B] LTP
+                html += '<td style="text-align:right;padding:5px 8px;white-space:nowrap;">';
+                if (ceSid) {
+                    html += '<button class="oc-s-btn" id="qsb-CE-' + stk.toFixed(0) + '-S" ';
+                    html += 'onclick="spreadSelectLeg(\'sell\',\'' + ceSid + '\',' + stk + ',' + ceLtpVal + ',\'CE\');event.stopPropagation();" title="Spread SELL">S</button>';
+                    html += '<button class="oc-b-btn" id="qsb-CE-' + stk.toFixed(0) + '-B" ';
+                    html += 'onclick="spreadSelectLeg(\'buy\',\'' + ceSid + '\',' + stk + ',' + ceLtpVal + ',\'CE\');event.stopPropagation();" title="Spread BUY">B</button>';
+                }
+                html += '<span style="color:#3fb950;font-weight:600;cursor:pointer;" ';
+                html += 'onclick="ocSelect(\'' + ceSid + '\',\'CE\',\'' + expiry + '\',' + stk + ',' + ceLtpVal + ')">' + ceLtp + '</span>';
+                html += '</td>';
+
+                // Strike cell
+                html += '<td style="text-align:center;font-weight:700;color:#e6edf3;background:#161b22;border-left:2px solid #30363d;border-right:2px solid #30363d;padding:5px 12px;">' + stk.toFixed(0) + '</td>';
+
+                // PE cell: LTP [S][B]
+                html += '<td style="text-align:left;padding:5px 8px;white-space:nowrap;">';
+                html += '<span style="color:#f85149;font-weight:600;cursor:pointer;" ';
+                html += 'onclick="ocSelect(\'' + peSid + '\',\'PE\',\'' + expiry + '\',' + stk + ',' + peLtpVal + ')">' + peLtp + '</span>';
+                if (peSid) {
+                    html += '<button class="oc-s-btn" id="qsb-PE-' + stk.toFixed(0) + '-S" ';
+                    html += 'style="margin-left:3px;margin-right:2px;" ';
+                    html += 'onclick="spreadSelectLeg(\'sell\',\'' + peSid + '\',' + stk + ',' + peLtpVal + ',\'PE\');event.stopPropagation();" title="Spread SELL">S</button>';
+                    html += '<button class="oc-b-btn" id="qsb-PE-' + stk.toFixed(0) + '-B" ';
+                    html += 'style="margin-left:0;" ';
+                    html += 'onclick="spreadSelectLeg(\'buy\',\'' + peSid + '\',' + stk + ',' + peLtpVal + ',\'PE\');event.stopPropagation();" title="Spread BUY">B</button>';
+                }
+                html += '</td>';
+
                 html += '</tr>';
             });
             body.innerHTML = html;
+            restoreSpreadPillHighlights();
         }
 
         function loadOptionChain(silent) {
@@ -2479,6 +2562,324 @@ DASHBOARD_HTML = """
         });
 
         initOptionChain();
+
+        // ── Spread Quick Entry ───────────────────────────────────────────
+        var _spreadSellLeg = null;  // {securityId, strike, ltp, optType}
+        var _spreadBuyLeg  = null;
+        var _sqbCalcTimeout = null;
+
+        function spreadSelectLeg(side, secId, strike, ltp, optType) {
+            if (!secId) return;
+            var leg = {securityId: secId, strike: strike, ltp: ltp, optType: optType};
+            var expiry = document.getElementById('oc-expiry').value;
+            var sel    = document.getElementById('oc-underlying');
+            var underlying = sel.options[sel.selectedIndex].text;
+            var symbol = underlying + ' ' + strike.toFixed(0) + ' ' + optType + ' ' + expiry;
+
+            if (side === 'sell') {
+                _spreadSellLeg = leg;
+                // Subscribe DOM + load chart for sell leg
+                subscribeDepth(secId, 'NSE_FNO', symbol);
+                loadChart(secId, 'NSE_FNO');
+                switchDomTab('chart');
+                // Cross-populate existing spread form sell leg
+                document.getElementById('spread-sell-id').value = secId;
+                document.getElementById('spread-sell-exseg').value = 'NSE_FNO';
+                document.getElementById('spread-sell-price').value = ltp.toFixed(2);
+                document.getElementById('spread-sell-search').value = symbol;
+                document.getElementById('spread-sell-info').style.display = 'block';
+                document.getElementById('spread-sell-info').textContent = 'NSE_FNO | ID: ' + secId;
+                showToast('SELL: ' + strike.toFixed(0) + ' ' + optType + ' @ \\u20B9' + ltp.toFixed(2), 'warning');
+            } else {
+                _spreadBuyLeg = leg;
+                // Cross-populate existing spread form buy leg
+                document.getElementById('spread-buy-id').value = secId;
+                document.getElementById('spread-buy-exseg').value = 'NSE_FNO';
+                document.getElementById('spread-buy-search').value = symbol;
+                document.getElementById('spread-buy-info').style.display = 'block';
+                document.getElementById('spread-buy-info').textContent = 'NSE_FNO | ID: ' + secId;
+                showToast('BUY: ' + strike.toFixed(0) + ' ' + optType + ' @ \\u20B9' + ltp.toFixed(2), 'success');
+            }
+            updateSpreadQuickBar();
+            if (_spreadSellLeg && _spreadBuyLeg) { spreadQuickCalc(); }
+        }
+
+        function restoreSpreadPillHighlights() {
+            if (_spreadSellLeg) {
+                var sBtn = document.getElementById('qsb-' + _spreadSellLeg.optType + '-' + _spreadSellLeg.strike.toFixed(0) + '-S');
+                if (sBtn) sBtn.classList.add('oc-s-active');
+            }
+            if (_spreadBuyLeg) {
+                var bBtn = document.getElementById('qsb-' + _spreadBuyLeg.optType + '-' + _spreadBuyLeg.strike.toFixed(0) + '-B');
+                if (bBtn) bBtn.classList.add('oc-b-active');
+            }
+        }
+
+        function updateSpreadQuickBar() {
+            var panel = document.getElementById('sqb-panel');
+            if (!_spreadSellLeg && !_spreadBuyLeg) { panel.style.display = 'none'; return; }
+            panel.style.display = 'block';
+
+            var sellLabel = _spreadSellLeg
+                ? (_spreadSellLeg.strike.toFixed(0) + ' ' + _spreadSellLeg.optType + ' @ \\u20B9' + _spreadSellLeg.ltp.toFixed(2))
+                : '-- pick S';
+            var buyLabel  = _spreadBuyLeg
+                ? (_spreadBuyLeg.strike.toFixed(0) + ' ' + _spreadBuyLeg.optType + ' @ \\u20B9' + _spreadBuyLeg.ltp.toFixed(2))
+                : '-- pick B';
+            document.getElementById('sqb-sell-label').textContent = sellLabel;
+            document.getElementById('sqb-buy-label').textContent  = buyLabel;
+
+            var bothReady = _spreadSellLeg && _spreadBuyLeg;
+            var execBtn   = document.getElementById('sqb-execute-btn');
+            var armBtn    = document.getElementById('sqb-arm-btn');
+            execBtn.disabled = !bothReady;
+            armBtn.disabled  = !bothReady;
+            execBtn.style.opacity = bothReady ? '1' : '0.5';
+            armBtn.style.opacity  = bothReady ? '1' : '0.5';
+
+            if (bothReady) {
+                var net = _spreadSellLeg.ltp - _spreadBuyLeg.ltp;
+                var nc  = document.getElementById('sqb-net-credit');
+                nc.textContent = (net >= 0 ? '+' : '') + '\\u20B9' + net.toFixed(2) + (net >= 0 ? ' credit' : ' debit');
+                nc.style.color = net >= 0 ? '#3fb950' : '#f85149';
+                // Pre-fill trigger price if empty
+                var trigEl = document.getElementById('sqb-trigger-price');
+                if (!trigEl.value) trigEl.value = _spreadSellLeg.ltp.toFixed(2);
+                // Pre-fill risk from existing spread form
+                var riskEl = document.getElementById('sqb-risk');
+                if (!riskEl.value) {
+                    var existingRisk = parseFloat(document.getElementById('spread-risk').value);
+                    if (existingRisk > 0) riskEl.value = existingRisk;
+                }
+            } else {
+                document.getElementById('sqb-net-credit').textContent = '';
+            }
+        }
+
+        function spreadQuickCalc() {
+            if (!_spreadSellLeg) return;
+            clearTimeout(_sqbCalcTimeout);
+            _sqbCalcTimeout = setTimeout(function() {
+                var sellPrice = _spreadSellLeg.ltp;
+                var risk = parseFloat(document.getElementById('sqb-risk').value) || 0;
+                if (risk <= 0 || sellPrice <= 0) return;
+                // Default SL: sell ltp * 2.5 (capped by strike width if buy leg known)
+                var sl = sellPrice * 2.5;
+                if (_spreadBuyLeg) {
+                    var sw = Math.abs(_spreadSellLeg.strike - _spreadBuyLeg.strike);
+                    sl = Math.min(sl, sellPrice + sw);
+                }
+                sl = parseFloat(sl.toFixed(2));
+                if (sl <= sellPrice) { sl = sellPrice * 2; }
+
+                fetch('/api/order/calculate_size', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        risk_amount: risk,
+                        entry_price: sellPrice,
+                        sl_price: sl,
+                        security_id: _spreadSellLeg.securityId,
+                        transaction_type: 'SELL',
+                        product_type: 'MARGIN'
+                    })
+                })
+                .then(function(r){ return r.json(); })
+                .then(function(data) {
+                    if (data.error) return;
+                    var overrideEl = document.getElementById('sqb-qty-override');
+                    var autoQty    = data.quantity;
+                    document.getElementById('sqb-qty').textContent = autoQty;
+                    document.getElementById('sqb-lots').textContent = data.num_lots != null ? '(' + data.num_lots + ' lots)' : '';
+                    if (!overrideEl.value) overrideEl.value = autoQty;
+                    // Show max loss estimate if both legs known
+                    if (_spreadSellLeg && _spreadBuyLeg) {
+                        var net = _spreadSellLeg.ltp - _spreadBuyLeg.ltp;
+                        var sw  = Math.abs(_spreadSellLeg.strike - _spreadBuyLeg.strike);
+                        var qty = parseInt(overrideEl.value) || autoQty;
+                        var ml  = Math.max(0, (sw - net) * qty);
+                        document.getElementById('sqb-max-loss-label').textContent = 'Max Loss: \\u20B9' + ml.toFixed(0);
+                    }
+                })
+                .catch(function(e) { console.error('SQB calc:', e); });
+            }, 300);
+        }
+
+        function toggleSqbTrigger() {
+            var form   = document.getElementById('sqb-trigger-form');
+            var armBtn = document.getElementById('sqb-arm-btn');
+            if (form.style.display === 'none' || !form.style.display) {
+                form.style.display = 'flex';
+                armBtn.style.background = '#9e6a03';
+                var trigEl = document.getElementById('sqb-trigger-price');
+                if (!trigEl.value && _spreadSellLeg) trigEl.value = _spreadSellLeg.ltp.toFixed(2);
+            } else {
+                form.style.display = 'none';
+                armBtn.style.background = '#5a3e00';
+            }
+        }
+
+        function cancelArmTrigger() {
+            document.getElementById('sqb-trigger-form').style.display = 'none';
+            document.getElementById('sqb-arm-btn').style.background = '#5a3e00';
+        }
+
+        function executeSpreadNow() {
+            if (!_spreadSellLeg || !_spreadBuyLeg) { showToast('Select both SELL and BUY legs', 'warning'); return; }
+            var qty = parseInt(document.getElementById('sqb-qty-override').value)
+                   || parseInt(document.getElementById('sqb-qty').textContent);
+            if (!qty || qty <= 0) { showToast('Enter quantity or wait for auto-calc', 'warning'); return; }
+            var net = _spreadSellLeg.ltp - _spreadBuyLeg.ltp;
+            var label = 'EXECUTE SPREAD NOW:\\n'
+                + 'SELL ' + qty + ' x ' + _spreadSellLeg.strike.toFixed(0) + ' ' + _spreadSellLeg.optType + ' @ \\u20B9' + _spreadSellLeg.ltp.toFixed(2) + '\\n'
+                + 'BUY  ' + qty + ' x ' + _spreadBuyLeg.strike.toFixed(0)  + ' ' + _spreadBuyLeg.optType  + ' @ MARKET\\n'
+                + 'Net credit: \\u20B9' + net.toFixed(2);
+            if (!confirm(label)) return;
+            var payload = {
+                sell_security_id:    _spreadSellLeg.securityId,
+                sell_exchange_segment: 'NSE_FNO',
+                sell_price:          _spreadSellLeg.ltp,
+                sell_trigger_price:  _spreadSellLeg.ltp,
+                sell_sl:             parseFloat(document.getElementById('sqb-sell-sl').value) || 0,
+                buy_security_id:     _spreadBuyLeg.securityId,
+                buy_exchange_segment:'NSE_FNO',
+                quantity:            qty,
+                instant:             true
+            };
+            fetch('/api/order/place_spread', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(result) {
+                if (result.status === 'error' || result.status === 'BLOCKED') {
+                    playAlert('error');
+                    showToast('Spread failed: ' + (result.message || result.reason || ''), 'error');
+                } else {
+                    playAlert('order');
+                    showToast('Spread executed: BUY @ MKT + SELL @ \\u20B9' + _spreadSellLeg.ltp.toFixed(2), 'success');
+                    clearSpreadQuickBar();
+                }
+            })
+            .catch(function(e) { showToast('Network error: ' + e, 'error'); });
+        }
+
+        function confirmArmTrigger() {
+            if (!_spreadSellLeg || !_spreadBuyLeg) { showToast('Select both SELL and BUY legs', 'warning'); return; }
+            var qty = parseInt(document.getElementById('sqb-qty-override').value)
+                   || parseInt(document.getElementById('sqb-qty').textContent);
+            if (!qty || qty <= 0) { showToast('Enter quantity first', 'warning'); return; }
+            var trigPrice = parseFloat(document.getElementById('sqb-trigger-price').value);
+            if (!trigPrice || trigPrice <= 0) { showToast('Enter trigger price', 'warning'); return; }
+            var payload = {
+                sell_security_id:    _spreadSellLeg.securityId,
+                sell_exchange_segment: 'NSE_FNO',
+                sell_price:          _spreadSellLeg.ltp,
+                sell_trigger_price:  trigPrice,
+                sell_sl:             parseFloat(document.getElementById('sqb-sell-sl').value) || 0,
+                buy_security_id:     _spreadBuyLeg.securityId,
+                buy_exchange_segment:'NSE_FNO',
+                quantity:            qty,
+                instant:             false
+            };
+            fetch('/api/order/place_spread', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(result) {
+                if (result.status === 'error') {
+                    playAlert('error');
+                    showToast('ARM failed: ' + result.message, 'error');
+                } else {
+                    playAlert('order');
+                    showToast('Spread ARMED — trigger @ \\u20B9' + trigPrice + ', monitoring...', 'success');
+                    clearSpreadQuickBar();
+                }
+            })
+            .catch(function(e) { showToast('Network error: ' + e, 'error'); });
+        }
+
+        function clearSpreadQuickBar() {
+            _spreadSellLeg = null;
+            _spreadBuyLeg  = null;
+            document.getElementById('sqb-panel').style.display = 'none';
+            document.getElementById('sqb-qty').textContent = '-';
+            document.getElementById('sqb-lots').textContent = '';
+            document.getElementById('sqb-net-credit').textContent = '';
+            document.getElementById('sqb-max-loss-label').textContent = '';
+            document.getElementById('sqb-qty-override').value = '';
+            document.getElementById('sqb-trigger-price').value = '';
+            document.getElementById('sqb-sell-sl').value = '';
+            document.getElementById('sqb-trigger-form').style.display = 'none';
+            document.getElementById('sqb-arm-btn').style.background = '#5a3e00';
+        }
+
+        // ── Snapshot Chart (TradingView Lightweight Charts) ──────────────
+        var _lwChart  = null;
+        var _lwSeries = null;
+        var _lwCurrentSecurity = null;
+
+        function initLightweightChart() {
+            var container = document.getElementById('dom-chart-canvas');
+            if (!container || typeof LightweightCharts === 'undefined') return;
+            container.innerHTML = '';
+            _lwChart = LightweightCharts.createChart(container, {
+                width:  container.clientWidth || 400,
+                height: 240,
+                layout: { background: {color:'#0d1117'}, textColor:'#8b949e' },
+                grid:   { vertLines:{color:'#21262d'}, horzLines:{color:'#21262d'} },
+                crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                rightPriceScale: { borderColor:'#30363d' },
+                timeScale: { borderColor:'#30363d', timeVisible:true, secondsVisible:false },
+            });
+            _lwSeries = _lwChart.addCandlestickSeries({
+                upColor:'#3fb950', downColor:'#f85149',
+                borderUpColor:'#3fb950', borderDownColor:'#f85149',
+                wickUpColor:'#3fb950', wickDownColor:'#f85149',
+            });
+        }
+
+        function loadChart(securityId, exchangeSegment) {
+            if (_lwCurrentSecurity === securityId) return;  // already loaded
+            _lwCurrentSecurity = securityId;
+            if (!_lwChart) initLightweightChart();
+            if (!_lwChart) return;
+            var container = document.getElementById('dom-chart-canvas');
+            _lwChart.applyOptions({width: container.clientWidth || 400});
+            fetch('/api/chart/' + securityId + '?exchange_segment=' + (exchangeSegment || 'NSE_FNO'))
+                .then(function(r){ return r.json(); })
+                .then(function(d) {
+                    if (d.candles && d.candles.length > 0) {
+                        _lwSeries.setData(d.candles);
+                        _lwChart.timeScale().fitContent();
+                    } else {
+                        container.innerHTML = '<div style="color:#484f58;padding:30px;text-align:center;font-size:12px;">No chart data available</div>';
+                    }
+                })
+                .catch(function(e) { console.error('Chart load error:', e); });
+        }
+
+        function switchDomTab(tab) {
+            var depthDiv = document.getElementById('dom-chart');
+            var chartDiv = document.getElementById('dom-chart-canvas');
+            var depthBtn = document.getElementById('dom-tab-depth');
+            var chartBtn = document.getElementById('dom-tab-chart');
+            if (tab === 'chart') {
+                depthDiv.style.display = 'none';
+                chartDiv.style.display = 'block';
+                depthBtn.style.fontWeight = '400'; depthBtn.style.borderBottomColor = 'transparent'; depthBtn.style.color = '#8b949e';
+                chartBtn.style.fontWeight = '700'; chartBtn.style.borderBottomColor = '#3fb950';    chartBtn.style.color = '#3fb950';
+                if (_lwChart) _lwChart.applyOptions({width: chartDiv.clientWidth || 400});
+            } else {
+                depthDiv.style.display = 'block';
+                chartDiv.style.display = 'none';
+                depthBtn.style.fontWeight = '700'; depthBtn.style.borderBottomColor = '#3fb950';    depthBtn.style.color = '#3fb950';
+                chartBtn.style.fontWeight = '400'; chartBtn.style.borderBottomColor = 'transparent'; chartBtn.style.color = '#8b949e';
+            }
+        }
 
         // ── Depth of Market ─────────────────────────────────────────────
         var _domCurrentSecurity = null;
@@ -3289,22 +3690,45 @@ def api_calculate_size():
 
 @app.route("/api/order/place_spread", methods=["POST"])
 def api_place_spread():
-    """Queue a pending spread order (hedge buy at market + sell at limit)."""
+    """Queue or immediately execute a spread order (hedge buy at market + sell at limit)."""
     if not _monitor:
         return jsonify({"error": "Monitor not initialized"}), 500
     data = request.json
 
-    required = ["sell_security_id", "buy_security_id", "sell_price",
-                 "sell_trigger_price", "quantity"]
+    instant = bool(data.get("instant", False))
+
+    # For trigger mode, sell_trigger_price is required; for instant it is accepted but unused
+    required = ["sell_security_id", "buy_security_id", "sell_price", "quantity"]
+    if not instant:
+        required.append("sell_trigger_price")
     for field in required:
         if not data.get(field):
             return jsonify({"status": "error", "message": f"Missing {field}"}), 400
 
     try:
-        spread_id = _monitor.trade_mgr.add_pending_spread(data)
-        return jsonify({"status": "ok", "spread_id": spread_id})
+        if instant:
+            spread_action = {
+                "spread_id": f"INSTANT-{int(time.time())}",
+                "sell_security_id": str(data["sell_security_id"]),
+                "sell_exchange_segment": data.get("sell_exchange_segment", "NSE_FNO"),
+                "sell_price": float(data["sell_price"]),
+                "sell_sl": float(data.get("sell_sl", 0)),
+                "buy_security_id": str(data["buy_security_id"]),
+                "buy_exchange_segment": data.get("buy_exchange_segment", "NSE_FNO"),
+                "quantity": int(data["quantity"]),
+                "ltp": float(data["sell_price"]),
+            }
+            # Execute in background thread so HTTP response returns immediately
+            t = threading.Thread(target=_monitor._execute_spread,
+                                 args=(spread_action,), daemon=True)
+            t.start()
+            return jsonify({"status": "ok", "instant": True,
+                            "spread_id": spread_action["spread_id"]})
+        else:
+            spread_id = _monitor.trade_mgr.add_pending_spread(data)
+            return jsonify({"status": "ok", "spread_id": spread_id})
     except Exception as e:
-        logger.error("Failed to create spread order: %s", e)
+        logger.error("Failed to create/execute spread order: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -3471,6 +3895,40 @@ def api_projections():
     target_prices = data.get("target_prices", [])
     projections = _monitor.trade_mgr.calculate_projections(target_pos, target_prices)
     return jsonify({"projections": projections})
+
+
+# ── Snapshot Chart Data ────────────────────────────────────────────
+
+@app.route("/api/chart/<security_id>")
+def api_chart(security_id):
+    """Return intraday 1-minute OHLCV candles for a security (current trading day)."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    exchange_segment = request.args.get("exchange_segment", "NSE_FNO")
+    instrument_type  = request.args.get("instrument_type", "OPTIDX")
+    try:
+        raw = _monitor.api.get_chart_data(security_id, exchange_segment, instrument_type)
+        data = raw if isinstance(raw, dict) else {}
+        # SDK may nest under 'data' key
+        if "data" in data and isinstance(data["data"], dict):
+            data = data["data"]
+        timestamps = data.get("timestamp", data.get("start_Time", []))
+        opens  = data.get("open",  [])
+        highs  = data.get("high",  [])
+        lows   = data.get("low",   [])
+        closes = data.get("close", [])
+        candles = []
+        for i, ts in enumerate(timestamps):
+            o = opens[i]  if i < len(opens)  else 0
+            h = highs[i]  if i < len(highs)  else 0
+            lo = lows[i]  if i < len(lows)   else 0
+            c = closes[i] if i < len(closes) else 0
+            if o > 0 and h > 0 and lo > 0 and c > 0:
+                candles.append({"time": int(ts), "open": o, "high": h, "low": lo, "close": c})
+        return jsonify({"candles": candles[-120:]})
+    except Exception as e:
+        logger.error("Failed to get chart data for %s: %s", security_id, e)
+        return jsonify({"error": str(e), "candles": []}), 500
 
 
 # ── Trade Journal Endpoints ────────────────────────────────────────
