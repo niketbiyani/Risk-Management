@@ -2451,7 +2451,7 @@ DASHBOARD_HTML = """
                     html += 'onclick="spreadSelectLeg(\\'buy\\',\\'' + ceSid + '\\',' + stk + ',' + ceLtpVal + ',\\'CE\\');event.stopPropagation();" title="Spread BUY">B</button>';
                 }
                 html += '<span style="color:#3fb950;font-weight:600;cursor:pointer;" ';
-                html += 'onclick="ocSelect(\'' + ceSid + '\',\'CE\',\'' + expiry + '\',' + stk + ',' + ceLtpVal + ')">' + ceLtp + '</span>';
+                html += 'onclick="ocSelect(\\'' + ceSid + '\\',\\'CE\\',\\'' + expiry + '\\',' + stk + ',' + ceLtpVal + ')">' + ceLtp + '</span>';
                 html += '</td>';
 
                 // Strike cell
@@ -2460,7 +2460,7 @@ DASHBOARD_HTML = """
                 // PE cell: LTP [S][B]
                 html += '<td style="text-align:left;padding:5px 8px;white-space:nowrap;">';
                 html += '<span style="color:#f85149;font-weight:600;cursor:pointer;" ';
-                html += 'onclick="ocSelect(\'' + peSid + '\',\'PE\',\'' + expiry + '\',' + stk + ',' + peLtpVal + ')">' + peLtp + '</span>';
+                html += 'onclick="ocSelect(\\'' + peSid + '\\',\\'PE\\',\\'' + expiry + '\\',' + stk + ',' + peLtpVal + ')">' + peLtp + '</span>';
                 if (peSid) {
                     html += '<button class="oc-s-btn" id="qsb-PE-' + stk.toFixed(0) + '-S" ';
                     html += 'style="margin-left:3px;margin-right:2px;" ';
