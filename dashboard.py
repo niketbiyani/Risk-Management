@@ -2446,9 +2446,9 @@ DASHBOARD_HTML = """
                 html += '<td style="text-align:right;padding:5px 8px;white-space:nowrap;">';
                 if (ceSid) {
                     html += '<button class="oc-s-btn" id="qsb-CE-' + stk.toFixed(0) + '-S" ';
-                    html += 'onclick="spreadSelectLeg(\'sell\',\'' + ceSid + '\',' + stk + ',' + ceLtpVal + ',\'CE\');event.stopPropagation();" title="Spread SELL">S</button>';
+                    html += 'onclick="spreadSelectLeg(\\'sell\\',\\'' + ceSid + '\\',' + stk + ',' + ceLtpVal + ',\\'CE\\');event.stopPropagation();" title="Spread SELL">S</button>';
                     html += '<button class="oc-b-btn" id="qsb-CE-' + stk.toFixed(0) + '-B" ';
-                    html += 'onclick="spreadSelectLeg(\'buy\',\'' + ceSid + '\',' + stk + ',' + ceLtpVal + ',\'CE\');event.stopPropagation();" title="Spread BUY">B</button>';
+                    html += 'onclick="spreadSelectLeg(\\'buy\\',\\'' + ceSid + '\\',' + stk + ',' + ceLtpVal + ',\\'CE\\');event.stopPropagation();" title="Spread BUY">B</button>';
                 }
                 html += '<span style="color:#3fb950;font-weight:600;cursor:pointer;" ';
                 html += 'onclick="ocSelect(\'' + ceSid + '\',\'CE\',\'' + expiry + '\',' + stk + ',' + ceLtpVal + ')">' + ceLtp + '</span>';
@@ -2464,10 +2464,10 @@ DASHBOARD_HTML = """
                 if (peSid) {
                     html += '<button class="oc-s-btn" id="qsb-PE-' + stk.toFixed(0) + '-S" ';
                     html += 'style="margin-left:3px;margin-right:2px;" ';
-                    html += 'onclick="spreadSelectLeg(\'sell\',\'' + peSid + '\',' + stk + ',' + peLtpVal + ',\'PE\');event.stopPropagation();" title="Spread SELL">S</button>';
+                    html += 'onclick="spreadSelectLeg(\\'sell\\',\\'' + peSid + '\\',' + stk + ',' + peLtpVal + ',\\'PE\\');event.stopPropagation();" title="Spread SELL">S</button>';
                     html += '<button class="oc-b-btn" id="qsb-PE-' + stk.toFixed(0) + '-B" ';
                     html += 'style="margin-left:0;" ';
-                    html += 'onclick="spreadSelectLeg(\'buy\',\'' + peSid + '\',' + stk + ',' + peLtpVal + ',\'PE\');event.stopPropagation();" title="Spread BUY">B</button>';
+                    html += 'onclick="spreadSelectLeg(\\'buy\\',\\'' + peSid + '\\',' + stk + ',' + peLtpVal + ',\\'PE\\');event.stopPropagation();" title="Spread BUY">B</button>';
                 }
                 html += '</td>';
 
