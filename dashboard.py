@@ -3436,22 +3436,23 @@ def api_option_chain_data():
                                 best_diff, best_row = d, row
                     if best_row:
                         spot = best_row["strike"] + best_row["ce_ltp"] - best_row["pe_ltp"]
-                        # Pass 2: find ATM index in full chain and fetch ±12 strikes
+                        # Pass 2: find ATM index in full chain and fetch ±10 strikes (42 IDs max)
                         atm_approx = min(range(len(chain)), key=lambda i: abs(chain[i]["strike"] - spot))
-                        atm_slice = chain[max(0, atm_approx - 12): atm_approx + 13]
+                        atm_slice = chain[max(0, atm_approx - 10): atm_approx + 11]
                         atm_ltps = _bse_fetch_ltps(atm_slice)
-                        for row in atm_slice:
-                            row["ce_ltp"] = atm_ltps.get(str(row["ce_security_id"]), 0)
-                            row["pe_ltp"] = atm_ltps.get(str(row["pe_security_id"]), 0)
-                        # Refine spot from pass-2 data
-                        best_row2, best_diff2 = None, float("inf")
-                        for row in atm_slice:
-                            if row["ce_ltp"] > 0 and row["pe_ltp"] > 0:
-                                d = abs(row["ce_ltp"] - row["pe_ltp"])
-                                if d < best_diff2:
-                                    best_diff2, best_row2 = d, row
-                        if best_row2:
-                            spot = best_row2["strike"] + best_row2["ce_ltp"] - best_row2["pe_ltp"]
+                        if atm_ltps:  # only update if fetch succeeded; don't zero out pass-1 prices
+                            for row in atm_slice:
+                                row["ce_ltp"] = atm_ltps.get(str(row["ce_security_id"]), row["ce_ltp"])
+                                row["pe_ltp"] = atm_ltps.get(str(row["pe_security_id"]), row["pe_ltp"])
+                            # Refine spot from pass-2 data
+                            best_row2, best_diff2 = None, float("inf")
+                            for row in atm_slice:
+                                if row["ce_ltp"] > 0 and row["pe_ltp"] > 0:
+                                    d = abs(row["ce_ltp"] - row["pe_ltp"])
+                                    if d < best_diff2:
+                                        best_diff2, best_row2 = d, row
+                            if best_row2:
+                                spot = best_row2["strike"] + best_row2["ce_ltp"] - best_row2["pe_ltp"]
             except Exception as e:
                 logger.error("Option chain price fetch failed: %s", e, exc_info=True)
 
