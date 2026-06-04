@@ -3391,48 +3391,67 @@ def api_option_chain_data():
                                 row["ce_ltp"] = strike_data["ce_ltp"]
                                 row["pe_ltp"] = strike_data["pe_ltp"]
                 else:
-                    # BSE: Dhan option_chain API doesn't support BSE indices.
-                    # ticker_data works for BSE_FNO but requires integer security IDs.
-                    # The full chain can have 190+ strikes; pre-trim to centre ±10
-                    # before fetching so we stay well within Dhan's ~50 ID limit.
-                    bse_mid = len(chain) // 2
-                    bse_slice = chain[max(0, bse_mid - 10): bse_mid + 11]
-                    option_ids = []
-                    for row in bse_slice:
-                        if row["ce_security_id"]:
-                            option_ids.append(int(row["ce_security_id"]))
-                        if row["pe_security_id"]:
-                            option_ids.append(int(row["pe_security_id"]))
-                    if option_ids:
-                        ltp_result = _monitor.api.get_ltp({"BSE_FNO": option_ids})
-                        if isinstance(ltp_result, dict) and ltp_result.get("status") == "success":
-                            outer = ltp_result.get("data", {})
-                            # Unwrap extra data layer: {data: {BSE_FNO: {...}}, status: ...}
-                            if isinstance(outer, dict) and "data" in outer:
-                                outer = outer["data"]
-                            id_to_ltp = {}
-                            if isinstance(outer, dict):
-                                for seg_data in outer.values():
-                                    if isinstance(seg_data, dict):
-                                        for sid, info in seg_data.items():
-                                            ltp_val = info.get("last_price", 0) if isinstance(info, dict) else (info or 0)
-                                            id_to_ltp[str(sid)] = ltp_val or 0
-                            for row in chain:
-                                row["ce_ltp"] = id_to_ltp.get(str(row["ce_security_id"]), 0)
-                                row["pe_ltp"] = id_to_ltp.get(str(row["pe_security_id"]), 0)
-                            # Derive synthetic spot from put-call parity:
-                            # Spot ≈ Strike + CE_LTP - PE_LTP; use row with both prices
-                            # Best estimate: strike where |CE - PE| is smallest
-                            best_row = None
-                            best_diff = float("inf")
-                            for row in chain:
-                                if row["ce_ltp"] > 0 and row["pe_ltp"] > 0:
-                                    diff = abs(row["ce_ltp"] - row["pe_ltp"])
-                                    if diff < best_diff:
-                                        best_diff = diff
-                                        best_row = row
-                            if best_row:
-                                spot = best_row["strike"] + best_row["ce_ltp"] - best_row["pe_ltp"]
+                    # BSE: Dhan option_chain API doesn't support BSE index LTP.
+                    # The full chain has 190+ strikes; Dhan limits ticker_data to ~40 IDs.
+                    # Two-pass approach:
+                    #   Pass 1: sample every 10th strike (~20 IDs) to estimate spot
+                    #   Pass 2: fetch ATM±12 (~50 IDs) using estimated spot
+
+                    def _bse_fetch_ltps(rows):
+                        """Fetch LTPs for a list of chain rows. Returns {security_id_str: ltp}."""
+                        ids = []
+                        for r in rows:
+                            if r["ce_security_id"]: ids.append(int(r["ce_security_id"]))
+                            if r["pe_security_id"]: ids.append(int(r["pe_security_id"]))
+                        if not ids:
+                            return {}
+                        res = _monitor.api.get_ltp({"BSE_FNO": ids})
+                        if not isinstance(res, dict) or res.get("status") != "success":
+                            return {}
+                        outer = res.get("data", {})
+                        if isinstance(outer, dict) and "data" in outer:
+                            outer = outer["data"]
+                        result = {}
+                        if isinstance(outer, dict):
+                            for seg in outer.values():
+                                if isinstance(seg, dict):
+                                    for sid, info in seg.items():
+                                        result[str(sid)] = (info.get("last_price", 0) if isinstance(info, dict) else (info or 0)) or 0
+                        return result
+
+                    # Pass 1: sample every 10th strike to find approximate ATM
+                    step = max(1, len(chain) // 20)
+                    sample_rows = chain[::step]
+                    sample_ltps = _bse_fetch_ltps(sample_rows)
+                    for row in sample_rows:
+                        row["ce_ltp"] = sample_ltps.get(str(row["ce_security_id"]), 0)
+                        row["pe_ltp"] = sample_ltps.get(str(row["pe_security_id"]), 0)
+
+                    # Derive approximate spot from sample (strike where |CE-PE| is smallest)
+                    best_row, best_diff = None, float("inf")
+                    for row in sample_rows:
+                        if row["ce_ltp"] > 0 and row["pe_ltp"] > 0:
+                            d = abs(row["ce_ltp"] - row["pe_ltp"])
+                            if d < best_diff:
+                                best_diff, best_row = d, row
+                    if best_row:
+                        spot = best_row["strike"] + best_row["ce_ltp"] - best_row["pe_ltp"]
+                        # Pass 2: find ATM index in full chain and fetch ±12 strikes
+                        atm_approx = min(range(len(chain)), key=lambda i: abs(chain[i]["strike"] - spot))
+                        atm_slice = chain[max(0, atm_approx - 12): atm_approx + 13]
+                        atm_ltps = _bse_fetch_ltps(atm_slice)
+                        for row in atm_slice:
+                            row["ce_ltp"] = atm_ltps.get(str(row["ce_security_id"]), 0)
+                            row["pe_ltp"] = atm_ltps.get(str(row["pe_security_id"]), 0)
+                        # Refine spot from pass-2 data
+                        best_row2, best_diff2 = None, float("inf")
+                        for row in atm_slice:
+                            if row["ce_ltp"] > 0 and row["pe_ltp"] > 0:
+                                d = abs(row["ce_ltp"] - row["pe_ltp"])
+                                if d < best_diff2:
+                                    best_diff2, best_row2 = d, row
+                        if best_row2:
+                            spot = best_row2["strike"] + best_row2["ce_ltp"] - best_row2["pe_ltp"]
             except Exception as e:
                 logger.error("Option chain price fetch failed: %s", e, exc_info=True)
 
