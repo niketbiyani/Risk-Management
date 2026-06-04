@@ -524,7 +524,7 @@ DASHBOARD_HTML = """
                                 <option value="">Loading...</option>
                             </select>
                             <button onclick="loadOptionChain()" class="btn-neutral" style="padding:4px 10px;font-size:11px;">Refresh</button>
-                            <span id="oc-auto-status" style="font-size:10px;color:#3fb950;margin-left:6px;">Auto 5s</span>
+                            <span id="oc-auto-status" style="font-size:10px;color:#3fb950;margin-left:6px;">Auto 2s</span>
                         </div>
                     </div>
                     <div id="oc-spot" style="font-size:13px;color:#8b949e;margin-bottom:8px;">Spot: --</div>
@@ -2551,8 +2551,8 @@ DASHBOARD_HTML = """
             if (_ocAutoTimer) return;  // Already running
             _ocAutoTimer = setInterval(function() {
                 loadOptionChain(true);
-            }, 5000);
-            console.log('[OC] Auto-refresh started (5s interval)');
+            }, 2000);
+            console.log('[OC] Auto-refresh started (2s interval)');
             var statusEl = document.getElementById('oc-auto-status');
             if (statusEl) statusEl.style.color = '#3fb950';
         }
