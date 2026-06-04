@@ -3388,21 +3388,24 @@ def api_option_chain_data():
                                 row["pe_ltp"] = strike_data["pe_ltp"]
                 else:
                     # BSE: Dhan option_chain API doesn't support BSE indices.
-                    # The BSE index security IDs are also not accessible via ticker_data.
-                    # Fetch option LTPs via ticker_data (BSE_FNO), skip spot.
+                    # ticker_data works for BSE_FNO but requires integer security IDs.
+                    # Response is nested: data.data.BSE_FNO.{id: {last_price: ...}}
                     option_ids = []
                     for row in chain:
                         if row["ce_security_id"]:
-                            option_ids.append(str(row["ce_security_id"]))
+                            option_ids.append(int(row["ce_security_id"]))
                         if row["pe_security_id"]:
-                            option_ids.append(str(row["pe_security_id"]))
+                            option_ids.append(int(row["pe_security_id"]))
                     if option_ids:
                         ltp_result = _monitor.api.get_ltp({"BSE_FNO": option_ids[:50]})
                         if isinstance(ltp_result, dict) and ltp_result.get("status") == "success":
-                            ltp_data = ltp_result.get("data", {})
+                            outer = ltp_result.get("data", {})
+                            # Unwrap extra data layer: {data: {BSE_FNO: {...}}, status: ...}
+                            if isinstance(outer, dict) and "data" in outer:
+                                outer = outer["data"]
                             id_to_ltp = {}
-                            if isinstance(ltp_data, dict):
-                                for seg_data in ltp_data.values():
+                            if isinstance(outer, dict):
+                                for seg_data in outer.values():
                                     if isinstance(seg_data, dict):
                                         for sid, info in seg_data.items():
                                             ltp_val = info.get("last_price", 0) if isinstance(info, dict) else (info or 0)
