@@ -286,6 +286,9 @@ class PositionMonitor:
                 price=0,
             )
 
+            if isinstance(hedge_result, dict) and hedge_result.get("status") == "failure":
+                raise RuntimeError(f"Hedge BUY rejected by broker: {hedge_result.get('remarks', hedge_result)}")
+
             hedge_order_id = ""
             if isinstance(hedge_result, dict):
                 hedge_order_id = str(hedge_result.get("orderId", hedge_result.get("data", {}).get("orderId", "")))
@@ -305,6 +308,9 @@ class PositionMonitor:
                 product_type="MARGIN",
                 price=spread_action["sell_price"],
             )
+
+            if isinstance(sell_result, dict) and sell_result.get("status") == "failure":
+                raise RuntimeError(f"Sell LIMIT rejected by broker: {sell_result.get('remarks', sell_result)}")
 
             sell_order_id = ""
             if isinstance(sell_result, dict):

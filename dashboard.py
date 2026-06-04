@@ -518,7 +518,7 @@ DASHBOARD_HTML = """
                         <div style="display:flex;gap:10px;align-items:center;">
                             <select id="oc-underlying" class="form-input" style="width:120px;padding:4px 8px;font-size:12px;">
                                 <option value="13">NIFTY</option>
-                                <option value="25">BANKNIFTY</option>
+                                <option value="1">SENSEX</option>
                             </select>
                             <select id="oc-expiry" class="form-input" style="width:120px;padding:4px 8px;font-size:12px;" onchange="loadOptionChain()">
                                 <option value="">Loading...</option>
@@ -2586,15 +2586,19 @@ DASHBOARD_HTML = """
             var underlying = sel.options[sel.selectedIndex].text;
             var symbol = underlying + ' ' + strike.toFixed(0) + ' ' + optType + ' ' + expiry;
 
+            var bseUnderlyings = ['SENSEX', 'BANKEX'];
+            var exSeg = bseUnderlyings.indexOf(underlying) >= 0 ? 'BSE_FNO' : 'NSE_FNO';
+
             if (side === 'sell') {
                 _spreadSellLeg = leg;
+                _spreadSellLeg.exchangeSegment = exSeg;
                 // Subscribe DOM + load chart for sell leg
-                subscribeDepth(secId, 'NSE_FNO', symbol);
-                loadChart(secId, 'NSE_FNO');
+                subscribeDepth(secId, exSeg, symbol);
+                loadChart(secId, exSeg);
                 switchDomTab('chart');
                 // Cross-populate existing spread form sell leg
                 document.getElementById('spread-sell-id').value = secId;
-                document.getElementById('spread-sell-exseg').value = 'NSE_FNO';
+                document.getElementById('spread-sell-exseg').value = exSeg;
                 document.getElementById('spread-sell-price').value = ltp.toFixed(2);
                 document.getElementById('spread-sell-search').value = symbol;
                 document.getElementById('spread-sell-info').style.display = 'block';
@@ -2602,9 +2606,10 @@ DASHBOARD_HTML = """
                 showToast('SELL: ' + strike.toFixed(0) + ' ' + optType + ' @ \\u20B9' + ltp.toFixed(2), 'warning');
             } else {
                 _spreadBuyLeg = leg;
+                _spreadBuyLeg.exchangeSegment = exSeg;
                 // Cross-populate existing spread form buy leg
                 document.getElementById('spread-buy-id').value = secId;
-                document.getElementById('spread-buy-exseg').value = 'NSE_FNO';
+                document.getElementById('spread-buy-exseg').value = exSeg;
                 document.getElementById('spread-buy-search').value = symbol;
                 document.getElementById('spread-buy-info').style.display = 'block';
                 document.getElementById('spread-buy-info').textContent = 'NSE_FNO | ID: ' + secId;
@@ -2746,15 +2751,15 @@ DASHBOARD_HTML = """
                 + 'Net credit: \\u20B9' + net.toFixed(2);
             if (!confirm(label)) return;
             var payload = {
-                sell_security_id:    _spreadSellLeg.securityId,
-                sell_exchange_segment: 'NSE_FNO',
-                sell_price:          _spreadSellLeg.ltp,
-                sell_trigger_price:  _spreadSellLeg.ltp,
-                sell_sl:             parseFloat(document.getElementById('sqb-sell-sl').value) || 0,
-                buy_security_id:     _spreadBuyLeg.securityId,
-                buy_exchange_segment:'NSE_FNO',
-                quantity:            qty,
-                instant:             true
+                sell_security_id:      _spreadSellLeg.securityId,
+                sell_exchange_segment: _spreadSellLeg.exchangeSegment || 'NSE_FNO',
+                sell_price:            _spreadSellLeg.ltp,
+                sell_trigger_price:    _spreadSellLeg.ltp,
+                sell_sl:               parseFloat(document.getElementById('sqb-sell-sl').value) || 0,
+                buy_security_id:       _spreadBuyLeg.securityId,
+                buy_exchange_segment:  _spreadBuyLeg.exchangeSegment || 'NSE_FNO',
+                quantity:              qty,
+                instant:               true
             };
             fetch('/api/order/place_spread', {
                 method: 'POST',
@@ -2782,15 +2787,15 @@ DASHBOARD_HTML = """
             var trigPrice = parseFloat(document.getElementById('sqb-trigger-price').value);
             if (!trigPrice || trigPrice <= 0) { showToast('Enter trigger price', 'warning'); return; }
             var payload = {
-                sell_security_id:    _spreadSellLeg.securityId,
-                sell_exchange_segment: 'NSE_FNO',
-                sell_price:          _spreadSellLeg.ltp,
-                sell_trigger_price:  trigPrice,
-                sell_sl:             parseFloat(document.getElementById('sqb-sell-sl').value) || 0,
-                buy_security_id:     _spreadBuyLeg.securityId,
-                buy_exchange_segment:'NSE_FNO',
-                quantity:            qty,
-                instant:             false
+                sell_security_id:      _spreadSellLeg.securityId,
+                sell_exchange_segment: _spreadSellLeg.exchangeSegment || 'NSE_FNO',
+                sell_price:            _spreadSellLeg.ltp,
+                sell_trigger_price:    trigPrice,
+                sell_sl:               parseFloat(document.getElementById('sqb-sell-sl').value) || 0,
+                buy_security_id:       _spreadBuyLeg.securityId,
+                buy_exchange_segment:  _spreadBuyLeg.exchangeSegment || 'NSE_FNO',
+                quantity:              qty,
+                instant:               false
             };
             fetch('/api/order/place_spread', {
                 method: 'POST',
@@ -3282,6 +3287,8 @@ def api_option_chain_expiries():
     if not _instrument_cache:
         return jsonify({"error": "Instrument cache not loaded"}), 500
     underlying = request.args.get("underlying", "NIFTY").upper()
+    bse_underlyings = {"SENSEX", "BANKEX"}
+    expected_exchange = "BSE" if underlying in bse_underlyings else "NSE"
     try:
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
@@ -3291,8 +3298,10 @@ def api_option_chain_expiries():
                 continue
             if not inst.trading_symbol.upper().startswith(underlying + "-"):
                 continue
+            if getattr(inst, "exchange", "NSE") != expected_exchange:
+                continue
             if inst.expiry_date:
-                exp_date = inst.expiry_date[:10]  # "2026-03-30 14:30:00" -> "2026-03-30"
+                exp_date = inst.expiry_date[:10]
                 if exp_date >= today:
                     expiries.add(exp_date)
         sorted_expiries = sorted(expiries)[:2]
@@ -3311,10 +3320,13 @@ def api_option_chain_data():
     expiry = request.args.get("expiry", "")
     if not expiry:
         return jsonify({"error": "expiry parameter required"}), 400
+    bse_underlyings = {"SENSEX", "BANKEX"}
+    expected_exchange = "BSE" if underlying in bse_underlyings else "NSE"
+    default_lot = 10 if underlying in bse_underlyings else 75
     try:
         # Build chain from instrument cache
         strikes = {}
-        lot_size = 75
+        lot_size = default_lot
         for inst in _instrument_cache._instruments:
             if inst.instrument_type != "OPTIDX":
                 continue
@@ -3322,7 +3334,7 @@ def api_option_chain_data():
                 continue
             if not inst.expiry_date or inst.expiry_date[:10] != expiry:
                 continue
-            if inst.exchange != "NSE":
+            if getattr(inst, "exchange", "NSE") != expected_exchange:
                 continue
             lot_size = inst.lot_size
             strike = inst.strike_price
@@ -3342,8 +3354,10 @@ def api_option_chain_data():
         spot = 0
         if _monitor:
             try:
-                underlying_id = 13 if underlying == "NIFTY" else 25
-                oc_result = _monitor.api.get_option_chain(underlying_id, expiry)
+                uid_map = {"NIFTY": (13, "IDX_I"), "BANKNIFTY": (25, "IDX_I"),
+                           "SENSEX": (1, "BSE_IDX"), "BANKEX": (12, "BSE_IDX")}
+                underlying_id, oc_exseg = uid_map.get(underlying, (13, "IDX_I"))
+                oc_result = _monitor.api.get_option_chain(underlying_id, expiry, oc_exseg)
                 logger.info("Option chain API response status=%s remarks=%s data_type=%s data_keys=%s",
                             oc_result.get("status"), oc_result.get("remarks"),
                             type(oc_result.get("data")).__name__,
@@ -3921,6 +3935,7 @@ def api_chart(security_id):
         # SDK may nest under 'data' key
         if "data" in data and isinstance(data["data"], dict):
             data = data["data"]
+        from datetime import datetime as _dt
         timestamps = data.get("timestamp", data.get("start_Time", []))
         opens  = data.get("open",  [])
         highs  = data.get("high",  [])
@@ -3928,12 +3943,21 @@ def api_chart(security_id):
         closes = data.get("close", [])
         candles = []
         for i, ts in enumerate(timestamps):
-            o = opens[i]  if i < len(opens)  else 0
-            h = highs[i]  if i < len(highs)  else 0
-            lo = lows[i]  if i < len(lows)   else 0
-            c = closes[i] if i < len(closes) else 0
+            # Dhan returns ISO strings "2024-01-01 09:15:00"; convert to Unix seconds
+            try:
+                unix_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp())
+            except (ValueError, TypeError):
+                try:
+                    unix_ts = int(ts)
+                except (ValueError, TypeError):
+                    continue
+            o  = opens[i]  if i < len(opens)  else 0
+            h  = highs[i]  if i < len(highs)  else 0
+            lo = lows[i]   if i < len(lows)   else 0
+            c  = closes[i] if i < len(closes) else 0
             if o > 0 and h > 0 and lo > 0 and c > 0:
-                candles.append({"time": int(ts), "open": o, "high": h, "low": lo, "close": c})
+                candles.append({"time": unix_ts, "open": o, "high": h, "low": lo, "close": c})
+        logger.info("Chart data for %s: %d candles from %d timestamps", security_id, len(candles), len(timestamps))
         return jsonify({"candles": candles[-120:]})
     except Exception as e:
         logger.error("Failed to get chart data for %s: %s", security_id, e)

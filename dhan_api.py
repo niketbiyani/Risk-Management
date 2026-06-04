@@ -32,6 +32,8 @@ class DhanAPI:
     # Nifty underlying security ID
     NIFTY_SECURITY_ID = 13
     BANKNIFTY_SECURITY_ID = 25
+    SENSEX_SECURITY_ID = 1
+    BSE_IDX = "BSE_IDX"
 
     def __init__(self):
         self.client_id = Config.DHAN_CLIENT_ID
@@ -276,17 +278,20 @@ class DhanAPI:
 
     # ── Options Chain & Market Data ────────────────────────────────────
 
-    def get_option_chain(self, underlying_id: int = None, expiry: str = None) -> dict:
+    def get_option_chain(self, underlying_id: int = None, expiry: str = None,
+                         exchange_segment: str = None) -> dict:
         """
         Get option chain for an underlying.
-        underlying_id: 13 for NIFTY, 25 for BANKNIFTY
+        underlying_id: 13=NIFTY, 25=BANKNIFTY, 1=SENSEX
+        exchange_segment: IDX_I for NSE indices, BSE_IDX for BSE indices
         expiry: date string like '2024-10-31'
         """
         uid = underlying_id or self.NIFTY_SECURITY_ID
+        seg = exchange_segment or self.IDX_I
         try:
             return self.dhan.option_chain(
                 under_security_id=uid,
-                under_exchange_segment=self.IDX_I,
+                under_exchange_segment=seg,
                 expiry=expiry or "",
             )
         except Exception as e:
