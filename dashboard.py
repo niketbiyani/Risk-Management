@@ -2522,10 +2522,17 @@ DASHBOARD_HTML = """
                             if (ltp > 0) {
                                 _spreadSellLeg.ltp = ltp;
                                 updateSpreadQuickBar();
-                                // Push live LTP into the last chart candle
+                                // Push live LTP into the current 1-min bar with proper OHLC
                                 var nowSec = Math.floor(Date.now() / 1000);
-                                var barSec = nowSec - (nowSec % 60);  // floor to 1-min bar
-                                try { _lwSeries.update({time: barSec, open: ltp, high: ltp, low: ltp, close: ltp}); } catch(e) {}
+                                var barSec = nowSec - (nowSec % 60);
+                                if (barSec !== _liveBarTime) {
+                                    _liveBarTime = barSec; _liveBarOpen = ltp;
+                                    _liveBarHigh = ltp;    _liveBarLow  = ltp;
+                                } else {
+                                    if (ltp > _liveBarHigh) _liveBarHigh = ltp;
+                                    if (ltp < _liveBarLow)  _liveBarLow  = ltp;
+                                }
+                                try { _lwSeries.update({time: barSec, open: _liveBarOpen, high: _liveBarHigh, low: _liveBarLow, close: ltp}); } catch(e) {}
                                 break;
                             }
                         }
@@ -2854,6 +2861,10 @@ DASHBOARD_HTML = """
         var _lwChart  = null;
         var _lwSeries = null;
         var _lwCurrentSecurity = null;
+        var _liveBarTime = 0;
+        var _liveBarOpen = 0;
+        var _liveBarHigh = 0;
+        var _liveBarLow  = Infinity;
 
         function initLightweightChart() {
             var container = document.getElementById('dom-chart-canvas');
@@ -2885,6 +2896,7 @@ DASHBOARD_HTML = """
         function loadChart(securityId, exchangeSegment) {
             _lwCurrentSecurity = securityId;
             _lwExchangeSegment = exchangeSegment || 'NSE_FNO';
+            _liveBarTime = 0; _liveBarOpen = 0; _liveBarHigh = 0; _liveBarLow = Infinity;
             if (!_lwChart) initLightweightChart();
             if (!_lwChart) return;
             _refreshChart();
