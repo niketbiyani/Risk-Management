@@ -3355,6 +3355,9 @@ def api_option_chain_expiries():
         return jsonify({"error": str(e)}), 500
 
 
+_oc_data_cache: dict = {}  # (underlying, expiry) -> (timestamp, response_dict)
+_OC_CACHE_TTL = 2.0  # seconds — match frontend refresh rate
+
 @app.route("/api/option_chain/data")
 def api_option_chain_data():
     """Build option chain from instrument cache, optionally fetch LTPs."""
@@ -3364,6 +3367,12 @@ def api_option_chain_data():
     expiry = request.args.get("expiry", "")
     if not expiry:
         return jsonify({"error": "expiry parameter required"}), 400
+
+    # Return cached response if fresh enough — prevents API rate-limit hits
+    cache_key = (underlying, expiry)
+    cached = _oc_data_cache.get(cache_key)
+    if cached and (time.time() - cached[0]) < _OC_CACHE_TTL:
+        return jsonify(cached[1])
     bse_underlyings = {"SENSEX", "BANKEX"}
     expected_exchange = "BSE" if underlying in bse_underlyings else "NSE"
     default_lot = 10 if underlying in bse_underlyings else 75
@@ -3514,11 +3523,9 @@ def api_option_chain_data():
         chain = chain[start:end]
 
         # Log a summary for debugging auto-refresh
-        atm_ce = chain[len(chain)//2]["ce_ltp"] if chain else 0
-        atm_pe = chain[len(chain)//2]["pe_ltp"] if chain else 0
-        logger.info("OC response: spot=%.2f atm_ce=%.2f atm_pe=%.2f strikes=%d",
-                     spot, atm_ce, atm_pe, len(chain))
-        return jsonify({"spot": spot, "chain": chain, "expiry": expiry, "lot_size": lot_size})
+        result_data = {"spot": spot, "chain": chain, "expiry": expiry, "lot_size": lot_size}
+        _oc_data_cache[cache_key] = (time.time(), result_data)
+        return jsonify(result_data)
     except Exception as e:
         logger.error("Option chain error: %s", e)
         return jsonify({"error": str(e)}), 500
