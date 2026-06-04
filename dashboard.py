@@ -578,10 +578,13 @@ DASHBOARD_HTML = """
                             <strong id="sqb-qty" style="font-size:12px;color:#e6edf3;">-</strong>
                             <span id="sqb-lots" style="font-size:10px;color:#484f58;"></span>
                             <input id="sqb-qty-override" class="form-input" type="number" placeholder="Override" style="width:72px;font-size:11px;padding:4px 6px;" title="Override calculated qty" oninput="sqbAutoCalc()">
-                            <button id="sqb-execute-btn" onclick="executeSpreadNow()" disabled class="btn-sell" style="padding:5px 14px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;">&#9889; EXECUTE NOW</button>
+                            <button id="sqb-execute-btn" onclick="executeSpreadNow('LIMIT')" disabled class="btn-sell" style="padding:5px 14px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;">&#9889; EXECUTE LMT</button>
+                            <button id="sqb-execute-mkt-btn" onclick="executeSpreadNow('MARKET')" disabled class="btn-sell" style="padding:5px 10px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;background:#7a1a1a;" title="Both legs at MARKET price">&#9889; MKT</button>
                             <button id="sqb-arm-btn" onclick="toggleSqbTrigger()" disabled style="padding:5px 12px;font-size:12px;font-weight:700;background:#5a3e00;color:#d29922;border:1px solid #d29922;border-radius:6px;cursor:pointer;opacity:0.5;">ARM TRIGGER</button>
-                            <button id="sqb-single-sell-btn" onclick="executeSingleLeg('sell')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#3d0f0f;color:#f85149;border:1px solid #f85149;border-radius:6px;cursor:pointer;" title="Sell only (no hedge) — use when hedge is already filled">SELL ONLY</button>
-                            <button id="sqb-single-buy-btn" onclick="executeSingleLeg('buy')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#0d2117;color:#3fb950;border:1px solid #3fb950;border-radius:6px;cursor:pointer;" title="Buy only (no hedge)">BUY ONLY</button>
+                            <button id="sqb-single-sell-btn" onclick="executeSingleLeg('sell','LIMIT')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#3d0f0f;color:#f85149;border:1px solid #f85149;border-radius:6px;cursor:pointer;" title="Sell only at LIMIT price — hedge already filled">SELL LMT</button>
+                            <button id="sqb-single-sell-mkt-btn" onclick="executeSingleLeg('sell','MARKET')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#5a1a1a;color:#f85149;border:1px solid #f85149;border-radius:6px;cursor:pointer;" title="Sell only at MARKET — emergency exit">SELL MKT</button>
+                            <button id="sqb-single-buy-btn" onclick="executeSingleLeg('buy','LIMIT')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#0d2117;color:#3fb950;border:1px solid #3fb950;border-radius:6px;cursor:pointer;" title="Buy only at LIMIT price">BUY LMT</button>
+                            <button id="sqb-single-buy-mkt-btn" onclick="executeSingleLeg('buy','MARKET')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#0a2e1a;color:#3fb950;border:1px solid #3fb950;border-radius:6px;cursor:pointer;" title="Buy only at MARKET">BUY MKT</button>
                         </div>
                         <!-- Trigger sub-form -->
                         <div id="sqb-trigger-form" style="display:none;margin-top:5px;padding:5px 8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;align-items:center;gap:6px;font-size:11px;">
@@ -2743,17 +2746,25 @@ DASHBOARD_HTML = """
                 lotsEl.textContent = sl > 0 && sl <= sellPrice ? '\\u26A0 SL must be > sell price' : '';
             }
 
-            // Enable execute only when: both legs + sell price + SL + qty ready
+            // Enable execute: LIMIT needs sell price + SL > sellPrice + qty; MKT only needs both legs + SL + qty
             var qty = parseInt(document.getElementById('sqb-qty-override').value) || autoQty;
-            var ready = _spreadSellLeg && _spreadBuyLeg && sellPrice > 0 && sl > sellPrice && qty > 0;
-            var execBtn = document.getElementById('sqb-execute-btn');
-            var armBtn  = document.getElementById('sqb-arm-btn');
-            execBtn.disabled = !ready; execBtn.style.opacity = ready ? '1' : '0.5';
-            armBtn.disabled  = !ready; armBtn.style.opacity  = ready ? '1' : '0.5';
+            var bothLegs = !!(_spreadSellLeg && _spreadBuyLeg);
+            var readyLmt = bothLegs && sellPrice > 0 && sl > sellPrice && qty > 0;
+            var readyMkt = bothLegs && sl > 0 && qty > 0;
+            var execBtn    = document.getElementById('sqb-execute-btn');
+            var execMktBtn = document.getElementById('sqb-execute-mkt-btn');
+            var armBtn     = document.getElementById('sqb-arm-btn');
+            execBtn.disabled    = !readyLmt; execBtn.style.opacity    = readyLmt ? '1' : '0.5';
+            execMktBtn.disabled = !readyMkt; execMktBtn.style.opacity = readyMkt ? '1' : '0.5';
+            armBtn.disabled     = !readyLmt; armBtn.style.opacity     = readyLmt ? '1' : '0.5';
 
-            // Show single-leg buttons: SELL ONLY when sell leg selected, BUY ONLY when buy leg selected
-            document.getElementById('sqb-single-sell-btn').style.display = _spreadSellLeg ? 'inline-block' : 'none';
-            document.getElementById('sqb-single-buy-btn').style.display  = _spreadBuyLeg  ? 'inline-block' : 'none';
+            // Show single-leg buttons when a leg is selected
+            var hasSell = !!_spreadSellLeg;
+            var hasBuy  = !!_spreadBuyLeg;
+            document.getElementById('sqb-single-sell-btn').style.display     = hasSell ? 'inline-block' : 'none';
+            document.getElementById('sqb-single-sell-mkt-btn').style.display = hasSell ? 'inline-block' : 'none';
+            document.getElementById('sqb-single-buy-btn').style.display      = hasBuy  ? 'inline-block' : 'none';
+            document.getElementById('sqb-single-buy-mkt-btn').style.display  = hasBuy  ? 'inline-block' : 'none';
 
             // Pre-fill trigger price
             var trigEl = document.getElementById('sqb-trigger-price');
@@ -2782,16 +2793,18 @@ DASHBOARD_HTML = """
             document.getElementById('sqb-arm-btn').style.background = '#5a3e00';
         }
 
-        function executeSingleLeg(side) {
+        function executeSingleLeg(side, orderType) {
             var leg = side === 'sell' ? _spreadSellLeg : _spreadBuyLeg;
             if (!leg) { showToast('No ' + side + ' leg selected', 'warning'); return; }
             var price = side === 'sell' ? sqbGetSellPrice() : sqbGetBuyPrice();
-            if (!price || price <= 0) { showToast('Enter price first', 'warning'); return; }
+            var isMarket = (orderType === 'MARKET');
+            if (!isMarket && (!price || price <= 0)) { showToast('Enter price first', 'warning'); return; }
             var qty = parseInt(document.getElementById('sqb-qty-override').value)
                    || parseInt(document.getElementById('sqb-qty').textContent) || 0;
             if (!qty || qty <= 0) { showToast('Enter quantity first', 'warning'); return; }
             var txn = side === 'sell' ? 'SELL' : 'BUY';
-            if (!confirm(txn + ' ' + qty + ' x ' + leg.strike.toFixed(0) + ' ' + leg.optType + ' @ \\u20B9' + price.toFixed(2) + ' LIMIT\\n(single leg — no hedge)')) return;
+            var priceLabel = isMarket ? 'MARKET' : ('\\u20B9' + price.toFixed(2) + ' LIMIT');
+            if (!confirm(txn + ' ' + qty + ' x ' + leg.strike.toFixed(0) + ' ' + leg.optType + ' @ ' + priceLabel + '\\n(single leg — no hedge)')) return;
             fetch('/api/order/place', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -2800,9 +2813,9 @@ DASHBOARD_HTML = """
                     exchange_segment: leg.exchangeSegment || 'NSE_FNO',
                     transaction_type: txn,
                     quantity:         qty,
-                    order_type:       'LIMIT',
+                    order_type:       isMarket ? 'MARKET' : 'LIMIT',
                     product_type:     'MARGIN',
-                    price:            price
+                    price:            isMarket ? 0 : price
                 })
             })
             .then(function(r){ return r.json(); })
@@ -2812,33 +2825,34 @@ DASHBOARD_HTML = """
                     showToast(txn + ' rejected: ' + (result.message || result.reason || ''), 'error');
                 } else {
                     playAlert('order');
-                    showToast(txn + ' order sent @ \\u20B9' + price.toFixed(2), 'success');
+                    showToast(txn + ' order sent (' + (isMarket ? 'MARKET' : 'LIMIT \\u20B9' + price.toFixed(2)) + ')', 'success');
                 }
             })
             .catch(function(e) { showToast('Network error: ' + e, 'error'); });
         }
 
-        function executeSpreadNow() {
+        function executeSpreadNow(orderType) {
             if (!_spreadSellLeg || !_spreadBuyLeg) { showToast('Select both SELL and BUY legs', 'warning'); return; }
             var qty = parseInt(document.getElementById('sqb-qty-override').value)
                    || parseInt(document.getElementById('sqb-qty').textContent);
             if (!qty || qty <= 0) { showToast('Enter quantity or wait for auto-calc', 'warning'); return; }
+            var isMarket = (orderType === 'MARKET');
             var sellPrice = sqbGetSellPrice();
-            var buyPrice  = sqbGetBuyPrice();
             var sl        = sqbGetSL();
-            if (!sellPrice || sellPrice <= 0) { showToast('Enter SELL price', 'warning'); return; }
-            if (!sl || sl <= sellPrice) { showToast('Enter SL above sell price', 'warning'); return; }
-            var net = sellPrice - buyPrice;
-            var label = 'EXECUTE SPREAD NOW:\\n'
-                + 'SELL ' + qty + ' x ' + _spreadSellLeg.strike.toFixed(0) + ' ' + _spreadSellLeg.optType + ' @ \\u20B9' + sellPrice.toFixed(2) + '\\n'
-                + 'BUY  ' + qty + ' x ' + _spreadBuyLeg.strike.toFixed(0)  + ' ' + _spreadBuyLeg.optType  + ' @ MARKET\\n'
-                + 'Net credit: \\u20B9' + net.toFixed(2) + '  SL: \\u20B9' + sl.toFixed(2);
+            if (!isMarket && (!sellPrice || sellPrice <= 0)) { showToast('Enter SELL price', 'warning'); return; }
+            if (!sl || sl <= (isMarket ? 0 : sellPrice)) { showToast('Enter SL' + (isMarket ? '' : ' above sell price'), 'warning'); return; }
+            var sellLabel = isMarket ? 'MARKET' : ('\\u20B9' + sellPrice.toFixed(2) + ' LIMIT');
+            var label = 'EXECUTE SPREAD NOW (' + (isMarket ? 'MARKET' : 'LIMIT') + '):\\n'
+                + 'BUY  ' + qty + ' x ' + _spreadBuyLeg.strike.toFixed(0)  + ' ' + _spreadBuyLeg.optType  + ' @ MARKET (hedge first)\\n'
+                + 'SELL ' + qty + ' x ' + _spreadSellLeg.strike.toFixed(0) + ' ' + _spreadSellLeg.optType + ' @ ' + sellLabel + '\\n'
+                + 'SL: \\u20B9' + sl.toFixed(2);
             if (!confirm(label)) return;
             var payload = {
                 sell_security_id:      _spreadSellLeg.securityId,
                 sell_exchange_segment: _spreadSellLeg.exchangeSegment || 'NSE_FNO',
-                sell_price:            sellPrice,
-                sell_trigger_price:    sellPrice,
+                sell_price:            isMarket ? 0 : sellPrice,
+                sell_trigger_price:    isMarket ? 0 : sellPrice,
+                sell_order_type:       isMarket ? 'MARKET' : 'LIMIT',
                 sell_sl:               sl,
                 buy_security_id:       _spreadBuyLeg.securityId,
                 buy_exchange_segment:  _spreadBuyLeg.exchangeSegment || 'NSE_FNO',
@@ -3893,7 +3907,8 @@ def api_place_spread():
                 "spread_id": f"INSTANT-{int(time.time())}",
                 "sell_security_id": str(data["sell_security_id"]),
                 "sell_exchange_segment": data.get("sell_exchange_segment", "NSE_FNO"),
-                "sell_price": float(data["sell_price"]),
+                "sell_order_type": data.get("sell_order_type", "LIMIT"),
+                "sell_price": float(data.get("sell_price") or 0),
                 "sell_sl": float(data.get("sell_sl", 0)),
                 "buy_security_id": str(data["buy_security_id"]),
                 "buy_exchange_segment": data.get("buy_exchange_segment", "NSE_FNO"),

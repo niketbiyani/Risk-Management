@@ -298,19 +298,21 @@ class PositionMonitor:
             # Brief pause to let hedge fill before placing sell leg
             time.sleep(0.2)
 
-            # Step 2: Place sell at LIMIT price
+            # Step 2: Place sell (LIMIT or MARKET depending on caller)
+            sell_order_type = spread_action.get("sell_order_type", "LIMIT")
+            sell_price = spread_action["sell_price"] if sell_order_type == "LIMIT" else 0
             sell_result = self.api.place_order(
                 security_id=spread_action["sell_security_id"],
                 exchange_segment=spread_action["sell_exchange_segment"],
                 transaction_type="SELL",
                 quantity=spread_action["quantity"],
-                order_type="LIMIT",
+                order_type=sell_order_type,
                 product_type="MARGIN",
-                price=spread_action["sell_price"],
+                price=sell_price,
             )
 
             if isinstance(sell_result, dict) and sell_result.get("status") == "failure":
-                raise RuntimeError(f"Sell LIMIT rejected by broker: {sell_result.get('remarks', sell_result)}")
+                raise RuntimeError(f"Sell {sell_order_type} rejected by broker: {sell_result.get('remarks', sell_result)}")
 
             sell_order_id = ""
             if isinstance(sell_result, dict):
