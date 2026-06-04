@@ -2511,6 +2511,25 @@ DASHBOARD_HTML = """
                         return;
                     }
                     renderOcChain(d, expiry);
+                    // Update live chart candle with latest sell-leg LTP
+                    if (_spreadSellLeg && _lwSeries && _lwCurrentSecurity === _spreadSellLeg.securityId) {
+                        var chain = d.chain || [];
+                        for (var ci = 0; ci < chain.length; ci++) {
+                            var row = chain[ci];
+                            var ltp = 0;
+                            if (String(row.ce_security_id) === String(_spreadSellLeg.securityId)) ltp = row.ce_ltp;
+                            else if (String(row.pe_security_id) === String(_spreadSellLeg.securityId)) ltp = row.pe_ltp;
+                            if (ltp > 0) {
+                                _spreadSellLeg.ltp = ltp;
+                                updateSpreadQuickBar();
+                                // Push live LTP into the last chart candle
+                                var nowSec = Math.floor(Date.now() / 1000);
+                                var barSec = nowSec - (nowSec % 60);  // floor to 1-min bar
+                                try { _lwSeries.update({time: barSec, open: ltp, high: ltp, low: ltp, close: ltp}); } catch(e) {}
+                                break;
+                            }
+                        }
+                    }
                 })
                 .catch(function(e) {
                     _ocRefreshing = false;
