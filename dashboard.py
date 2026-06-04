@@ -3350,65 +3350,77 @@ def api_option_chain_data():
         if not chain:
             return jsonify({"spot": 0, "chain": [], "expiry": expiry, "lot_size": lot_size})
 
-        # Use Dhan's option_chain API to get spot + LTPs in one call
+        # Fetch spot price and option LTPs
         spot = 0
         if _monitor:
             try:
-                uid_map = {"NIFTY": (13, "IDX_I"), "BANKNIFTY": (25, "IDX_I"),
-                           "SENSEX": (1, "BSE_IDX"), "BANKEX": (12, "BSE_IDX")}
-                underlying_id, oc_exseg = uid_map.get(underlying, (13, "IDX_I"))
-                oc_result = _monitor.api.get_option_chain(underlying_id, expiry, oc_exseg)
-                logger.info("Option chain API response status=%s remarks=%s data_type=%s data_keys=%s",
-                            oc_result.get("status"), oc_result.get("remarks"),
-                            type(oc_result.get("data")).__name__,
-                            list(oc_result["data"].keys())[:5] if isinstance(oc_result.get("data"), dict) else "N/A")
-                if isinstance(oc_result, dict) and oc_result.get("status") == "success":
-                    oc_data = oc_result.get("data", {})
-                    # Dhan wraps option chain in extra "data" key: {"data": {"data": {actual}, "status": ...}}
-                    if isinstance(oc_data, dict) and "data" in oc_data and isinstance(oc_data["data"], dict):
-                        oc_data = oc_data["data"]
-                    logger.info("Option chain oc_data keys=%s spot=%s num_strikes=%s",
-                                list(oc_data.keys())[:8] if isinstance(oc_data, dict) else "N/A",
-                                oc_data.get("last_price") if isinstance(oc_data, dict) else "N/A",
-                                len(oc_data.get("oc", {})) if isinstance(oc_data, dict) else 0)
-                    spot = oc_data.get("last_price", 0) or 0
-                    oc_strikes = oc_data.get("oc", {})
-                    # Map LTPs from option chain into our chain
-                    ltp_by_strike = {}
-                    # Log sample strike keys and values from API to debug mapping
-                    sample_keys = list(oc_strikes.keys())[:3]
-                    for sk in sample_keys:
-                        sv = oc_strikes[sk]
-                        logger.info("OC API sample strike key=%r type=%s value_keys=%s ce=%s pe=%s",
-                                    sk, type(sk).__name__,
-                                    list(sv.keys()) if isinstance(sv, dict) else type(sv).__name__,
-                                    sv.get("ce", {}) if isinstance(sv, dict) else "N/A",
-                                    sv.get("pe", {}) if isinstance(sv, dict) else "N/A")
-                    for strike_str, sides in oc_strikes.items():
-                        try:
-                            s = float(strike_str)
-                        except (ValueError, TypeError):
-                            continue
-                        ce = sides.get("ce", {}) or {}
-                        pe = sides.get("pe", {}) or {}
-                        ltp_by_strike[s] = {
-                            "ce_ltp": ce.get("last_price", 0) or 0,
-                            "pe_ltp": pe.get("last_price", 0) or 0,
-                        }
-                    # Log mapping results
-                    sample_chain = chain[:3] if chain else []
-                    matched = sum(1 for r in chain if ltp_by_strike.get(r["strike"]))
-                    sample_ltp_keys = list(ltp_by_strike.keys())[:3]
-                    logger.info("OC mapping: ltp_by_strike has %d entries, sample_keys=%s, chain has %d rows, matched=%d, sample_chain_strikes=%s",
-                                len(ltp_by_strike), sample_ltp_keys, len(chain), matched,
-                                [r["strike"] for r in sample_chain])
+                bse_underlyings = {"SENSEX", "BANKEX"}
+                is_bse = underlying in bse_underlyings
+                # NSE underlyings: use option_chain API (single call, fast)
+                # BSE underlyings: Dhan's option_chain API doesn't support BSE_IDX,
+                #                  so fetch spot + LTPs via market quote instead
+                if not is_bse:
+                    uid_map = {"NIFTY": (13, "IDX_I"), "BANKNIFTY": (25, "IDX_I")}
+                    underlying_id, oc_exseg = uid_map.get(underlying, (13, "IDX_I"))
+                    oc_result = _monitor.api.get_option_chain(underlying_id, expiry, oc_exseg)
+                    if isinstance(oc_result, dict) and oc_result.get("status") == "success":
+                        oc_data = oc_result.get("data", {})
+                        if isinstance(oc_data, dict) and "data" in oc_data and isinstance(oc_data["data"], dict):
+                            oc_data = oc_data["data"]
+                        spot = oc_data.get("last_price", 0) or 0
+                        oc_strikes = oc_data.get("oc", {})
+                        ltp_by_strike = {}
+                        for strike_str, sides in oc_strikes.items():
+                            try:
+                                s = float(strike_str)
+                            except (ValueError, TypeError):
+                                continue
+                            ce = sides.get("ce", {}) or {}
+                            pe = sides.get("pe", {}) or {}
+                            ltp_by_strike[s] = {
+                                "ce_ltp": ce.get("last_price", 0) or 0,
+                                "pe_ltp": pe.get("last_price", 0) or 0,
+                            }
+                        for row in chain:
+                            strike_data = ltp_by_strike.get(row["strike"])
+                            if strike_data:
+                                row["ce_ltp"] = strike_data["ce_ltp"]
+                                row["pe_ltp"] = strike_data["pe_ltp"]
+                else:
+                    # BSE: Dhan option_chain API doesn't support BSE indices.
+                    # Fetch spot + option LTPs via ticker_data (get_ltp).
+                    # Collect all security IDs: index spot + all CE/PE strikes
+                    spot_id_map = {"SENSEX": "1", "BANKEX": "12"}
+                    spot_sid = spot_id_map.get(underlying, "1")
+                    all_ids = [spot_sid]
                     for row in chain:
-                        strike_data = ltp_by_strike.get(row["strike"])
-                        if strike_data:
-                            row["ce_ltp"] = strike_data["ce_ltp"]
-                            row["pe_ltp"] = strike_data["pe_ltp"]
+                        if row["ce_security_id"]:
+                            all_ids.append(str(row["ce_security_id"]))
+                        if row["pe_security_id"]:
+                            all_ids.append(str(row["pe_security_id"]))
+                    # Split: spot is on BSE (index), options on BSE_FNO
+                    option_ids = [i for i in all_ids if i != spot_sid]
+                    securities = {}
+                    if spot_sid:
+                        securities["BSE"] = [spot_sid]
+                    if option_ids:
+                        securities["BSE_FNO"] = option_ids[:50]
+                    ltp_result = _monitor.api.get_ltp(securities)
+                    if isinstance(ltp_result, dict) and ltp_result.get("status") == "success":
+                        ltp_data = ltp_result.get("data", {})
+                        id_to_ltp = {}
+                        if isinstance(ltp_data, dict):
+                            for seg_data in ltp_data.values():
+                                if isinstance(seg_data, dict):
+                                    for sid, info in seg_data.items():
+                                        ltp_val = info.get("last_price", 0) if isinstance(info, dict) else (info or 0)
+                                        id_to_ltp[str(sid)] = ltp_val or 0
+                        spot = id_to_ltp.get(str(spot_sid), 0)
+                        for row in chain:
+                            row["ce_ltp"] = id_to_ltp.get(str(row["ce_security_id"]), 0)
+                            row["pe_ltp"] = id_to_ltp.get(str(row["pe_security_id"]), 0)
             except Exception as e:
-                logger.error("Option chain API failed: %s", e, exc_info=True)
+                logger.error("Option chain price fetch failed: %s", e, exc_info=True)
 
         # Find ATM index
         atm_idx = len(chain) // 2
