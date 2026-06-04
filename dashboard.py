@@ -54,7 +54,7 @@ DASHBOARD_HTML = """
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Trade Risk Management</title>
-    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -2838,7 +2838,11 @@ DASHBOARD_HTML = """
 
         function initLightweightChart() {
             var container = document.getElementById('dom-chart-canvas');
-            if (!container || typeof LightweightCharts === 'undefined') return;
+            if (!container) return;
+            if (typeof LightweightCharts === 'undefined') {
+                container.innerHTML = '<div style="color:#484f58;font-size:11px;padding:20px;text-align:center;">Chart library not loaded<br><span style="font-size:10px;">Check VPS internet access to cdn.jsdelivr.net</span></div>';
+                return;
+            }
             container.innerHTML = '';
             _lwChart = LightweightCharts.createChart(container, {
                 width:  container.clientWidth || 400,
