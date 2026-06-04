@@ -3393,15 +3393,18 @@ def api_option_chain_data():
                 else:
                     # BSE: Dhan option_chain API doesn't support BSE indices.
                     # ticker_data works for BSE_FNO but requires integer security IDs.
-                    # Response is nested: data.data.BSE_FNO.{id: {last_price: ...}}
+                    # The full chain can have 190+ strikes; pre-trim to centre ±10
+                    # before fetching so we stay well within Dhan's ~50 ID limit.
+                    bse_mid = len(chain) // 2
+                    bse_slice = chain[max(0, bse_mid - 10): bse_mid + 11]
                     option_ids = []
-                    for row in chain:
+                    for row in bse_slice:
                         if row["ce_security_id"]:
                             option_ids.append(int(row["ce_security_id"]))
                         if row["pe_security_id"]:
                             option_ids.append(int(row["pe_security_id"]))
                     if option_ids:
-                        ltp_result = _monitor.api.get_ltp({"BSE_FNO": option_ids[:50]})
+                        ltp_result = _monitor.api.get_ltp({"BSE_FNO": option_ids})
                         if isinstance(ltp_result, dict) and ltp_result.get("status") == "success":
                             outer = ltp_result.get("data", {})
                             # Unwrap extra data layer: {data: {BSE_FNO: {...}}, status: ...}
