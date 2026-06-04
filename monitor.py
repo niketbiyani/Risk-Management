@@ -346,6 +346,15 @@ class PositionMonitor:
             self.trade_mgr.update_spread_status(
                 spread_id, "FAILED", error_message=str(e),
             )
+            try:
+                from dashboard import emit_sl_tp_trigger
+                emit_sl_tp_trigger({
+                    "action": "SPREAD_FAILED",
+                    "security_id": spread_action.get("sell_security_id", ""),
+                    "error": str(e),
+                })
+            except Exception:
+                pass
 
     def _execute_lockout(self):
         """

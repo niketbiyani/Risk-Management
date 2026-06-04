@@ -1195,6 +1195,16 @@ DASHBOARD_HTML = """
         function setupSocketListeners() {
             if (!socket) return;
             socket.on('sl_tp_triggered', function(data) {
+                if (data.action === 'SPREAD_FILLED') {
+                    playAlert('order');
+                    showToast('Spread filled: ' + data.security_id + ' SELL @ \\u20B9' + (data.trigger_price || 0).toFixed(2), 'success');
+                    return;
+                }
+                if (data.action === 'SPREAD_FAILED') {
+                    playAlert('error');
+                    showToast('Spread FAILED: ' + (data.error || 'unknown error'), 'error');
+                    return;
+                }
                 var isTP = data.action === 'TAKE_PROFIT';
                 playAlert(isTP ? 'tp_hit' : 'sl_hit');
                 var msg = data.action + ' triggered for ' + data.security_id +
@@ -2755,10 +2765,9 @@ DASHBOARD_HTML = """
             .then(function(result) {
                 if (result.status === 'error' || result.status === 'BLOCKED') {
                     playAlert('error');
-                    showToast('Spread failed: ' + (result.message || result.reason || ''), 'error');
+                    showToast('Spread rejected: ' + (result.message || result.reason || ''), 'error');
                 } else {
-                    playAlert('order');
-                    showToast('Spread executed: BUY @ MKT + SELL @ \\u20B9' + _spreadSellLeg.ltp.toFixed(2), 'success');
+                    showToast('Spread order sent — awaiting fill confirmation...', 'info');
                     clearSpreadQuickBar();
                 }
             })
