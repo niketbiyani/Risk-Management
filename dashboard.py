@@ -3436,9 +3436,9 @@ def api_option_chain_data():
                                 best_diff, best_row = d, row
                     if best_row:
                         spot = best_row["strike"] + best_row["ce_ltp"] - best_row["pe_ltp"]
-                        # Pass 2: find ATM index in full chain and fetch ±10 strikes (42 IDs max)
+                        # Pass 2: find ATM index in full chain and fetch ±8 strikes (34 IDs max)
                         atm_approx = min(range(len(chain)), key=lambda i: abs(chain[i]["strike"] - spot))
-                        atm_slice = chain[max(0, atm_approx - 10): atm_approx + 11]
+                        atm_slice = chain[max(0, atm_approx - 8): atm_approx + 9]
                         atm_ltps = _bse_fetch_ltps(atm_slice)
                         if atm_ltps:  # only update if fetch succeeded; don't zero out pass-1 prices
                             for row in atm_slice:

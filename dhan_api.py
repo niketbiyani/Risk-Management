@@ -349,10 +349,14 @@ class DhanAPI:
     def get_chart_data(self, security_id: str, exchange_segment: str, instrument_type: str = "OPTIDX") -> dict:
         """Fetch intraday 1-minute OHLCV candles for current trading day."""
         try:
+            from datetime import date
+            today = date.today().strftime("%Y-%m-%d")
             return self.dhan.intraday_minute_data(
                 security_id=security_id,
                 exchange_segment=exchange_segment,
                 instrument_type=instrument_type,
+                from_date=today,
+                to_date=today,
             )
         except Exception as e:
             logger.error("Failed to get chart data for %s: %s", security_id, e)
