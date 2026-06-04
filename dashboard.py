@@ -3420,6 +3420,19 @@ def api_option_chain_data():
                             for row in chain:
                                 row["ce_ltp"] = id_to_ltp.get(str(row["ce_security_id"]), 0)
                                 row["pe_ltp"] = id_to_ltp.get(str(row["pe_security_id"]), 0)
+                            # Derive synthetic spot from put-call parity:
+                            # Spot ≈ Strike + CE_LTP - PE_LTP; use row with both prices
+                            # Best estimate: strike where |CE - PE| is smallest
+                            best_row = None
+                            best_diff = float("inf")
+                            for row in chain:
+                                if row["ce_ltp"] > 0 and row["pe_ltp"] > 0:
+                                    diff = abs(row["ce_ltp"] - row["pe_ltp"])
+                                    if diff < best_diff:
+                                        best_diff = diff
+                                        best_row = row
+                            if best_row:
+                                spot = best_row["strike"] + best_row["ce_ltp"] - best_row["pe_ltp"]
             except Exception as e:
                 logger.error("Option chain price fetch failed: %s", e, exc_info=True)
 
