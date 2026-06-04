@@ -547,9 +547,12 @@ DASHBOARD_HTML = """
                     <div id="sqb-panel" style="display:none;border-top:1px solid #21262d;margin-top:8px;padding-top:8px;">
                         <!-- Leg labels row -->
                         <div style="display:flex;gap:10px;margin-bottom:5px;font-size:11px;align-items:center;flex-wrap:wrap;">
-                            <div style="border-left:3px solid #f85149;padding-left:6px;">
+                            <div style="border-left:3px solid #f85149;padding-left:6px;display:flex;align-items:center;gap:4px;">
                                 <span style="color:#f85149;font-weight:700;font-size:10px;">SELL</span>
                                 <span id="sqb-sell-label" style="color:#e6edf3;font-weight:600;margin-left:4px;">--</span>
+                                <input id="sqb-sell-price-override" type="number" step="0.05" placeholder="price"
+                                       style="display:none;width:65px;font-size:11px;padding:2px 5px;background:#21262d;border:1px solid #f85149;border-radius:4px;color:#e6edf3;"
+                                       oninput="onSqbSellPriceEdit()" title="Enter sell price manually">
                             </div>
                             <span style="color:#484f58;">→</span>
                             <div style="border-left:3px solid #3fb950;padding-left:6px;">
@@ -2661,8 +2664,14 @@ DASHBOARD_HTML = """
             if (!_spreadSellLeg && !_spreadBuyLeg) { panel.style.display = 'none'; return; }
             panel.style.display = 'block';
 
+            // Show sell price override input when LTP unavailable
+            var sellPriceIn = document.getElementById('sqb-sell-price-override');
+            var sellLtpMissing = _spreadSellLeg && _spreadSellLeg.ltp <= 0;
+            sellPriceIn.style.display = sellLtpMissing ? 'inline-block' : 'none';
+            if (!sellLtpMissing && sellPriceIn.value) sellPriceIn.value = '';
+
             var sellLabel = _spreadSellLeg
-                ? (_spreadSellLeg.strike.toFixed(0) + ' ' + _spreadSellLeg.optType + ' @ \\u20B9' + _spreadSellLeg.ltp.toFixed(2))
+                ? (_spreadSellLeg.strike.toFixed(0) + ' ' + _spreadSellLeg.optType + (sellLtpMissing ? '' : ' @ \\u20B9' + _spreadSellLeg.ltp.toFixed(2)))
                 : '-- pick S';
             var buyLabel  = _spreadBuyLeg
                 ? (_spreadBuyLeg.strike.toFixed(0) + ' ' + _spreadBuyLeg.optType + ' @ \\u20B9' + _spreadBuyLeg.ltp.toFixed(2))
@@ -2670,7 +2679,8 @@ DASHBOARD_HTML = """
             document.getElementById('sqb-sell-label').textContent = sellLabel;
             document.getElementById('sqb-buy-label').textContent  = buyLabel;
 
-            var bothReady = _spreadSellLeg && _spreadBuyLeg;
+            var sellPrice = _spreadSellLeg ? (_spreadSellLeg.ltp > 0 ? _spreadSellLeg.ltp : parseFloat(sellPriceIn.value) || 0) : 0;
+            var bothReady = _spreadSellLeg && _spreadBuyLeg && sellPrice > 0;
             var execBtn   = document.getElementById('sqb-execute-btn');
             var armBtn    = document.getElementById('sqb-arm-btn');
             execBtn.disabled = !bothReady;
@@ -2679,13 +2689,13 @@ DASHBOARD_HTML = """
             armBtn.style.opacity  = bothReady ? '1' : '0.5';
 
             if (bothReady) {
-                var net = _spreadSellLeg.ltp - _spreadBuyLeg.ltp;
+                var net = sellPrice - _spreadBuyLeg.ltp;
                 var nc  = document.getElementById('sqb-net-credit');
                 nc.textContent = (net >= 0 ? '+' : '') + '\\u20B9' + net.toFixed(2) + (net >= 0 ? ' credit' : ' debit');
                 nc.style.color = net >= 0 ? '#3fb950' : '#f85149';
                 // Pre-fill trigger price if empty
                 var trigEl = document.getElementById('sqb-trigger-price');
-                if (!trigEl.value) trigEl.value = _spreadSellLeg.ltp.toFixed(2);
+                if (!trigEl.value && sellPrice > 0) trigEl.value = sellPrice.toFixed(2);
                 // Pre-fill risk from existing spread form
                 var riskEl = document.getElementById('sqb-risk');
                 if (!riskEl.value) {
@@ -2695,6 +2705,13 @@ DASHBOARD_HTML = """
             } else {
                 document.getElementById('sqb-net-credit').textContent = '';
             }
+        }
+
+        function onSqbSellPriceEdit() {
+            var val = parseFloat(document.getElementById('sqb-sell-price-override').value) || 0;
+            if (_spreadSellLeg && val > 0) { _spreadSellLeg.ltp = val; }
+            updateSpreadQuickBar();
+            spreadQuickCalc();
         }
 
         function spreadQuickCalc() {
@@ -2881,7 +2898,7 @@ DASHBOARD_HTML = """
                 grid:   { vertLines:{color:'#21262d'}, horzLines:{color:'#21262d'} },
                 crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
                 rightPriceScale: { borderColor:'#30363d' },
-                timeScale: { borderColor:'#30363d', timeVisible:true, secondsVisible:false },
+                timeScale: { borderColor:'#30363d', timeVisible:true, secondsVisible:false, timezone:'Asia/Kolkata' },
             });
             _lwSeries = _lwChart.addCandlestickSeries({
                 upColor:'#3fb950', downColor:'#f85149',
@@ -4037,10 +4054,16 @@ def api_chart(security_id):
         lows   = data.get("low",   [])
         closes = data.get("close", [])
         candles = []
+        IST_OFFSET = 19800  # 5h30m in seconds
         for i, ts in enumerate(timestamps):
-            # Dhan returns ISO strings "2024-01-01 09:15:00"; convert to Unix seconds
+            # Dhan returns IST strings "2024-01-01 09:15:00"; server may be UTC
+            # Parse as naive then apply IST offset to get correct Unix timestamp
             try:
-                unix_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp())
+                naive_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp())
+                # If server is UTC, naive_ts treats IST time as UTC → subtract IST offset
+                import time as _time
+                server_utc_offset = _time.timezone  # seconds west of UTC (positive for west)
+                unix_ts = naive_ts - IST_OFFSET + server_utc_offset
             except (ValueError, TypeError):
                 try:
                     unix_ts = int(ts)
