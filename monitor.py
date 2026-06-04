@@ -328,6 +328,49 @@ class PositionMonitor:
                 logger.info("Spread %s: SL set at %.2f for sell leg",
                             spread_id, spread_action["sell_sl"])
 
+            # Poll order status after brief delay to detect exchange rejections
+            # (Dhan API returns success on submit but exchange may reject after ~1-2s)
+            time.sleep(2.5)
+            hedge_status = "UNKNOWN"
+            sell_status = "UNKNOWN"
+            reject_reason = ""
+            try:
+                orders = self.api.get_order_book()
+                if orders:
+                    self._last_orders = orders
+                    for o in orders:
+                        oid = str(o.get("orderId", ""))
+                        if oid == hedge_order_id:
+                            hedge_status = o.get("orderStatus", "UNKNOWN")
+                        if oid == sell_order_id:
+                            sell_status = o.get("orderStatus", "UNKNOWN")
+                            if sell_status == "REJECTED":
+                                reject_reason = (
+                                    o.get("omsErrorDescription", "")
+                                    or o.get("rejectedReason", "")
+                                    or "Rejected by exchange"
+                                )
+            except Exception as poll_err:
+                logger.warning("Spread %s: order status poll failed: %s", spread_id, poll_err)
+
+            any_rejected = hedge_status == "REJECTED" or sell_status == "REJECTED"
+
+            if any_rejected:
+                leg = "BUY hedge" if hedge_status == "REJECTED" else "SELL"
+                err_msg = f"{leg} order REJECTED by exchange: {reject_reason}"
+                logger.warning("Spread %s: %s", spread_id, err_msg)
+                self.trade_mgr.update_spread_status(spread_id, "FAILED", error_message=err_msg)
+                try:
+                    from dashboard import emit_sl_tp_trigger
+                    emit_sl_tp_trigger({
+                        "action": "SPREAD_FAILED",
+                        "security_id": spread_action.get("sell_security_id", ""),
+                        "error": err_msg,
+                    })
+                except Exception:
+                    pass
+                return
+
             # Update spread status
             self.trade_mgr.update_spread_status(
                 spread_id, "FILLED",

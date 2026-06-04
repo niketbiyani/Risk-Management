@@ -3388,37 +3388,28 @@ def api_option_chain_data():
                                 row["pe_ltp"] = strike_data["pe_ltp"]
                 else:
                     # BSE: Dhan option_chain API doesn't support BSE indices.
-                    # Fetch spot + option LTPs via ticker_data (get_ltp).
-                    # Collect all security IDs: index spot + all CE/PE strikes
-                    spot_id_map = {"SENSEX": "1", "BANKEX": "12"}
-                    spot_sid = spot_id_map.get(underlying, "1")
-                    all_ids = [spot_sid]
+                    # The BSE index security IDs are also not accessible via ticker_data.
+                    # Fetch option LTPs via ticker_data (BSE_FNO), skip spot.
+                    option_ids = []
                     for row in chain:
                         if row["ce_security_id"]:
-                            all_ids.append(str(row["ce_security_id"]))
+                            option_ids.append(str(row["ce_security_id"]))
                         if row["pe_security_id"]:
-                            all_ids.append(str(row["pe_security_id"]))
-                    # Split: spot is on BSE (index), options on BSE_FNO
-                    option_ids = [i for i in all_ids if i != spot_sid]
-                    securities = {}
-                    if spot_sid:
-                        securities["BSE"] = [spot_sid]
+                            option_ids.append(str(row["pe_security_id"]))
                     if option_ids:
-                        securities["BSE_FNO"] = option_ids[:50]
-                    ltp_result = _monitor.api.get_ltp(securities)
-                    if isinstance(ltp_result, dict) and ltp_result.get("status") == "success":
-                        ltp_data = ltp_result.get("data", {})
-                        id_to_ltp = {}
-                        if isinstance(ltp_data, dict):
-                            for seg_data in ltp_data.values():
-                                if isinstance(seg_data, dict):
-                                    for sid, info in seg_data.items():
-                                        ltp_val = info.get("last_price", 0) if isinstance(info, dict) else (info or 0)
-                                        id_to_ltp[str(sid)] = ltp_val or 0
-                        spot = id_to_ltp.get(str(spot_sid), 0)
-                        for row in chain:
-                            row["ce_ltp"] = id_to_ltp.get(str(row["ce_security_id"]), 0)
-                            row["pe_ltp"] = id_to_ltp.get(str(row["pe_security_id"]), 0)
+                        ltp_result = _monitor.api.get_ltp({"BSE_FNO": option_ids[:50]})
+                        if isinstance(ltp_result, dict) and ltp_result.get("status") == "success":
+                            ltp_data = ltp_result.get("data", {})
+                            id_to_ltp = {}
+                            if isinstance(ltp_data, dict):
+                                for seg_data in ltp_data.values():
+                                    if isinstance(seg_data, dict):
+                                        for sid, info in seg_data.items():
+                                            ltp_val = info.get("last_price", 0) if isinstance(info, dict) else (info or 0)
+                                            id_to_ltp[str(sid)] = ltp_val or 0
+                            for row in chain:
+                                row["ce_ltp"] = id_to_ltp.get(str(row["ce_security_id"]), 0)
+                                row["pe_ltp"] = id_to_ltp.get(str(row["pe_security_id"]), 0)
             except Exception as e:
                 logger.error("Option chain price fetch failed: %s", e, exc_info=True)
 
