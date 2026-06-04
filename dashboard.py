@@ -2860,24 +2860,33 @@ DASHBOARD_HTML = """
             });
         }
 
+        var _lwRefreshTimer = null;
+        var _lwExchangeSegment = 'NSE_FNO';
+
         function loadChart(securityId, exchangeSegment) {
-            if (_lwCurrentSecurity === securityId) return;  // already loaded
             _lwCurrentSecurity = securityId;
+            _lwExchangeSegment = exchangeSegment || 'NSE_FNO';
             if (!_lwChart) initLightweightChart();
             if (!_lwChart) return;
+            _refreshChart();
+            // Auto-refresh every 60s to update latest candle
+            if (_lwRefreshTimer) clearInterval(_lwRefreshTimer);
+            _lwRefreshTimer = setInterval(_refreshChart, 60000);
+        }
+
+        function _refreshChart() {
+            if (!_lwCurrentSecurity || !_lwSeries) return;
             var container = document.getElementById('dom-chart-canvas');
-            _lwChart.applyOptions({width: container.clientWidth || 400});
-            fetch('/api/chart/' + securityId + '?exchange_segment=' + (exchangeSegment || 'NSE_FNO'))
+            fetch('/api/chart/' + _lwCurrentSecurity + '?exchange_segment=' + _lwExchangeSegment)
                 .then(function(r){ return r.json(); })
                 .then(function(d) {
+                    if (!container || !_lwSeries) return;
                     if (d.candles && d.candles.length > 0) {
                         _lwSeries.setData(d.candles);
-                        _lwChart.timeScale().fitContent();
-                    } else {
-                        container.innerHTML = '<div style="color:#484f58;padding:30px;text-align:center;font-size:12px;">No chart data available</div>';
+                        _lwChart.timeScale().scrollToRealTime();
                     }
                 })
-                .catch(function(e) { console.error('Chart load error:', e); });
+                .catch(function(e) { console.error('Chart refresh error:', e); });
         }
 
         function switchDomTab(tab) {
@@ -3398,25 +3407,27 @@ def api_option_chain_data():
                     #   Pass 2: fetch ATM±12 (~50 IDs) using estimated spot
 
                     def _bse_fetch_ltps(rows):
-                        """Fetch LTPs for a list of chain rows. Returns {security_id_str: ltp}."""
+                        """Fetch LTPs for chain rows in batches of 9 (Dhan BSE_FNO limit ~10)."""
                         ids = []
                         for r in rows:
                             if r["ce_security_id"]: ids.append(int(r["ce_security_id"]))
                             if r["pe_security_id"]: ids.append(int(r["pe_security_id"]))
                         if not ids:
                             return {}
-                        res = _monitor.api.get_ltp({"BSE_FNO": ids})
-                        if not isinstance(res, dict) or res.get("status") != "success":
-                            return {}
-                        outer = res.get("data", {})
-                        if isinstance(outer, dict) and "data" in outer:
-                            outer = outer["data"]
                         result = {}
-                        if isinstance(outer, dict):
-                            for seg in outer.values():
-                                if isinstance(seg, dict):
-                                    for sid, info in seg.items():
-                                        result[str(sid)] = (info.get("last_price", 0) if isinstance(info, dict) else (info or 0)) or 0
+                        for i in range(0, len(ids), 9):
+                            batch = ids[i:i + 9]
+                            res = _monitor.api.get_ltp({"BSE_FNO": batch})
+                            if not isinstance(res, dict) or res.get("status") != "success":
+                                continue
+                            outer = res.get("data", {})
+                            if isinstance(outer, dict) and "data" in outer:
+                                outer = outer["data"]
+                            if isinstance(outer, dict):
+                                for seg in outer.values():
+                                    if isinstance(seg, dict):
+                                        for sid, info in seg.items():
+                                            result[str(sid)] = (info.get("last_price", 0) if isinstance(info, dict) else (info or 0)) or 0
                         return result
 
                     # Pass 1: sample every 10th strike to find approximate ATM
