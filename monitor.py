@@ -295,8 +295,8 @@ class PositionMonitor:
 
             logger.info("Spread %s: hedge BUY placed (order: %s)", spread_id, hedge_order_id)
 
-            # Brief pause to let hedge fill (100ms is enough for liquid ATM market orders)
-            time.sleep(0.1)
+            # Brief pause to let hedge fill before placing sell leg
+            time.sleep(0.2)
 
             # Step 2: Place sell at LIMIT price
             sell_result = self.api.place_order(

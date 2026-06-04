@@ -580,6 +580,8 @@ DASHBOARD_HTML = """
                             <input id="sqb-qty-override" class="form-input" type="number" placeholder="Override" style="width:72px;font-size:11px;padding:4px 6px;" title="Override calculated qty" oninput="sqbAutoCalc()">
                             <button id="sqb-execute-btn" onclick="executeSpreadNow()" disabled class="btn-sell" style="padding:5px 14px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;">&#9889; EXECUTE NOW</button>
                             <button id="sqb-arm-btn" onclick="toggleSqbTrigger()" disabled style="padding:5px 12px;font-size:12px;font-weight:700;background:#5a3e00;color:#d29922;border:1px solid #d29922;border-radius:6px;cursor:pointer;opacity:0.5;">ARM TRIGGER</button>
+                            <button id="sqb-single-sell-btn" onclick="executeSingleLeg('sell')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#3d0f0f;color:#f85149;border:1px solid #f85149;border-radius:6px;cursor:pointer;" title="Sell only (no hedge) — use when hedge is already filled">SELL ONLY</button>
+                            <button id="sqb-single-buy-btn" onclick="executeSingleLeg('buy')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#0d2117;color:#3fb950;border:1px solid #3fb950;border-radius:6px;cursor:pointer;" title="Buy only (no hedge)">BUY ONLY</button>
                         </div>
                         <!-- Trigger sub-form -->
                         <div id="sqb-trigger-form" style="display:none;margin-top:5px;padding:5px 8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;align-items:center;gap:6px;font-size:11px;">
@@ -2749,6 +2751,10 @@ DASHBOARD_HTML = """
             execBtn.disabled = !ready; execBtn.style.opacity = ready ? '1' : '0.5';
             armBtn.disabled  = !ready; armBtn.style.opacity  = ready ? '1' : '0.5';
 
+            // Show single-leg buttons: SELL ONLY when sell leg selected, BUY ONLY when buy leg selected
+            document.getElementById('sqb-single-sell-btn').style.display = _spreadSellLeg ? 'inline-block' : 'none';
+            document.getElementById('sqb-single-buy-btn').style.display  = _spreadBuyLeg  ? 'inline-block' : 'none';
+
             // Pre-fill trigger price
             var trigEl = document.getElementById('sqb-trigger-price');
             if (!trigEl.value && sellPrice > 0) trigEl.value = sellPrice.toFixed(2);
@@ -2774,6 +2780,42 @@ DASHBOARD_HTML = """
         function cancelArmTrigger() {
             document.getElementById('sqb-trigger-form').style.display = 'none';
             document.getElementById('sqb-arm-btn').style.background = '#5a3e00';
+        }
+
+        function executeSingleLeg(side) {
+            var leg = side === 'sell' ? _spreadSellLeg : _spreadBuyLeg;
+            if (!leg) { showToast('No ' + side + ' leg selected', 'warning'); return; }
+            var price = side === 'sell' ? sqbGetSellPrice() : sqbGetBuyPrice();
+            if (!price || price <= 0) { showToast('Enter price first', 'warning'); return; }
+            var qty = parseInt(document.getElementById('sqb-qty-override').value)
+                   || parseInt(document.getElementById('sqb-qty').textContent) || 0;
+            if (!qty || qty <= 0) { showToast('Enter quantity first', 'warning'); return; }
+            var txn = side === 'sell' ? 'SELL' : 'BUY';
+            if (!confirm(txn + ' ' + qty + ' x ' + leg.strike.toFixed(0) + ' ' + leg.optType + ' @ \\u20B9' + price.toFixed(2) + ' LIMIT\\n(single leg — no hedge)')) return;
+            fetch('/api/order/place', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    security_id:      leg.securityId,
+                    exchange_segment: leg.exchangeSegment || 'NSE_FNO',
+                    transaction_type: txn,
+                    quantity:         qty,
+                    order_type:       'LIMIT',
+                    product_type:     'MARGIN',
+                    price:            price
+                })
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(result) {
+                if (result.status === 'error' || result.status === 'BLOCKED') {
+                    playAlert('error');
+                    showToast(txn + ' rejected: ' + (result.message || result.reason || ''), 'error');
+                } else {
+                    playAlert('order');
+                    showToast(txn + ' order sent @ \\u20B9' + price.toFixed(2), 'success');
+                }
+            })
+            .catch(function(e) { showToast('Network error: ' + e, 'error'); });
         }
 
         function executeSpreadNow() {
@@ -2903,7 +2945,7 @@ DASHBOARD_HTML = """
                 grid:   { vertLines:{color:'#21262d'}, horzLines:{color:'#21262d'} },
                 crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
                 rightPriceScale: { borderColor:'#30363d' },
-                timeScale: { borderColor:'#30363d', timeVisible:true, secondsVisible:false, timezone:'Asia/Kolkata' },
+                timeScale: { borderColor:'#30363d', timeVisible:true, secondsVisible:false },
             });
             _lwSeries = _lwChart.addCandlestickSeries({
                 upColor:'#3fb950', downColor:'#f85149',
@@ -4061,14 +4103,12 @@ def api_chart(security_id):
         candles = []
         IST_OFFSET = 19800  # 5h30m in seconds
         for i, ts in enumerate(timestamps):
-            # Dhan returns IST strings "2024-01-01 09:15:00"; server may be UTC
-            # Parse as naive then apply IST offset to get correct Unix timestamp
+            # Dhan returns IST strings e.g. "2024-01-01 09:15:00".
+            # LightweightCharts v4 has no timezone support, so we send timestamps
+            # that display as IST by parsing the IST string as-if-UTC (naive parse).
+            # Chart sees "09:15" and displays "09:15" — correct for the user.
             try:
-                naive_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp())
-                # If server is UTC, naive_ts treats IST time as UTC → subtract IST offset
-                import time as _time
-                server_utc_offset = _time.timezone  # seconds west of UTC (positive for west)
-                unix_ts = naive_ts - IST_OFFSET + server_utc_offset
+                unix_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp())
             except (ValueError, TypeError):
                 try:
                     unix_ts = int(ts)
@@ -4081,7 +4121,7 @@ def api_chart(security_id):
             if o > 0 and h > 0 and lo > 0 and c > 0:
                 candles.append({"time": unix_ts, "open": o, "high": h, "low": lo, "close": c})
         logger.info("Chart data for %s: %d candles from %d timestamps", security_id, len(candles), len(timestamps))
-        return jsonify({"candles": candles[-120:]})
+        return jsonify({"candles": candles})
     except Exception as e:
         logger.error("Failed to get chart data for %s: %s", security_id, e)
         return jsonify({"error": str(e), "candles": []}), 500
