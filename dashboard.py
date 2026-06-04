@@ -545,40 +545,46 @@ DASHBOARD_HTML = """
 
                     <!-- Spread Quick Bar (shown when legs are selected) -->
                     <div id="sqb-panel" style="display:none;border-top:1px solid #21262d;margin-top:8px;padding-top:8px;">
-                        <!-- Leg labels row -->
-                        <div style="display:flex;gap:10px;margin-bottom:5px;font-size:11px;align-items:center;flex-wrap:wrap;">
+                        <!-- Row 1: Leg price inputs -->
+                        <div style="display:flex;gap:8px;margin-bottom:6px;font-size:11px;align-items:center;flex-wrap:wrap;">
+                            <!-- Sell leg -->
                             <div style="border-left:3px solid #f85149;padding-left:6px;display:flex;align-items:center;gap:4px;">
                                 <span style="color:#f85149;font-weight:700;font-size:10px;">SELL</span>
-                                <span id="sqb-sell-label" style="color:#e6edf3;font-weight:600;margin-left:4px;">--</span>
-                                <input id="sqb-sell-price-override" type="number" step="0.05" placeholder="price"
-                                       style="display:none;width:65px;font-size:11px;padding:2px 5px;background:#21262d;border:1px solid #f85149;border-radius:4px;color:#e6edf3;"
-                                       oninput="onSqbSellPriceEdit()" title="Enter sell price manually">
+                                <span id="sqb-sell-label" style="color:#8b949e;">--</span>
+                                <input id="sqb-sell-price" type="number" step="0.05" placeholder="price"
+                                       style="width:68px;font-size:12px;font-weight:700;padding:3px 6px;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#f85149;"
+                                       oninput="sqbPriceDirty('sell');sqbAutoCalc()" title="Sell price">
+                                <span style="color:#484f58;font-size:10px;">SL*</span>
+                                <input id="sqb-sell-sl" type="number" step="0.05" placeholder="required"
+                                       style="width:72px;font-size:12px;padding:3px 6px;background:#21262d;border:1px solid #d29922;border-radius:4px;color:#d29922;"
+                                       oninput="sqbAutoCalc()" title="Stop loss price (required)">
                             </div>
                             <span style="color:#484f58;">→</span>
-                            <div style="border-left:3px solid #3fb950;padding-left:6px;">
+                            <!-- Buy leg -->
+                            <div style="border-left:3px solid #3fb950;padding-left:6px;display:flex;align-items:center;gap:4px;">
                                 <span style="color:#3fb950;font-weight:700;font-size:10px;">BUY</span>
-                                <span id="sqb-buy-label" style="color:#e6edf3;font-weight:600;margin-left:4px;">--</span>
+                                <span id="sqb-buy-label" style="color:#8b949e;">--</span>
+                                <input id="sqb-buy-price" type="number" step="0.05" placeholder="price"
+                                       style="width:68px;font-size:12px;font-weight:700;padding:3px 6px;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#3fb950;"
+                                       oninput="sqbPriceDirty('buy');sqbAutoCalc()" title="Buy price">
                             </div>
-                            <span id="sqb-net-credit" style="font-weight:700;"></span>
-                            <span id="sqb-max-loss-label" style="color:#f85149;font-size:10px;"></span>
-                            <button onclick="clearSpreadQuickBar()" style="margin-left:auto;background:none;border:none;color:#484f58;cursor:pointer;font-size:11px;padding:0;" title="Clear spread selection">✕ clear</button>
+                            <span id="sqb-net-credit" style="font-weight:700;font-size:11px;"></span>
+                            <button onclick="clearSpreadQuickBar()" style="margin-left:auto;background:none;border:none;color:#484f58;cursor:pointer;font-size:11px;padding:0;" title="Clear">✕</button>
                         </div>
-                        <!-- Action row -->
+                        <!-- Row 2: Qty + actions -->
                         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                            <input id="sqb-risk" class="form-input" type="number" placeholder="Max Loss ₹" style="width:90px;font-size:11px;padding:4px 6px;" oninput="spreadQuickCalc()">
+                            <input id="sqb-risk" class="form-input" type="number" placeholder="Max Loss ₹" style="width:90px;font-size:11px;padding:4px 6px;" oninput="sqbAutoCalc()">
                             <span style="font-size:11px;color:#8b949e;">Qty:</span>
                             <strong id="sqb-qty" style="font-size:12px;color:#e6edf3;">-</strong>
                             <span id="sqb-lots" style="font-size:10px;color:#484f58;"></span>
-                            <input id="sqb-qty-override" class="form-input" type="number" placeholder="Override" style="width:72px;font-size:11px;padding:4px 6px;" oninput="spreadQuickCalc()">
-                            <button id="sqb-execute-btn" onclick="executeSpreadNow()" disabled class="btn-sell" style="padding:5px 12px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;">&#9889; EXECUTE NOW</button>
+                            <input id="sqb-qty-override" class="form-input" type="number" placeholder="Override" style="width:72px;font-size:11px;padding:4px 6px;" title="Override calculated qty" oninput="sqbAutoCalc()">
+                            <button id="sqb-execute-btn" onclick="executeSpreadNow()" disabled class="btn-sell" style="padding:5px 14px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;">&#9889; EXECUTE NOW</button>
                             <button id="sqb-arm-btn" onclick="toggleSqbTrigger()" disabled style="padding:5px 12px;font-size:12px;font-weight:700;background:#5a3e00;color:#d29922;border:1px solid #d29922;border-radius:6px;cursor:pointer;opacity:0.5;">ARM TRIGGER</button>
                         </div>
                         <!-- Trigger sub-form -->
                         <div id="sqb-trigger-form" style="display:none;margin-top:5px;padding:5px 8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;align-items:center;gap:6px;font-size:11px;">
                             <span style="color:#8b949e;">Trigger when SELL LTP ≤</span>
                             <input id="sqb-trigger-price" class="form-input" type="number" step="0.05" style="width:75px;font-size:11px;padding:3px 6px;">
-                            <span style="color:#8b949e;margin-left:6px;">SL (opt):</span>
-                            <input id="sqb-sell-sl" class="form-input" type="number" step="0.05" placeholder="SL" style="width:65px;font-size:11px;padding:3px 6px;">
                             <button onclick="confirmArmTrigger()" style="padding:3px 10px;font-size:11px;font-weight:700;background:#9e6a03;color:#fff;border:none;border-radius:4px;cursor:pointer;">CONFIRM</button>
                             <button onclick="cancelArmTrigger()" style="background:none;border:1px solid #30363d;color:#8b949e;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px;">Cancel</button>
                         </div>
@@ -2621,6 +2627,7 @@ DASHBOARD_HTML = """
             if (side === 'sell') {
                 _spreadSellLeg = leg;
                 _spreadSellLeg.exchangeSegment = exSeg;
+                _sqbSellPriceDirty = false;  // reset so new LTP pre-fills
                 // Subscribe DOM + load chart for sell leg
                 subscribeDepth(secId, exSeg, symbol);
                 loadChart(secId, exSeg);
@@ -2636,6 +2643,7 @@ DASHBOARD_HTML = """
             } else {
                 _spreadBuyLeg = leg;
                 _spreadBuyLeg.exchangeSegment = exSeg;
+                _sqbBuyPriceDirty = false;  // reset so new LTP pre-fills
                 // Cross-populate existing spread form buy leg
                 document.getElementById('spread-buy-id').value = secId;
                 document.getElementById('spread-buy-exseg').value = exSeg;
@@ -2659,109 +2667,95 @@ DASHBOARD_HTML = """
             }
         }
 
+        var _sqbSellPriceDirty = false;
+        var _sqbBuyPriceDirty  = false;
+
+        function sqbPriceDirty(side) {
+            if (side === 'sell') _sqbSellPriceDirty = true;
+            else _sqbBuyPriceDirty = true;
+        }
+
+        function sqbGetSellPrice() {
+            return parseFloat(document.getElementById('sqb-sell-price').value) || 0;
+        }
+        function sqbGetBuyPrice() {
+            return parseFloat(document.getElementById('sqb-buy-price').value) || 0;
+        }
+        function sqbGetSL() {
+            return parseFloat(document.getElementById('sqb-sell-sl').value) || 0;
+        }
+
         function updateSpreadQuickBar() {
             var panel = document.getElementById('sqb-panel');
             if (!_spreadSellLeg && !_spreadBuyLeg) { panel.style.display = 'none'; return; }
             panel.style.display = 'block';
 
-            // Show sell price override input when LTP unavailable
-            var sellPriceIn = document.getElementById('sqb-sell-price-override');
-            var sellLtpMissing = _spreadSellLeg && _spreadSellLeg.ltp <= 0;
-            sellPriceIn.style.display = sellLtpMissing ? 'inline-block' : 'none';
-            if (!sellLtpMissing && sellPriceIn.value) sellPriceIn.value = '';
+            // Update labels (strike + optType only)
+            document.getElementById('sqb-sell-label').textContent = _spreadSellLeg
+                ? (_spreadSellLeg.strike.toFixed(0) + ' ' + _spreadSellLeg.optType) : '-- pick S';
+            document.getElementById('sqb-buy-label').textContent = _spreadBuyLeg
+                ? (_spreadBuyLeg.strike.toFixed(0) + ' ' + _spreadBuyLeg.optType) : '-- pick B';
 
-            var sellLabel = _spreadSellLeg
-                ? (_spreadSellLeg.strike.toFixed(0) + ' ' + _spreadSellLeg.optType + (sellLtpMissing ? '' : ' @ \\u20B9' + _spreadSellLeg.ltp.toFixed(2)))
-                : '-- pick S';
-            var buyLabel  = _spreadBuyLeg
-                ? (_spreadBuyLeg.strike.toFixed(0) + ' ' + _spreadBuyLeg.optType + ' @ \\u20B9' + _spreadBuyLeg.ltp.toFixed(2))
-                : '-- pick B';
-            document.getElementById('sqb-sell-label').textContent = sellLabel;
-            document.getElementById('sqb-buy-label').textContent  = buyLabel;
-
-            var sellPrice = _spreadSellLeg ? (_spreadSellLeg.ltp > 0 ? _spreadSellLeg.ltp : parseFloat(sellPriceIn.value) || 0) : 0;
-            var bothReady = _spreadSellLeg && _spreadBuyLeg && sellPrice > 0;
-            var execBtn   = document.getElementById('sqb-execute-btn');
-            var armBtn    = document.getElementById('sqb-arm-btn');
-            execBtn.disabled = !bothReady;
-            armBtn.disabled  = !bothReady;
-            execBtn.style.opacity = bothReady ? '1' : '0.5';
-            armBtn.style.opacity  = bothReady ? '1' : '0.5';
-
-            if (bothReady) {
-                var net = sellPrice - _spreadBuyLeg.ltp;
-                var nc  = document.getElementById('sqb-net-credit');
-                nc.textContent = (net >= 0 ? '+' : '') + '\\u20B9' + net.toFixed(2) + (net >= 0 ? ' credit' : ' debit');
-                nc.style.color = net >= 0 ? '#3fb950' : '#f85149';
-                // Pre-fill trigger price if empty
-                var trigEl = document.getElementById('sqb-trigger-price');
-                if (!trigEl.value && sellPrice > 0) trigEl.value = sellPrice.toFixed(2);
-                // Pre-fill risk from existing spread form
-                var riskEl = document.getElementById('sqb-risk');
-                if (!riskEl.value) {
-                    var existingRisk = parseFloat(document.getElementById('spread-risk').value);
-                    if (existingRisk > 0) riskEl.value = existingRisk;
-                }
-            } else {
-                document.getElementById('sqb-net-credit').textContent = '';
+            // Pre-fill price inputs from LTP only if user hasn't manually edited
+            if (_spreadSellLeg && !_sqbSellPriceDirty) {
+                var sp = document.getElementById('sqb-sell-price');
+                if (_spreadSellLeg.ltp > 0) sp.value = _spreadSellLeg.ltp.toFixed(2);
+                else sp.value = '';
             }
+            if (_spreadBuyLeg && !_sqbBuyPriceDirty) {
+                var bp = document.getElementById('sqb-buy-price');
+                if (_spreadBuyLeg.ltp > 0) bp.value = _spreadBuyLeg.ltp.toFixed(2);
+                else bp.value = '';
+            }
+
+            sqbAutoCalc();
         }
 
-        function onSqbSellPriceEdit() {
-            var val = parseFloat(document.getElementById('sqb-sell-price-override').value) || 0;
-            if (_spreadSellLeg && val > 0) { _spreadSellLeg.ltp = val; }
-            updateSpreadQuickBar();
-            spreadQuickCalc();
+        function sqbAutoCalc() {
+            var sellPrice = sqbGetSellPrice();
+            var buyPrice  = sqbGetBuyPrice();
+            var sl        = sqbGetSL();
+            var maxLoss   = parseFloat(document.getElementById('sqb-risk').value) || 0;
+            var lotSize   = _ocLotSize || 25;
+
+            // Net credit display
+            var nc = document.getElementById('sqb-net-credit');
+            if (sellPrice > 0 && buyPrice > 0) {
+                var net = sellPrice - buyPrice;
+                nc.textContent = (net >= 0 ? '+' : '') + '\\u20B9' + net.toFixed(2) + (net >= 0 ? ' cr' : ' db');
+                nc.style.color = net >= 0 ? '#3fb950' : '#f85149';
+            } else { nc.textContent = ''; }
+
+            // Auto-qty from SL risk: lots = floor(maxLoss / ((sl - sellPrice) * lotSize))
+            var qtyEl  = document.getElementById('sqb-qty');
+            var lotsEl = document.getElementById('sqb-lots');
+            var autoQty = 0;
+            if (sl > sellPrice && sellPrice > 0 && maxLoss > 0) {
+                var riskPerLot = (sl - sellPrice) * lotSize;
+                var lots = Math.floor(maxLoss / riskPerLot);
+                autoQty = lots * lotSize;
+                qtyEl.textContent  = autoQty > 0 ? autoQty : '-';
+                lotsEl.textContent = lots > 0 ? '(' + lots + ' lots)' : '';
+            } else {
+                qtyEl.textContent  = '-';
+                lotsEl.textContent = sl > 0 && sl <= sellPrice ? '\\u26A0 SL must be > sell price' : '';
+            }
+
+            // Enable execute only when: both legs + sell price + SL + qty ready
+            var qty = parseInt(document.getElementById('sqb-qty-override').value) || autoQty;
+            var ready = _spreadSellLeg && _spreadBuyLeg && sellPrice > 0 && sl > sellPrice && qty > 0;
+            var execBtn = document.getElementById('sqb-execute-btn');
+            var armBtn  = document.getElementById('sqb-arm-btn');
+            execBtn.disabled = !ready; execBtn.style.opacity = ready ? '1' : '0.5';
+            armBtn.disabled  = !ready; armBtn.style.opacity  = ready ? '1' : '0.5';
+
+            // Pre-fill trigger price
+            var trigEl = document.getElementById('sqb-trigger-price');
+            if (!trigEl.value && sellPrice > 0) trigEl.value = sellPrice.toFixed(2);
         }
 
-        function spreadQuickCalc() {
-            if (!_spreadSellLeg) return;
-            clearTimeout(_sqbCalcTimeout);
-            _sqbCalcTimeout = setTimeout(function() {
-                var sellPrice = _spreadSellLeg.ltp;
-                var risk = parseFloat(document.getElementById('sqb-risk').value) || 0;
-                if (risk <= 0 || sellPrice <= 0) return;
-                // Default SL: sell ltp * 2.5 (capped by strike width if buy leg known)
-                var sl = sellPrice * 2.5;
-                if (_spreadBuyLeg) {
-                    var sw = Math.abs(_spreadSellLeg.strike - _spreadBuyLeg.strike);
-                    sl = Math.min(sl, sellPrice + sw);
-                }
-                sl = parseFloat(sl.toFixed(2));
-                if (sl <= sellPrice) { sl = sellPrice * 2; }
-
-                fetch('/api/order/calculate_size', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        risk_amount: risk,
-                        entry_price: sellPrice,
-                        sl_price: sl,
-                        security_id: _spreadSellLeg.securityId,
-                        transaction_type: 'SELL',
-                        product_type: 'MARGIN'
-                    })
-                })
-                .then(function(r){ return r.json(); })
-                .then(function(data) {
-                    if (data.error) return;
-                    var overrideEl = document.getElementById('sqb-qty-override');
-                    var autoQty    = data.quantity;
-                    document.getElementById('sqb-qty').textContent = autoQty;
-                    document.getElementById('sqb-lots').textContent = data.num_lots != null ? '(' + data.num_lots + ' lots)' : '';
-                    if (!overrideEl.value) overrideEl.value = autoQty;
-                    // Show max loss estimate if both legs known
-                    if (_spreadSellLeg && _spreadBuyLeg) {
-                        var net = _spreadSellLeg.ltp - _spreadBuyLeg.ltp;
-                        var sw  = Math.abs(_spreadSellLeg.strike - _spreadBuyLeg.strike);
-                        var qty = parseInt(overrideEl.value) || autoQty;
-                        var ml  = Math.max(0, (sw - net) * qty);
-                        document.getElementById('sqb-max-loss-label').textContent = 'Max Loss: \\u20B9' + ml.toFixed(0);
-                    }
-                })
-                .catch(function(e) { console.error('SQB calc:', e); });
-            }, 300);
-        }
+        // Keep spreadQuickCalc as alias for backward compat
+        function spreadQuickCalc() { sqbAutoCalc(); }
 
         function toggleSqbTrigger() {
             var form   = document.getElementById('sqb-trigger-form');
@@ -2787,18 +2781,23 @@ DASHBOARD_HTML = """
             var qty = parseInt(document.getElementById('sqb-qty-override').value)
                    || parseInt(document.getElementById('sqb-qty').textContent);
             if (!qty || qty <= 0) { showToast('Enter quantity or wait for auto-calc', 'warning'); return; }
-            var net = _spreadSellLeg.ltp - _spreadBuyLeg.ltp;
+            var sellPrice = sqbGetSellPrice();
+            var buyPrice  = sqbGetBuyPrice();
+            var sl        = sqbGetSL();
+            if (!sellPrice || sellPrice <= 0) { showToast('Enter SELL price', 'warning'); return; }
+            if (!sl || sl <= sellPrice) { showToast('Enter SL above sell price', 'warning'); return; }
+            var net = sellPrice - buyPrice;
             var label = 'EXECUTE SPREAD NOW:\\n'
-                + 'SELL ' + qty + ' x ' + _spreadSellLeg.strike.toFixed(0) + ' ' + _spreadSellLeg.optType + ' @ \\u20B9' + _spreadSellLeg.ltp.toFixed(2) + '\\n'
+                + 'SELL ' + qty + ' x ' + _spreadSellLeg.strike.toFixed(0) + ' ' + _spreadSellLeg.optType + ' @ \\u20B9' + sellPrice.toFixed(2) + '\\n'
                 + 'BUY  ' + qty + ' x ' + _spreadBuyLeg.strike.toFixed(0)  + ' ' + _spreadBuyLeg.optType  + ' @ MARKET\\n'
-                + 'Net credit: \\u20B9' + net.toFixed(2);
+                + 'Net credit: \\u20B9' + net.toFixed(2) + '  SL: \\u20B9' + sl.toFixed(2);
             if (!confirm(label)) return;
             var payload = {
                 sell_security_id:      _spreadSellLeg.securityId,
                 sell_exchange_segment: _spreadSellLeg.exchangeSegment || 'NSE_FNO',
-                sell_price:            _spreadSellLeg.ltp,
-                sell_trigger_price:    _spreadSellLeg.ltp,
-                sell_sl:               parseFloat(document.getElementById('sqb-sell-sl').value) || 0,
+                sell_price:            sellPrice,
+                sell_trigger_price:    sellPrice,
+                sell_sl:               sl,
                 buy_security_id:       _spreadBuyLeg.securityId,
                 buy_exchange_segment:  _spreadBuyLeg.exchangeSegment || 'NSE_FNO',
                 quantity:              qty,
@@ -2829,12 +2828,16 @@ DASHBOARD_HTML = """
             if (!qty || qty <= 0) { showToast('Enter quantity first', 'warning'); return; }
             var trigPrice = parseFloat(document.getElementById('sqb-trigger-price').value);
             if (!trigPrice || trigPrice <= 0) { showToast('Enter trigger price', 'warning'); return; }
+            var sellPrice = sqbGetSellPrice();
+            var sl = sqbGetSL();
+            if (!sellPrice || sellPrice <= 0) { showToast('Enter SELL price', 'warning'); return; }
+            if (!sl || sl <= sellPrice) { showToast('Enter SL above sell price', 'warning'); return; }
             var payload = {
                 sell_security_id:      _spreadSellLeg.securityId,
                 sell_exchange_segment: _spreadSellLeg.exchangeSegment || 'NSE_FNO',
-                sell_price:            _spreadSellLeg.ltp,
+                sell_price:            sellPrice,
                 sell_trigger_price:    trigPrice,
-                sell_sl:               parseFloat(document.getElementById('sqb-sell-sl').value) || 0,
+                sell_sl:               sl,
                 buy_security_id:       _spreadBuyLeg.securityId,
                 buy_exchange_segment:  _spreadBuyLeg.exchangeSegment || 'NSE_FNO',
                 quantity:              qty,
@@ -2862,6 +2865,8 @@ DASHBOARD_HTML = """
         function clearSpreadQuickBar() {
             _spreadSellLeg = null;
             _spreadBuyLeg  = null;
+            _sqbSellPriceDirty = false;
+            _sqbBuyPriceDirty  = false;
             document.getElementById('sqb-panel').style.display = 'none';
             document.getElementById('sqb-qty').textContent = '-';
             document.getElementById('sqb-lots').textContent = '';
