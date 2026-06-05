@@ -651,7 +651,7 @@ DASHBOARD_HTML = """
                     </div>
 
                     <!-- Chart Canvas (hidden by default, shown on Chart tab) -->
-                    <div id="dom-chart-canvas" style="display:none;height:240px;width:100%;"></div>
+                    <div id="dom-chart-canvas" style="display:none;height:480px;width:100%;"></div>
 
                     <!-- Depth Chart -->
                     <div id="dom-chart" style="overflow-y:auto;">
@@ -2911,8 +2911,8 @@ DASHBOARD_HTML = """
             }
             container.innerHTML = '';
             _lwChart = LightweightCharts.createChart(container, {
-                width:  container.clientWidth || 400,
-                height: 240,
+                width:  container.clientWidth || 600,
+                height: 480,
                 layout: { background: {color:'#0d1117'}, textColor:'#8b949e' },
                 grid:   { vertLines:{color:'#21262d'}, horzLines:{color:'#21262d'} },
                 crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -2966,7 +2966,7 @@ DASHBOARD_HTML = """
                 chartDiv.style.display = 'block';
                 depthBtn.style.fontWeight = '400'; depthBtn.style.borderBottomColor = 'transparent'; depthBtn.style.color = '#8b949e';
                 chartBtn.style.fontWeight = '700'; chartBtn.style.borderBottomColor = '#3fb950';    chartBtn.style.color = '#3fb950';
-                if (_lwChart) _lwChart.applyOptions({width: chartDiv.clientWidth || 400});
+                if (_lwChart) _lwChart.applyOptions({width: chartDiv.clientWidth || 600, height: 480});
             } else {
                 depthDiv.style.display = 'block';
                 chartDiv.style.display = 'none';
