@@ -136,10 +136,10 @@ class PendingSpreadOrder:
     sell_price: float
     sell_trigger_price: float
     sell_sl: float
-    sell_order_type: str = "LIMIT"
     buy_security_id: str
     buy_exchange_segment: str
     quantity: int
+    sell_order_type: str = "LIMIT"
     status: str = "PENDING"  # PENDING, TRIGGERED, FILLED, FAILED
     created_at: float = 0.0
     triggered_at: float = 0.0
