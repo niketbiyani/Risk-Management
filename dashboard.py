@@ -2838,46 +2838,6 @@ DASHBOARD_HTML = """
             .catch(function(e) { showToast('Network error: ' + e, 'error'); });
         }
 
-        function confirmArmTrigger() {
-            if (!_spreadSellLeg || !_spreadBuyLeg) { showToast('Select both SELL and BUY legs', 'warning'); return; }
-            var qty = parseInt(document.getElementById('sqb-qty-override').value)
-                   || parseInt(document.getElementById('sqb-qty').textContent);
-            if (!qty || qty <= 0) { showToast('Enter quantity first', 'warning'); return; }
-            var trigPrice = parseFloat(document.getElementById('sqb-trigger-price').value);
-            if (!trigPrice || trigPrice <= 0) { showToast('Enter trigger price', 'warning'); return; }
-            var sellPrice = sqbGetSellPrice();
-            var sl = sqbGetSL();
-            if (!sellPrice || sellPrice <= 0) { showToast('Enter SELL price', 'warning'); return; }
-            if (!sl || sl <= sellPrice) { showToast('Enter SL above sell price', 'warning'); return; }
-            var payload = {
-                sell_security_id:      _spreadSellLeg.securityId,
-                sell_exchange_segment: _spreadSellLeg.exchangeSegment || 'NSE_FNO',
-                sell_price:            sellPrice,
-                sell_trigger_price:    trigPrice,
-                sell_sl:               sl,
-                buy_security_id:       _spreadBuyLeg.securityId,
-                buy_exchange_segment:  _spreadBuyLeg.exchangeSegment || 'NSE_FNO',
-                quantity:              qty,
-                instant:               false
-            };
-            fetch('/api/order/place_spread', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload)
-            })
-            .then(function(r){ return r.json(); })
-            .then(function(result) {
-                if (result.status === 'error') {
-                    playAlert('error');
-                    showToast('ARM failed: ' + result.message, 'error');
-                } else {
-                    playAlert('order');
-                    showToast('Spread ARMED — trigger @ \\u20B9' + trigPrice + ', monitoring...', 'success');
-                    clearSpreadQuickBar();
-                }
-            })
-            .catch(function(e) { showToast('Network error: ' + e, 'error'); });
-        }
 
         function clearSpreadQuickBar() {
             _spreadSellLeg = null;
@@ -2888,7 +2848,6 @@ DASHBOARD_HTML = """
             document.getElementById('sqb-qty').textContent = '-';
             document.getElementById('sqb-lots').textContent = '';
             document.getElementById('sqb-net-credit').textContent = '';
-            document.getElementById('sqb-max-loss-label').textContent = '';
             document.getElementById('sqb-qty-override').value = '';
             document.getElementById('sqb-sell-sl').value = '';
         }

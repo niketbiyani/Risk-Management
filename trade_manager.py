@@ -136,6 +136,7 @@ class PendingSpreadOrder:
     sell_price: float
     sell_trigger_price: float
     sell_sl: float
+    sell_order_type: str = "LIMIT"
     buy_security_id: str
     buy_exchange_segment: str
     quantity: int
@@ -530,6 +531,7 @@ class TradeManager:
             sell_price=float(spread_data["sell_price"]),
             sell_trigger_price=float(spread_data["sell_trigger_price"]),
             sell_sl=float(spread_data.get("sell_sl", 0)),
+            sell_order_type=spread_data.get("sell_order_type", "LIMIT"),
             buy_security_id=str(spread_data["buy_security_id"]),
             buy_exchange_segment=spread_data.get("buy_exchange_segment", "NSE_FNO"),
             quantity=int(spread_data["quantity"]),
@@ -584,6 +586,7 @@ class TradeManager:
                     "sell_security_id": spread.sell_security_id,
                     "sell_exchange_segment": spread.sell_exchange_segment,
                     "sell_price": spread.sell_price,
+                    "sell_order_type": spread.sell_order_type,
                     "sell_sl": spread.sell_sl,
                     "buy_security_id": spread.buy_security_id,
                     "buy_exchange_segment": spread.buy_exchange_segment,
