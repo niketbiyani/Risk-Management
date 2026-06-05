@@ -571,16 +571,19 @@ DASHBOARD_HTML = """
                             <span id="sqb-net-credit" style="font-weight:700;font-size:11px;"></span>
                             <button onclick="clearSpreadQuickBar()" style="margin-left:auto;background:none;border:none;color:#484f58;cursor:pointer;font-size:11px;padding:0;" title="Clear">✕</button>
                         </div>
-                        <!-- Row 2: Qty + actions -->
-                        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                        <!-- Row 2: Qty -->
+                        <div style="display:flex;gap:6px;align-items:center;">
                             <input id="sqb-risk" class="form-input" type="number" placeholder="Max Loss ₹" style="width:90px;font-size:11px;padding:4px 6px;" oninput="sqbAutoCalc()">
                             <span style="font-size:11px;color:#8b949e;">Qty:</span>
                             <strong id="sqb-qty" style="font-size:12px;color:#e6edf3;">-</strong>
                             <span id="sqb-lots" style="font-size:10px;color:#484f58;"></span>
                             <input id="sqb-qty-override" class="form-input" type="number" placeholder="Override" style="width:72px;font-size:11px;padding:4px 6px;" title="Override calculated qty" oninput="sqbAutoCalc()">
+                        </div>
+                        <!-- Row 3: All buttons -->
+                        <div style="display:flex;gap:6px;align-items:center;">
                             <button id="sqb-execute-btn" onclick="executeSpreadNow('LIMIT')" disabled class="btn-sell" style="padding:5px 14px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;">&#9889; EXECUTE LMT</button>
                             <button id="sqb-execute-mkt-btn" onclick="executeSpreadNow('MARKET')" disabled class="btn-sell" style="padding:5px 10px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;background:#7a1a1a;" title="Both legs at MARKET price">&#9889; MKT</button>
-                            <button id="sqb-single-sell-mkt-btn" onclick="executeSingleLeg('sell','MARKET')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#5a1a1a;color:#f85149;border:1px solid #f85149;border-radius:6px;cursor:pointer;" title="Emergency: sell leg only at MARKET (hedge already filled)">SELL MKT</button>
+                            <button id="sqb-single-sell-mkt-btn" onclick="executeSingleLeg('sell','MARKET')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#5a1a1a;color:#f85149;border:1px solid #f85149;border-radius:6px;cursor:pointer;" title="Emergency: sell leg only at MARKET">SELL MKT</button>
                             <button id="sqb-single-buy-mkt-btn" onclick="executeSingleLeg('buy','MARKET')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#0a2e1a;color:#3fb950;border:1px solid #3fb950;border-radius:6px;cursor:pointer;" title="Emergency: buy leg only at MARKET">BUY MKT</button>
                         </div>
                     </div>
