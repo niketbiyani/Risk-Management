@@ -3811,7 +3811,11 @@ def api_place_spread():
     instant = bool(data.get("instant", False))
 
     # For trigger mode, sell_trigger_price is required; for instant it is accepted but unused
-    required = ["sell_security_id", "buy_security_id", "sell_price", "quantity"]
+    sell_order_type = data.get("sell_order_type", "LIMIT")
+    required = ["sell_security_id", "buy_security_id", "quantity"]
+    # sell_price only required for LIMIT orders (MARKET sends 0 which is falsy)
+    if sell_order_type == "LIMIT":
+        required.append("sell_price")
     if not instant:
         required.append("sell_trigger_price")
     for field in required:
@@ -3827,10 +3831,11 @@ def api_place_spread():
                 "sell_order_type": data.get("sell_order_type", "LIMIT"),
                 "sell_price": float(data.get("sell_price") or 0),
                 "sell_sl": float(data.get("sell_sl", 0)),
+                "product_type": data.get("product_type", "INTRADAY"),
                 "buy_security_id": str(data["buy_security_id"]),
                 "buy_exchange_segment": data.get("buy_exchange_segment", "NSE_FNO"),
                 "quantity": int(data["quantity"]),
-                "ltp": float(data["sell_price"]),
+                "ltp": float(data.get("sell_price") or 0),
             }
             # Execute in background thread so HTTP response returns immediately
             t = threading.Thread(target=_monitor._execute_spread,
