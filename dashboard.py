@@ -3831,7 +3831,7 @@ def api_place_spread():
                 "sell_order_type": data.get("sell_order_type", "LIMIT"),
                 "sell_price": float(data.get("sell_price") or 0),
                 "sell_sl": float(data.get("sell_sl", 0)),
-                "product_type": data.get("product_type", "INTRADAY"),
+                "product_type": data.get("product_type", "MARGIN"),
                 "buy_security_id": str(data["buy_security_id"]),
                 "buy_exchange_segment": data.get("buy_exchange_segment", "NSE_FNO"),
                 "quantity": int(data["quantity"]),

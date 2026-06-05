@@ -275,8 +275,8 @@ class PositionMonitor:
         )
 
         try:
-            # Step 1: Buy hedge at MARKET (INTRADAY = MIS, lower margin requirement)
-            product_type = spread_action.get("product_type", "INTRADAY")
+            # Step 1: Buy hedge at MARKET
+            product_type = spread_action.get("product_type", "MARGIN")
             hedge_result = self.api.place_order(
                 security_id=spread_action["buy_security_id"],
                 exchange_segment=spread_action["buy_exchange_segment"],
