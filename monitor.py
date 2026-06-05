@@ -321,14 +321,38 @@ class PositionMonitor:
             logger.info("Spread %s: SELL placed @ %.2f (order: %s)",
                         spread_id, spread_action["sell_price"], sell_order_id)
 
-            # Step 3: Auto-set SL on sell leg if specified
-            if spread_action.get("sell_sl", 0) > 0:
+            # Step 3: Place exchange-level SL on sell leg (STOP_LOSS_MARKET BUY order)
+            # This fires at the exchange even if the VPS crashes — hard protection.
+            # Also register with trade_mgr for the monitored trailing-SL layer.
+            sell_sl = spread_action.get("sell_sl", 0)
+            if sell_sl > 0:
+                try:
+                    sl_result = self.api.place_order(
+                        security_id=spread_action["sell_security_id"],
+                        exchange_segment=spread_action["sell_exchange_segment"],
+                        transaction_type="BUY",
+                        quantity=spread_action["quantity"],
+                        order_type="STOP_LOSS_MARKET",
+                        product_type="MARGIN",
+                        price=0,
+                        trigger_price=sell_sl,
+                    )
+                    if isinstance(sl_result, dict) and sl_result.get("status") == "failure":
+                        logger.warning("Spread %s: exchange SL order failed: %s — falling back to monitored SL only",
+                                       spread_id, sl_result.get("remarks", sl_result))
+                    else:
+                        sl_order_id = str(sl_result.get("orderId", sl_result.get("data", {}).get("orderId", ""))) if isinstance(sl_result, dict) else ""
+                        logger.info("Spread %s: exchange SL placed @ trigger %.2f (order: %s)",
+                                    spread_id, sell_sl, sl_order_id)
+                except Exception as sl_err:
+                    logger.warning("Spread %s: exchange SL placement failed: %s — monitored SL still active",
+                                   spread_id, sl_err)
+                # Also register monitored SL as backup
                 self.trade_mgr.set_stop_loss(
                     security_id=spread_action["sell_security_id"],
-                    sl_price=spread_action["sell_sl"],
+                    sl_price=sell_sl,
                 )
-                logger.info("Spread %s: SL set at %.2f for sell leg",
-                            spread_id, spread_action["sell_sl"])
+                logger.info("Spread %s: monitored SL set at %.2f for sell leg", spread_id, sell_sl)
 
             # Poll order status after brief delay to detect exchange rejections
             # (Dhan API returns success on submit but exchange may reject after ~1-2s)

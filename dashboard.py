@@ -580,18 +580,8 @@ DASHBOARD_HTML = """
                             <input id="sqb-qty-override" class="form-input" type="number" placeholder="Override" style="width:72px;font-size:11px;padding:4px 6px;" title="Override calculated qty" oninput="sqbAutoCalc()">
                             <button id="sqb-execute-btn" onclick="executeSpreadNow('LIMIT')" disabled class="btn-sell" style="padding:5px 14px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;">&#9889; EXECUTE LMT</button>
                             <button id="sqb-execute-mkt-btn" onclick="executeSpreadNow('MARKET')" disabled class="btn-sell" style="padding:5px 10px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;opacity:0.5;background:#7a1a1a;" title="Both legs at MARKET price">&#9889; MKT</button>
-                            <button id="sqb-arm-btn" onclick="toggleSqbTrigger()" disabled style="padding:5px 12px;font-size:12px;font-weight:700;background:#5a3e00;color:#d29922;border:1px solid #d29922;border-radius:6px;cursor:pointer;opacity:0.5;">ARM TRIGGER</button>
-                            <button id="sqb-single-sell-btn" onclick="executeSingleLeg('sell','LIMIT')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#3d0f0f;color:#f85149;border:1px solid #f85149;border-radius:6px;cursor:pointer;" title="Sell only at LIMIT price — hedge already filled">SELL LMT</button>
-                            <button id="sqb-single-sell-mkt-btn" onclick="executeSingleLeg('sell','MARKET')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#5a1a1a;color:#f85149;border:1px solid #f85149;border-radius:6px;cursor:pointer;" title="Sell only at MARKET — emergency exit">SELL MKT</button>
-                            <button id="sqb-single-buy-btn" onclick="executeSingleLeg('buy','LIMIT')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#0d2117;color:#3fb950;border:1px solid #3fb950;border-radius:6px;cursor:pointer;" title="Buy only at LIMIT price">BUY LMT</button>
-                            <button id="sqb-single-buy-mkt-btn" onclick="executeSingleLeg('buy','MARKET')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#0a2e1a;color:#3fb950;border:1px solid #3fb950;border-radius:6px;cursor:pointer;" title="Buy only at MARKET">BUY MKT</button>
-                        </div>
-                        <!-- Trigger sub-form -->
-                        <div id="sqb-trigger-form" style="display:none;margin-top:5px;padding:5px 8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;align-items:center;gap:6px;font-size:11px;">
-                            <span style="color:#8b949e;">Trigger when SELL LTP ≤</span>
-                            <input id="sqb-trigger-price" class="form-input" type="number" step="0.05" style="width:75px;font-size:11px;padding:3px 6px;">
-                            <button onclick="confirmArmTrigger()" style="padding:3px 10px;font-size:11px;font-weight:700;background:#9e6a03;color:#fff;border:none;border-radius:4px;cursor:pointer;">CONFIRM</button>
-                            <button onclick="cancelArmTrigger()" style="background:none;border:1px solid #30363d;color:#8b949e;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px;">Cancel</button>
+                            <button id="sqb-single-sell-mkt-btn" onclick="executeSingleLeg('sell','MARKET')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#5a1a1a;color:#f85149;border:1px solid #f85149;border-radius:6px;cursor:pointer;" title="Emergency: sell leg only at MARKET (hedge already filled)">SELL MKT</button>
+                            <button id="sqb-single-buy-mkt-btn" onclick="executeSingleLeg('buy','MARKET')" style="display:none;padding:5px 10px;font-size:11px;font-weight:700;background:#0a2e1a;color:#3fb950;border:1px solid #3fb950;border-radius:6px;cursor:pointer;" title="Emergency: buy leg only at MARKET">BUY MKT</button>
                         </div>
                     </div>
                 </div>
@@ -2753,45 +2743,16 @@ DASHBOARD_HTML = """
             var readyMkt = bothLegs && sl > 0 && qty > 0;
             var execBtn    = document.getElementById('sqb-execute-btn');
             var execMktBtn = document.getElementById('sqb-execute-mkt-btn');
-            var armBtn     = document.getElementById('sqb-arm-btn');
             execBtn.disabled    = !readyLmt; execBtn.style.opacity    = readyLmt ? '1' : '0.5';
             execMktBtn.disabled = !readyMkt; execMktBtn.style.opacity = readyMkt ? '1' : '0.5';
-            armBtn.disabled     = !readyLmt; armBtn.style.opacity     = readyLmt ? '1' : '0.5';
 
-            // Show single-leg buttons when a leg is selected
-            var hasSell = !!_spreadSellLeg;
-            var hasBuy  = !!_spreadBuyLeg;
-            document.getElementById('sqb-single-sell-btn').style.display     = hasSell ? 'inline-block' : 'none';
-            document.getElementById('sqb-single-sell-mkt-btn').style.display = hasSell ? 'inline-block' : 'none';
-            document.getElementById('sqb-single-buy-btn').style.display      = hasBuy  ? 'inline-block' : 'none';
-            document.getElementById('sqb-single-buy-mkt-btn').style.display  = hasBuy  ? 'inline-block' : 'none';
-
-            // Pre-fill trigger price
-            var trigEl = document.getElementById('sqb-trigger-price');
-            if (!trigEl.value && sellPrice > 0) trigEl.value = sellPrice.toFixed(2);
+            // Show single-leg emergency buttons when a leg is selected
+            document.getElementById('sqb-single-sell-mkt-btn').style.display = _spreadSellLeg ? 'inline-block' : 'none';
+            document.getElementById('sqb-single-buy-mkt-btn').style.display  = _spreadBuyLeg  ? 'inline-block' : 'none';
         }
 
         // Keep spreadQuickCalc as alias for backward compat
         function spreadQuickCalc() { sqbAutoCalc(); }
-
-        function toggleSqbTrigger() {
-            var form   = document.getElementById('sqb-trigger-form');
-            var armBtn = document.getElementById('sqb-arm-btn');
-            if (form.style.display === 'none' || !form.style.display) {
-                form.style.display = 'flex';
-                armBtn.style.background = '#9e6a03';
-                var trigEl = document.getElementById('sqb-trigger-price');
-                if (!trigEl.value && _spreadSellLeg) trigEl.value = _spreadSellLeg.ltp.toFixed(2);
-            } else {
-                form.style.display = 'none';
-                armBtn.style.background = '#5a3e00';
-            }
-        }
-
-        function cancelArmTrigger() {
-            document.getElementById('sqb-trigger-form').style.display = 'none';
-            document.getElementById('sqb-arm-btn').style.background = '#5a3e00';
-        }
 
         function executeSingleLeg(side, orderType) {
             var leg = side === 'sell' ? _spreadSellLeg : _spreadBuyLeg;
@@ -2929,10 +2890,7 @@ DASHBOARD_HTML = """
             document.getElementById('sqb-net-credit').textContent = '';
             document.getElementById('sqb-max-loss-label').textContent = '';
             document.getElementById('sqb-qty-override').value = '';
-            document.getElementById('sqb-trigger-price').value = '';
             document.getElementById('sqb-sell-sl').value = '';
-            document.getElementById('sqb-trigger-form').style.display = 'none';
-            document.getElementById('sqb-arm-btn').style.background = '#5a3e00';
         }
 
         // ── Snapshot Chart (TradingView Lightweight Charts) ──────────────
@@ -4098,44 +4056,65 @@ def api_projections():
 
 @app.route("/api/chart/<security_id>")
 def api_chart(security_id):
-    """Return intraday 1-minute OHLCV candles for a security (current trading day)."""
+    """Return intraday 1-minute OHLCV candles for today + previous trading day."""
     if not _monitor:
         return jsonify({"error": "Monitor not initialized"}), 500
     exchange_segment = request.args.get("exchange_segment", "NSE_FNO")
     instrument_type  = request.args.get("instrument_type", "OPTIDX")
     try:
-        raw = _monitor.api.get_chart_data(security_id, exchange_segment, instrument_type)
-        data = raw if isinstance(raw, dict) else {}
-        # SDK may nest under 'data' key
-        if "data" in data and isinstance(data["data"], dict):
-            data = data["data"]
-        from datetime import datetime as _dt
-        timestamps = data.get("timestamp", data.get("start_Time", []))
-        opens  = data.get("open",  [])
-        highs  = data.get("high",  [])
-        lows   = data.get("low",   [])
-        closes = data.get("close", [])
-        candles = []
-        IST_OFFSET = 19800  # 5h30m in seconds
-        for i, ts in enumerate(timestamps):
-            # Dhan returns IST strings e.g. "2024-01-01 09:15:00".
-            # LightweightCharts v4 has no timezone support, so we send timestamps
-            # that display as IST by parsing the IST string as-if-UTC (naive parse).
-            # Chart sees "09:15" and displays "09:15" — correct for the user.
-            try:
-                unix_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp())
-            except (ValueError, TypeError):
+        from datetime import datetime as _dt, date as _date, timedelta as _td
+
+        def _prev_trading_day(d):
+            """Return the most recent weekday before d (skips weekends, not holidays)."""
+            prev = d - _td(days=1)
+            while prev.weekday() >= 5:  # 5=Sat, 6=Sun
+                prev -= _td(days=1)
+            return prev
+
+        def _parse_candles(raw):
+            data = raw if isinstance(raw, dict) else {}
+            if "data" in data and isinstance(data["data"], dict):
+                data = data["data"]
+            timestamps = data.get("timestamp", data.get("start_Time", []))
+            opens  = data.get("open",  [])
+            highs  = data.get("high",  [])
+            lows   = data.get("low",   [])
+            closes = data.get("close", [])
+            result = []
+            for i, ts in enumerate(timestamps):
+                # Parse IST string as-if-UTC so chart displays correct IST times
                 try:
-                    unix_ts = int(ts)
+                    unix_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp())
                 except (ValueError, TypeError):
-                    continue
-            o  = opens[i]  if i < len(opens)  else 0
-            h  = highs[i]  if i < len(highs)  else 0
-            lo = lows[i]   if i < len(lows)   else 0
-            c  = closes[i] if i < len(closes) else 0
-            if o > 0 and h > 0 and lo > 0 and c > 0:
-                candles.append({"time": unix_ts, "open": o, "high": h, "low": lo, "close": c})
-        logger.info("Chart data for %s: %d candles from %d timestamps", security_id, len(candles), len(timestamps))
+                    try:
+                        unix_ts = int(ts)
+                    except (ValueError, TypeError):
+                        continue
+                o  = opens[i]  if i < len(opens)  else 0
+                h  = highs[i]  if i < len(highs)  else 0
+                lo = lows[i]   if i < len(lows)   else 0
+                c  = closes[i] if i < len(closes) else 0
+                if o > 0 and h > 0 and lo > 0 and c > 0:
+                    result.append({"time": unix_ts, "open": o, "high": h, "low": lo, "close": c})
+            return result
+
+        today     = _date.today()
+        prev_day  = _prev_trading_day(today)
+        today_str = today.strftime("%Y-%m-%d")
+        prev_str  = prev_day.strftime("%Y-%m-%d")
+
+        # Fetch both days (prev day first so candles are in time order)
+        prev_raw  = _monitor.api.get_chart_data(security_id, exchange_segment, instrument_type,
+                                                 from_date=prev_str, to_date=prev_str)
+        today_raw = _monitor.api.get_chart_data(security_id, exchange_segment, instrument_type,
+                                                 from_date=today_str, to_date=today_str)
+
+        prev_candles  = _parse_candles(prev_raw)
+        today_candles = _parse_candles(today_raw)
+        candles = prev_candles + today_candles
+
+        logger.info("Chart %s: %d prev-day + %d today candles", security_id,
+                    len(prev_candles), len(today_candles))
         return jsonify({"candles": candles})
     except Exception as e:
         logger.error("Failed to get chart data for %s: %s", security_id, e)

@@ -346,8 +346,8 @@ class DhanAPI:
             logger.error("Failed to get market depth: %s", e)
             return {}
 
-    def get_chart_data(self, security_id: str, exchange_segment: str, instrument_type: str = "OPTIDX") -> dict:
-        """Fetch intraday 1-minute OHLCV candles for current trading day."""
+    def get_chart_data(self, security_id: str, exchange_segment: str, instrument_type: str = "OPTIDX", from_date: str = None, to_date: str = None) -> dict:
+        """Fetch intraday 1-minute OHLCV candles for the given date range (defaults to today)."""
         try:
             from datetime import date
             today = date.today().strftime("%Y-%m-%d")
@@ -355,8 +355,8 @@ class DhanAPI:
                 security_id=security_id,
                 exchange_segment=exchange_segment,
                 instrument_type=instrument_type,
-                from_date=today,
-                to_date=today,
+                from_date=from_date or today,
+                to_date=to_date or today,
             )
         except Exception as e:
             logger.error("Failed to get chart data for %s: %s", security_id, e)
