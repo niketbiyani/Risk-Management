@@ -1399,12 +1399,31 @@ DASHBOARD_HTML = """
                 html += '</div></td>';
 
                 // Actions
-                html += '<td>';
+                html += '<td style="white-space:nowrap;">';
                 html += '<button class="btn-sl btn-sm" data-action="set-sl" data-idx="' + i + '">SL</button> ';
                 html += '<button class="btn-tp btn-sm" data-action="set-tp" data-idx="' + i + '">TP</button> ';
-                html += '<button class="btn-danger btn-sm" data-action="exit" data-idx="' + i + '">EXIT</button>';
+                html += '<button class="btn-neutral btn-sm" data-action="tsl" data-idx="' + i + '">TSL</button> ';
+                html += '<button class="btn-danger btn-sm" data-action="exit-mkt" data-idx="' + i + '">EXIT MKT</button> ';
+                html += '<button class="btn-sm" style="background:#1a3a5c;color:#58a6ff;border:1px solid #1f6feb;" data-action="show-exit-form" data-idx="' + i + '">EXIT...</button>';
                 html += '</td>';
                 html += '</tr>';
+
+                // Inline exit form (partial / target)
+                html += '<tr id="exit-row-' + sid + '" style="display:none;"><td colspan="8" style="padding:4px 8px;background:#0d1117;border-bottom:1px solid #21262d;">';
+                html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;">';
+                html += '<span style="color:#8b949e;">Qty:</span>';
+                html += '<button class="btn-xs btn-neutral" data-action="pct-qty" data-idx="' + i + '" data-pct="25">25%</button>';
+                html += '<button class="btn-xs btn-neutral" data-action="pct-qty" data-idx="' + i + '" data-pct="50">50%</button>';
+                html += '<button class="btn-xs btn-neutral" data-action="pct-qty" data-idx="' + i + '" data-pct="75">75%</button>';
+                html += '<button class="btn-xs btn-neutral" data-action="pct-qty" data-idx="' + i + '" data-pct="100">100%</button>';
+                html += '<input id="exit-qty-' + sid + '" type="number" value="' + qty + '" min="1" style="width:60px;font-size:11px;" class="form-input">';
+                html += '<span style="color:#8b949e;margin-left:4px;">@ </span>';
+                html += '<input id="exit-price-' + sid + '" type="number" step="0.05" value="' + ltp.toFixed(2) + '" style="width:75px;font-size:11px;" class="form-input" placeholder="Price">';
+                html += '<button class="btn-sm btn-sl" data-action="exit-lmt" data-idx="' + i + '">EXIT LMT</button>';
+                html += '<button class="btn-sm btn-danger" data-action="exit-partial-mkt" data-idx="' + i + '">EXIT MKT</button>';
+                html += '<button class="btn-xs btn-neutral" data-action="hide-exit-form" data-idx="' + i + '" style="margin-left:4px;">✕</button>';
+                html += '</div>';
+                html += '</td></tr>';
 
                 // Trailing SL inline form row (hidden by default)
                 html += '<tr id="tsl-row-' + sid + '" style="display:none;"><td colspan="8">';
@@ -1446,8 +1465,22 @@ DASHBOARD_HTML = """
                 promptSL(sid);
             } else if (action === 'set-tp') {
                 promptTP(sid);
-            } else if (action === 'exit') {
-                exitPosition(sid, exSeg, prodType, qty, dir);
+            } else if (action === 'exit-mkt') {
+                exitPositionMkt(sid, exSeg, prodType, qty, dir);
+            } else if (action === 'show-exit-form') {
+                showExitForm(sid);
+            } else if (action === 'hide-exit-form') {
+                hideExitForm(sid);
+            } else if (action === 'pct-qty') {
+                var pct = parseInt(btn.getAttribute('data-pct'));
+                var lotSize = _ocLotSize || 25;
+                var raw = qty * pct / 100;
+                var lots = Math.max(1, Math.round(raw / lotSize));
+                document.getElementById('exit-qty-' + sid).value = lots * lotSize;
+            } else if (action === 'exit-lmt') {
+                exitPositionLmt(sid, exSeg, prodType, dir);
+            } else if (action === 'exit-partial-mkt') {
+                exitPositionPartialMkt(sid, exSeg, prodType, dir);
             } else if (action === 'set-tsl') {
                 setTrailingSL(sid);
             } else if (action === 'hide-tsl') {
@@ -2072,20 +2105,57 @@ DASHBOARD_HTML = """
         }
 
         function exitPosition(sid, exSeg, prodType, qty, direction) {
-            if (confirm('Exit this position at market?')) {
-                fetch('/api/exit', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({security_id: sid, exchange_segment: exSeg, product_type: prodType, quantity: qty, direction: direction})
-                }).then(function(r){ return r.json(); }).then(function(d) {
-                    if (d.status === 'ok') {
-                        playAlert('order');
-                        showToast('Exit order placed', 'success');
-                    } else {
-                        showToast('Exit failed: ' + (d.message || ''), 'error');
-                    }
-                });
-            }
+            exitPositionMkt(sid, exSeg, prodType, qty, direction);
+        }
+
+        function showExitForm(sid) {
+            document.getElementById('exit-row-' + sid).style.display = 'table-row';
+        }
+        function hideExitForm(sid) {
+            document.getElementById('exit-row-' + sid).style.display = 'none';
+        }
+
+        function _placeExitOrder(sid, exSeg, prodType, qty, direction, orderType, price) {
+            var txn = direction > 0 ? 'SELL' : 'BUY';
+            fetch('/api/order/place', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    security_id: sid,
+                    exchange_segment: exSeg,
+                    transaction_type: txn,
+                    quantity: qty,
+                    order_type: orderType,
+                    product_type: prodType,
+                    price: orderType === 'LIMIT' ? price : 0
+                })
+            }).then(function(r){ return r.json(); }).then(function(d) {
+                if (d.status === 'ok' || d.orderId) {
+                    playAlert('order');
+                    showToast(txn + ' ' + qty + ' @ ' + (orderType === 'LIMIT' ? '\\u20B9' + price.toFixed(2) + ' LMT' : 'MKT') + ' sent', 'success');
+                    hideExitForm(sid);
+                } else {
+                    showToast('Exit failed: ' + (d.message || d.remarks || ''), 'error');
+                }
+            }).catch(function(e) { showToast('Network error: ' + e, 'error'); });
+        }
+
+        function exitPositionMkt(sid, exSeg, prodType, qty, direction) {
+            _placeExitOrder(sid, exSeg, prodType, qty, direction, 'MARKET', 0);
+        }
+
+        function exitPositionLmt(sid, exSeg, prodType, direction) {
+            var qty   = parseInt(document.getElementById('exit-qty-' + sid).value) || 0;
+            var price = parseFloat(document.getElementById('exit-price-' + sid).value) || 0;
+            if (!qty || qty <= 0) { showToast('Enter quantity', 'warning'); return; }
+            if (!price || price <= 0) { showToast('Enter price', 'warning'); return; }
+            _placeExitOrder(sid, exSeg, prodType, qty, direction, 'LIMIT', price);
+        }
+
+        function exitPositionPartialMkt(sid, exSeg, prodType, direction) {
+            var qty = parseInt(document.getElementById('exit-qty-' + sid).value) || 0;
+            if (!qty || qty <= 0) { showToast('Enter quantity', 'warning'); return; }
+            _placeExitOrder(sid, exSeg, prodType, qty, direction, 'MARKET', 0);
         }
 
         function exitAllPositions() {
