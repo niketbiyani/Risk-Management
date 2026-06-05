@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Positions Table Mockup</title>
+<style>
+  body { background:#0d1117; color:#e6edf3; font-family:monospace; padding:24px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; padding:8px 10px; color:#8b949e; font-weight:600; border-bottom:1px solid #21262d; font-size:11px; text-transform:uppercase; }
+  td { padding:7px 10px; border-bottom:1px solid #161b22; vertical-align:middle; }
+  tr:hover td { background:#161b22; }
+  .positive { color:#3fb950; }
+  .negative { color:#f85149; }
+  .btn-sm { padding:3px 8px; border-radius:4px; border:none; cursor:pointer; font-size:11px; font-weight:600; }
+  .btn-xs { padding:2px 6px; border-radius:3px; border:none; cursor:pointer; font-size:10px; font-weight:600; }
+  .btn-danger { background:#3d0f0f; color:#f85149; border:1px solid #f85149; }
+  .btn-danger:hover { background:#f85149; color:#0d1117; }
+  .btn-sl { background:#3d2200; color:#d29922; border:1px solid #d29922; }
+  .btn-sl:hover { background:#d29922; color:#0d1117; }
+  .btn-tp { background:#0d2117; color:#3fb950; border:1px solid #3fb950; }
+  .btn-tp:hover { background:#3fb950; color:#0d1117; }
+  .btn-neutral { background:#21262d; color:#8b949e; border:1px solid #30363d; }
+  .btn-neutral:hover { background:#30363d; color:#e6edf3; }
+  .btn-exit-more { background:#1a3a5c; color:#58a6ff; border:1px solid #1f6feb; }
+  .btn-exit-more:hover { background:#1f6feb; color:#fff; }
+  .form-input { background:#161b22; border:1px solid #30363d; color:#e6edf3; border-radius:4px; padding:3px 6px; font-size:11px; font-family:monospace; }
+  .form-input:focus { outline:none; border-color:#58a6ff; }
+  .pct-btn { background:#21262d; color:#58a6ff; border:1px solid #1f6feb; }
+  .pct-btn:hover { background:#1f6feb; color:#fff; }
+  .exit-form-row td { background:#0a0f17; }
+  .card { background:#161b22; border:1px solid #21262d; border-radius:8px; padding:16px; }
+  h3 { color:#e6edf3; margin:0 0 12px 0; font-size:15px; }
+  .header-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+  .tag { font-size:10px; padding:1px 5px; border-radius:3px; font-weight:700; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header-row">
+    <h3>Open Positions</h3>
+    <button class="btn-sm btn-danger">EXIT ALL</button>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Instrument</th>
+        <th>Qty</th>
+        <th>Avg</th>
+        <th>LTP</th>
+        <th>P&L</th>
+        <th>SL / TP</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="pos-body"></tbody>
+  </table>
+</div>
+
+<script>
+var positions = [
+  { sym:'NIFTY-Jun2026-23500-PE', qty:-65, avg:153.25, ltp:148.60, pnl:302.25, sl:165, tp:null },
+  { sym:'NIFTY-Jun2026-23250-PE', qty:65,  avg:57.70,  ltp:61.20,  pnl:-227.50, sl:null, tp:45 },
+  { sym:'NIFTY-Jun2026-23600-CE', qty:-130, avg:92.40, ltp:88.10,  pnl:559.00, sl:105, tp:60 },
+  { sym:'NIFTY-Jun2026-23400-CE', qty:130,  avg:34.50, ltp:37.20,  pnl:-351.00, sl:null, tp:null },
+];
+
+var LOT_SIZE = 65;
+
+function fmt(v) { return (v >= 0 ? '+' : '') + '₹' + Math.abs(v).toFixed(2); }
+
+function renderRows() {
+  var html = '';
+  for (var i = 0; i < positions.length; i++) {
+    var p = positions[i];
+    var sid = 'pos' + i;
+    var dir = p.qty > 0 ? 1 : -1;
+    var qty = Math.abs(p.qty);
+    var pnlClass = p.pnl >= 0 ? 'positive' : 'negative';
+    var dirColor = dir > 0 ? '#3fb950' : '#f85149';
+    var slText = p.sl ? '<span class="negative">SL: ₹' + p.sl.toFixed(2) + '</span>' : '<span style="color:#484f58;">—</span>';
+    var tpText = p.tp ? '<span class="positive">TP: ₹' + p.tp.toFixed(2) + '</span>' : '<span style="color:#484f58;">—</span>';
+
+    html += '<tr>';
+    html += '<td style="font-size:12px;">' + p.sym + '</td>';
+    html += '<td style="color:' + dirColor + ';font-weight:700;">' + p.qty + '</td>';
+    html += '<td>₹' + p.avg.toFixed(2) + '</td>';
+    html += '<td>₹' + p.ltp.toFixed(2) + '</td>';
+    html += '<td class="' + pnlClass + '" style="font-weight:700;">' + fmt(p.pnl) + '</td>';
+    html += '<td style="font-size:12px;line-height:1.8;">' + slText + '<br>' + tpText + '</td>';
+    html += '<td style="white-space:nowrap;">';
+    html += '<button class="btn-sm btn-sl" onclick="alert(\'SL dialog\')">SL</button> ';
+    html += '<button class="btn-sm btn-tp" onclick="alert(\'TP dialog\')">TP</button> ';
+    html += '<button class="btn-sm btn-neutral" onclick="alert(\'TSL dialog\')">TSL</button> ';
+    html += '<button class="btn-sm btn-danger" onclick="exitMkt(' + i + ')">EXIT MKT</button> ';
+    html += '<button class="btn-sm btn-exit-more" onclick="toggleExitForm(\'' + sid + '\')">EXIT...</button>';
+    html += '</td>';
+    html += '</tr>';
+
+    // Inline exit form
+    html += '<tr id="exit-row-' + sid + '" style="display:none;" class="exit-form-row"><td colspan="7" style="padding:8px 12px;">';
+    html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
+    html += '<span style="color:#8b949e;font-size:11px;">Qty:</span>';
+    html += '<button class="btn-xs pct-btn" onclick="setPct(\'' + sid + '\',' + qty + ',25)">25%</button>';
+    html += '<button class="btn-xs pct-btn" onclick="setPct(\'' + sid + '\',' + qty + ',50)">50%</button>';
+    html += '<button class="btn-xs pct-btn" onclick="setPct(\'' + sid + '\',' + qty + ',75)">75%</button>';
+    html += '<button class="btn-xs pct-btn" onclick="setPct(\'' + sid + '\',' + qty + ',100)">100%</button>';
+    html += '<input id="exit-qty-' + sid + '" type="number" value="' + qty + '" class="form-input" style="width:60px;">';
+    html += '<span style="color:#8b949e;font-size:11px;">@</span>';
+    html += '<input id="exit-price-' + sid + '" type="number" step="0.05" value="' + p.ltp.toFixed(2) + '" class="form-input" style="width:75px;" placeholder="Price">';
+    html += '<button class="btn-sm btn-sl" onclick="exitLmt(\'' + sid + '\',' + i + ')">EXIT LMT</button>';
+    html += '<button class="btn-sm btn-danger" onclick="exitPartialMkt(\'' + sid + '\',' + i + ')">EXIT MKT</button>';
+    html += '<button class="btn-xs btn-neutral" onclick="toggleExitForm(\'' + sid + '\')" style="margin-left:4px;">✕</button>';
+    html += '</div>';
+    html += '</td></tr>';
+  }
+  document.getElementById('pos-body').innerHTML = html;
+}
+
+function toggleExitForm(sid) {
+  var row = document.getElementById('exit-row-' + sid);
+  row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+
+function setPct(sid, totalQty, pct) {
+  var raw = totalQty * pct / 100;
+  var lots = Math.max(1, Math.round(raw / LOT_SIZE));
+  document.getElementById('exit-qty-' + sid).value = lots * LOT_SIZE;
+  // highlight active button
+  var btns = document.querySelectorAll('[onclick*="setPct(\'' + sid + '\'"]');
+  btns.forEach(function(b){ b.style.background = '#21262d'; });
+  event.target.style.background = '#1f6feb';
+}
+
+function exitMkt(idx) {
+  var p = positions[idx];
+  showToast('EXIT MKT sent: ' + Math.abs(p.qty) + ' × ' + p.sym, 'danger');
+}
+
+function exitLmt(sid, idx) {
+  var qty   = document.getElementById('exit-qty-' + sid).value;
+  var price = document.getElementById('exit-price-' + sid).value;
+  showToast('EXIT LMT sent: ' + qty + ' @ ₹' + price, 'tp');
+  toggleExitForm(sid);
+}
+
+function exitPartialMkt(sid, idx) {
+  var qty = document.getElementById('exit-qty-' + sid).value;
+  showToast('EXIT MKT sent: ' + qty + ' lots @ MARKET', 'danger');
+  toggleExitForm(sid);
+}
+
+function showToast(msg, type) {
+  var t = document.createElement('div');
+  var colors = { danger:'#f85149', tp:'#3fb950', sl:'#d29922' };
+  t.style.cssText = 'position:fixed;bottom:24px;right:24px;padding:10px 16px;border-radius:6px;font-size:13px;font-weight:600;background:#21262d;color:' + (colors[type]||'#e6edf3') + ';border:1px solid ' + (colors[type]||'#30363d') + ';z-index:9999;';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(function(){ t.remove(); }, 2500);
+}
+
+renderRows();
+</script>
+</body>
+</html>
