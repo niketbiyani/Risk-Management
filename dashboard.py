@@ -664,17 +664,18 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
-    <!-- Order Placement Panel -->
-    <div style="padding:0 24px;">
+    <!-- Order Placement Panel (hidden — superseded by option chain quick bar) -->
+    <div style="padding:0 24px;display:none;">
         <div class="card">
-            <!-- Tab Headers -->
-            <div style="display:flex;gap:0;border-bottom:1px solid #21262d;margin-bottom:16px;">
+            <!-- DISABLED: Naked Order + Spread Entry tabs hidden — superseded by Option Chain quick bar -->
+            <!-- To re-enable: remove the display:none from the tab headers div and tab-naked/tab-spread divs -->
+            <div style="display:flex;gap:0;border-bottom:1px solid #21262d;margin-bottom:16px;display:none;">
                 <div class="order-tab active" data-tab="naked" onclick="switchOrderTab('naked')" style="padding:10px 20px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;">Naked Order</div>
                 <div class="order-tab" data-tab="spread" onclick="switchOrderTab('spread')" style="padding:10px 20px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;">Spread Entry</div>
             </div>
 
-            <!-- ═══ NAKED ORDER TAB ═══ -->
-            <div id="tab-naked">
+            <!-- ═══ NAKED ORDER TAB ═══ (hidden — use option chain quick bar instead) -->
+            <div id="tab-naked" style="display:none;">
                 <!-- Instrument Search -->
                 <div class="search-wrapper" style="margin-bottom:12px;">
                     <div class="form-label">Instrument</div>
@@ -751,7 +752,7 @@ DASHBOARD_HTML = """
                 </div>
             </div>
 
-            <!-- ═══ SPREAD ENTRY TAB ═══ -->
+            <!-- ═══ SPREAD ENTRY TAB ═══ (hidden — use option chain quick bar instead) -->
             <div id="tab-spread" style="display:none;">
                 <div style="background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:12px;color:#8b949e;">
                     Spread entry: when sell trigger hits, the hedge leg is bought at market first, then the sell executes at your price. This ensures margin availability.
