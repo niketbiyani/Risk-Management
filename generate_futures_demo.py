@@ -23,41 +23,30 @@ print("Loading instrument cache...")
 cache = InstrumentCache()
 cache.load()
 
-# Search for NIFTY FUTIDX instruments
+# Search for NIFTY FUTIDX instruments using InstrumentCache's _instruments list
 nifty_futures = [
-    i for i in cache.instruments.values()
-    if i.get('SEM_SMST_SECURITY_ID') and
-       'NIFTY' in str(i.get('SEM_TRADING_SYMBOL','')) and
-       i.get('SEM_INSTRUMENT_NAME') == 'FUTIDX' and
-       i.get('SEM_EXP_FLAG') == 'N' and  # near month
-       i.get('SEM_EXCH_INSTRM_TYPE') == 'IF'
+    i for i in cache._instruments
+    if 'NIFTY' in i.trading_symbol.upper()
+    and i.instrument_type == 'FUTIDX'
+    and i.exchange_segment == 'NSE_FNO'
 ]
 
-if not nifty_futures:
-    # Fallback: broader search
-    nifty_futures = [
-        i for i in cache.instruments.values()
-        if 'NIFTY' in str(i.get('SEM_TRADING_SYMBOL','')) and
-           i.get('SEM_INSTRUMENT_NAME') == 'FUTIDX'
-    ]
-
-# Sort by expiry to get near month
-nifty_futures.sort(key=lambda x: x.get('SEM_EXPIRY_DATE',''))
+# Sort by expiry to get near month first
+nifty_futures.sort(key=lambda x: x.expiry_date or '')
 print(f"Found {len(nifty_futures)} NIFTY FUTIDX contracts")
 for f in nifty_futures[:5]:
-    print(f"  {f.get('SEM_TRADING_SYMBOL')} — ID: {f.get('SEM_SMST_SECURITY_ID')} — Expiry: {f.get('SEM_EXPIRY_DATE')}")
+    print(f"  {f.trading_symbol} — ID: {f.security_id} — Expiry: {f.expiry_date}")
 
 if not nifty_futures:
     print("ERROR: No Nifty futures found")
     sys.exit(1)
 
-# Use near-month (first by expiry after today)
+# Use near-month (first expiry on or after today)
 today = date.today()
 near_month = None
 for f in nifty_futures:
-    exp = f.get('SEM_EXPIRY_DATE','')
     try:
-        exp_date = date.fromisoformat(exp[:10])
+        exp_date = date.fromisoformat(f.expiry_date[:10])
         if exp_date >= today:
             near_month = f
             break
@@ -67,8 +56,8 @@ for f in nifty_futures:
 if not near_month:
     near_month = nifty_futures[0]
 
-security_id = str(near_month.get('SEM_SMST_SECURITY_ID'))
-symbol = near_month.get('SEM_TRADING_SYMBOL')
+security_id = str(near_month.security_id)
+symbol = near_month.trading_symbol
 print(f"\nUsing: {symbol} (ID: {security_id})")
 
 # ── Get last 3 trading days ────────────────────────────────────────
