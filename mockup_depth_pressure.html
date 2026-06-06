@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ATM Depth Pressure — Mockup</title>
+<style>
+  body { background:#0d1117; color:#e6edf3; font-family:monospace; padding:24px; }
+  .card { background:#161b22; border:1px solid #21262d; border-radius:8px; padding:16px; max-width:680px; }
+  h3 { color:#e6edf3; margin:0 0 4px 0; font-size:15px; }
+  .subtitle { color:#484f58; font-size:11px; margin-bottom:16px; }
+
+  /* ── Pressure Bar ── */
+  .pressure-section { margin-bottom:16px; }
+  .pressure-label { display:flex; justify-content:space-between; font-size:11px; margin-bottom:4px; }
+  .pressure-label .bear { color:#f85149; font-weight:700; }
+  .pressure-label .bull { color:#3fb950; font-weight:700; }
+  .pressure-track { height:22px; background:#21262d; border-radius:4px; overflow:hidden; display:flex; }
+  .pressure-bear { background:#f85149; height:100%; transition:width 0.3s; display:flex; align-items:center; justify-content:flex-end; padding-right:6px; font-size:11px; font-weight:700; color:#0d1117; }
+  .pressure-bull { background:#3fb950; height:100%; transition:width 0.3s; display:flex; align-items:center; padding-left:6px; font-size:11px; font-weight:700; color:#0d1117; }
+  .pressure-score { text-align:center; margin-top:6px; font-size:13px; font-weight:700; }
+
+  /* ── CE / PE side by side ── */
+  .legs { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
+  .leg-card { background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:10px; }
+  .leg-title { font-size:11px; font-weight:700; margin-bottom:8px; }
+  .leg-title.ce { color:#3fb950; }
+  .leg-title.pe { color:#f85149; }
+  .imb-bar-wrap { height:14px; background:#21262d; border-radius:3px; overflow:hidden; display:flex; margin-bottom:6px; }
+  .imb-bid { background:#3fb950; height:100%; transition:width 0.3s; }
+  .imb-ask { background:#f85149; height:100%; transition:width 0.3s; }
+  .imb-labels { display:flex; justify-content:space-between; font-size:10px; color:#8b949e; }
+  .depth-ladder { margin-top:8px; }
+  .depth-row { display:flex; align-items:center; gap:4px; margin-bottom:2px; font-size:10px; }
+  .depth-price { width:52px; text-align:right; color:#e6edf3; font-weight:600; }
+  .depth-bar-wrap { flex:1; height:10px; background:#161b22; border-radius:2px; overflow:hidden; }
+  .depth-bar-bid { background:#1a4a1a; height:100%; }
+  .depth-bar-ask { background:#4a1a1a; height:100%; }
+  .depth-qty { width:48px; text-align:left; color:#8b949e; padding-left:4px; }
+  .ask-row .depth-price { color:#f85149; }
+  .bid-row .depth-price { color:#3fb950; }
+  .spread-row { text-align:center; font-size:10px; color:#484f58; margin:3px 0; }
+
+  /* ── History sparkline ── */
+  .history-section { margin-bottom:0; }
+  .history-label { font-size:11px; color:#8b949e; margin-bottom:6px; }
+  canvas { width:100%; height:60px; display:block; }
+
+  /* ── Signal box ── */
+  .signal-box { margin-top:12px; padding:10px 14px; border-radius:6px; font-size:12px; font-weight:700; text-align:center; }
+  .signal-bear  { background:#2d1117; border:1px solid #f85149; color:#f85149; }
+  .signal-bull  { background:#0d2117; border:1px solid #3fb950; color:#3fb950; }
+  .signal-neutral { background:#1a1a2e; border:1px solid #484f58; color:#8b949e; }
+
+  .controls { margin-top:16px; display:flex; gap:8px; flex-wrap:wrap; }
+  .btn { padding:5px 12px; border-radius:4px; border:none; cursor:pointer; font-size:11px; font-weight:700; font-family:monospace; }
+  .btn-scenario { background:#21262d; color:#e6edf3; border:1px solid #30363d; }
+  .btn-scenario:hover { background:#30363d; }
+  .btn-scenario.active { background:#1f3a5c; border-color:#58a6ff; color:#58a6ff; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h3>ATM Depth Pressure</h3>
+  <div class="subtitle">NIFTY 24500 CE &amp; PE — real-time bid/ask imbalance</div>
+
+  <!-- Overall pressure bar -->
+  <div class="pressure-section">
+    <div class="pressure-label">
+      <span class="bear">▼ BEARISH (CE selling / PE buying)</span>
+      <span class="bull">BULLISH (CE buying / PE selling) ▲</span>
+    </div>
+    <div class="pressure-track">
+      <div class="pressure-bear" id="pbar-bear" style="width:50%">50%</div>
+      <div class="pressure-bull" id="pbar-bull" style="width:50%">50%</div>
+    </div>
+    <div class="pressure-score" id="pressure-score">Neutral</div>
+  </div>
+
+  <!-- CE + PE depth side by side -->
+  <div class="legs">
+    <!-- CE -->
+    <div class="leg-card">
+      <div class="leg-title ce">ATM CALL (CE) — 24500</div>
+      <div class="imb-bar-wrap">
+        <div class="imb-bid" id="ce-bid-bar" style="width:50%"></div>
+        <div class="imb-ask" id="ce-ask-bar" style="width:50%"></div>
+      </div>
+      <div class="imb-labels">
+        <span>Bid <span id="ce-bid-pct">50%</span></span>
+        <span>Ask <span id="ce-ask-pct">50%</span></span>
+      </div>
+      <div class="depth-ladder" id="ce-ladder"></div>
+    </div>
+
+    <!-- PE -->
+    <div class="leg-card">
+      <div class="leg-title pe">ATM PUT (PE) — 24500</div>
+      <div class="imb-bar-wrap">
+        <div class="imb-bid" id="pe-bid-bar" style="width:50%"></div>
+        <div class="imb-ask" id="pe-ask-bar" style="width:50%"></div>
+      </div>
+      <div class="imb-labels">
+        <span>Bid <span id="pe-bid-pct">50%</span></span>
+        <span>Ask <span id="pe-ask-pct">50%</span></span>
+      </div>
+      <div class="depth-ladder" id="pe-ladder"></div>
+    </div>
+  </div>
+
+  <!-- Pressure history -->
+  <div class="history-section">
+    <div class="history-label">Pressure history (last 60 ticks)</div>
+    <canvas id="history-canvas" height="60"></canvas>
+  </div>
+
+  <!-- Signal -->
+  <div class="signal-box signal-neutral" id="signal-box">— Waiting for data —</div>
+
+  <!-- Scenario buttons -->
+  <div class="controls">
+    <span style="font-size:11px;color:#8b949e;align-self:center;">Simulate:</span>
+    <button class="btn btn-scenario" onclick="setScenario('neutral')">Neutral</button>
+    <button class="btn btn-scenario active" onclick="setScenario('bear_building')">Bear Building</button>
+    <button class="btn btn-scenario" onclick="setScenario('strong_bear')">Strong Bear</button>
+    <button class="btn btn-scenario" onclick="setScenario('bull_building')">Bull Building</button>
+    <button class="btn btn-scenario" onclick="setScenario('mixed')">Mixed / Noisy</button>
+  </div>
+</div>
+
+<script>
+// ── Scenario definitions ──────────────────────────────────────────
+// Each scenario defines target CE/PE bid/ask qty distributions
+var scenarios = {
+  neutral: {
+    ce: { bids: [1800,1500,1200,900,600], asks: [1900,1600,1300,1000,700] },
+    pe: { bids: [1700,1400,1100,800,500], asks: [1800,1500,1200,900,600] },
+    noise: 0.15
+  },
+  bear_building: {
+    // CE: ask side thin (sellers gone), PE: bid side building (put buyers coming in)
+    ce: { bids: [800,600,400,300,200],  asks: [400,300,200,150,100] },
+    pe: { bids: [3200,2800,2400,1800,1200], asks: [1200,900,700,500,300] },
+    noise: 0.2
+  },
+  strong_bear: {
+    // CE: almost no bids (call sellers piling in), PE: massive bids
+    ce: { bids: [300,200,150,100,80],   asks: [200,150,100,80,50] },
+    pe: { bids: [5000,4200,3600,2800,2000], asks: [800,600,400,300,200] },
+    noise: 0.1
+  },
+  bull_building: {
+    // CE: bid side building (call buyers), PE: ask side thin
+    ce: { bids: [3500,3000,2500,2000,1500], asks: [1000,800,600,400,300] },
+    pe: { bids: [600,500,400,300,200],  asks: [300,250,200,150,100] },
+    noise: 0.2
+  },
+  mixed: {
+    ce: { bids: [2000,500,1800,400,1500], asks: [1800,2200,300,1600,900] },
+    pe: { bids: [1200,3000,500,2200,800], asks: [2800,400,1900,600,1400] },
+    noise: 0.4
+  }
+};
+
+var currentScenario = 'bear_building';
+var pressureHistory = [];
+var cePriceBase = 148.50;
+var pePriceBase = 96.20;
+
+function randNoise(base, noise) {
+  return Math.max(10, Math.round(base * (1 + (Math.random()-0.5)*2*noise)));
+}
+
+function getDepthData(scenario) {
+  var s = scenarios[scenario];
+  var n = s.noise;
+  var ceAsks = [], ceBids = [], peAsks = [], peBids = [];
+  for (var i = 0; i < 5; i++) {
+    ceAsks.push(randNoise(s.ce.asks[i], n));
+    ceBids.push(randNoise(s.ce.bids[i], n));
+    peAsks.push(randNoise(s.pe.asks[i], n));
+    peBids.push(randNoise(s.pe.bids[i], n));
+  }
+  return { ceAsks:ceAsks, ceBids:ceBids, peAsks:peAsks, peBids:peBids };
+}
+
+function renderLadder(elId, bids, asks, priceBase, isCE) {
+  var el = document.getElementById(elId);
+  var maxQty = Math.max.apply(null, bids.concat(asks));
+  var html = '';
+
+  // Ask rows (top, descending price) — red
+  for (var i = asks.length-1; i >= 0; i--) {
+    var price = (priceBase + (i+1)*0.50).toFixed(2);
+    var pct = Math.round(asks[i]/maxQty*100);
+    html += '<div class="depth-row ask-row">';
+    html += '<div class="depth-price">₹' + price + '</div>';
+    html += '<div class="depth-bar-wrap"><div class="depth-bar-ask" style="width:' + pct + '%"></div></div>';
+    html += '<div class="depth-qty">' + asks[i] + '</div>';
+    html += '</div>';
+  }
+
+  // Spread row
+  html += '<div class="spread-row">── ' + priceBase.toFixed(2) + ' ──</div>';
+
+  // Bid rows (descending from best bid)
+  for (var j = 0; j < bids.length; j++) {
+    var bprice = (priceBase - (j+1)*0.50).toFixed(2);
+    var bpct = Math.round(bids[j]/maxQty*100);
+    html += '<div class="depth-row bid-row">';
+    html += '<div class="depth-price">₹' + bprice + '</div>';
+    html += '<div class="depth-bar-wrap"><div class="depth-bar-bid" style="width:' + bpct + '%"></div></div>';
+    html += '<div class="depth-qty">' + bids[j] + '</div>';
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function calcPressure(data) {
+  var ceBidTotal = data.ceBids.reduce(function(a,b){return a+b;},0);
+  var ceAskTotal = data.ceAsks.reduce(function(a,b){return a+b;},0);
+  var peBidTotal = data.peBids.reduce(function(a,b){return a+b;},0);
+  var peAskTotal = data.peAsks.reduce(function(a,b){return a+b;},0);
+
+  // CE bid/ask ratio: high ask vs bid on CE = bearish (people selling calls or buying puts)
+  // PE bid/ask ratio: high bid vs ask on PE = bearish (people buying puts)
+  var ceImb = ceBidTotal / (ceBidTotal + ceAskTotal); // high = bullish
+  var peImb = peBidTotal / (peBidTotal + peAskTotal); // high = bearish (put buying)
+
+  // Combined: bear score = (1 - ceImb) * 0.5 + peImb * 0.5
+  var bearScore = ((1 - ceImb) * 0.5 + peImb * 0.5) * 100;
+  var bullScore = 100 - bearScore;
+
+  return {
+    bearScore: Math.round(bearScore),
+    bullScore: Math.round(bullScore),
+    ceBidPct: Math.round(ceImb * 100),
+    ceAskPct: Math.round((1-ceImb) * 100),
+    peBidPct: Math.round(peImb * 100),
+    peAskPct: Math.round((1-peImb) * 100),
+  };
+}
+
+function updateUI(data, pressure) {
+  // CE imbalance bar
+  document.getElementById('ce-bid-bar').style.width = pressure.ceBidPct + '%';
+  document.getElementById('ce-ask-bar').style.width = pressure.ceAskPct + '%';
+  document.getElementById('ce-bid-pct').textContent = pressure.ceBidPct + '%';
+  document.getElementById('ce-ask-pct').textContent = pressure.ceAskPct + '%';
+
+  // PE imbalance bar
+  document.getElementById('pe-bid-bar').style.width = pressure.peBidPct + '%';
+  document.getElementById('pe-ask-bar').style.width = pressure.peAskPct + '%';
+  document.getElementById('pe-bid-pct').textContent = pressure.peBidPct + '%';
+  document.getElementById('pe-ask-pct').textContent = pressure.peAskPct + '%';
+
+  // Main pressure bar
+  document.getElementById('pbar-bear').style.width = pressure.bearScore + '%';
+  document.getElementById('pbar-bear').textContent = pressure.bearScore + '%';
+  document.getElementById('pbar-bull').style.width = pressure.bullScore + '%';
+  document.getElementById('pbar-bull').textContent = pressure.bullScore + '%';
+
+  // Ladders
+  renderLadder('ce-ladder', data.ceBids, data.ceAsks, cePriceBase, true);
+  renderLadder('pe-ladder', data.peBids, data.peAsks, pePriceBase, false);
+
+  // Signal
+  var sb = document.getElementById('signal-box');
+  if (pressure.bearScore >= 65) {
+    sb.className = 'signal-box signal-bear';
+    sb.textContent = '▼ BEARISH PRESSURE — ' + pressure.bearScore + '% bear | Put buyers dominant, call sellers active';
+  } else if (pressure.bullScore >= 65) {
+    sb.className = 'signal-box signal-bull';
+    sb.textContent = '▲ BULLISH PRESSURE — ' + pressure.bullScore + '% bull | Call buyers dominant, put sellers active';
+  } else if (pressure.bearScore >= 55) {
+    sb.className = 'signal-box signal-bear';
+    sb.textContent = '▼ Mild bearish lean — ' + pressure.bearScore + '% bear | Watch for confirmation';
+  } else if (pressure.bullScore >= 55) {
+    sb.className = 'signal-box signal-bull';
+    sb.textContent = '▲ Mild bullish lean — ' + pressure.bullScore + '% bull | Watch for confirmation';
+  } else {
+    sb.className = 'signal-box signal-neutral';
+    sb.textContent = '◆ Neutral — no clear pressure | Chop likely';
+  }
+
+  // Score label
+  var scoreEl = document.getElementById('pressure-score');
+  scoreEl.textContent = pressure.bearScore > 50
+    ? '▼ ' + pressure.bearScore + '% bearish pressure'
+    : '▲ ' + pressure.bullScore + '% bullish pressure';
+  scoreEl.style.color = pressure.bearScore > 50 ? '#f85149' : '#3fb950';
+
+  // History
+  pressureHistory.push(pressure.bearScore);
+  if (pressureHistory.length > 60) pressureHistory.shift();
+  drawHistory();
+}
+
+function drawHistory() {
+  var canvas = document.getElementById('history-canvas');
+  canvas.width = canvas.offsetWidth * window.devicePixelRatio || 640;
+  canvas.height = 60 * window.devicePixelRatio || 60;
+  var ctx = canvas.getContext('2d');
+  ctx.scale(window.devicePixelRatio||1, window.devicePixelRatio||1);
+  var w = canvas.offsetWidth, h = 60;
+  ctx.clearRect(0, 0, w, h);
+
+  // 50% line
+  ctx.strokeStyle = '#30363d';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(0, h/2); ctx.lineTo(w, h/2); ctx.stroke();
+  ctx.setLineDash([]);
+
+  if (pressureHistory.length < 2) return;
+  var step = w / 59;
+  ctx.lineWidth = 1.5;
+
+  // Fill above/below 50
+  ctx.beginPath();
+  pressureHistory.forEach(function(v, i) {
+    var x = i * step;
+    var y = h - (v / 100 * h);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.lineTo((pressureHistory.length-1)*step, h/2);
+  ctx.lineTo(0, h/2);
+  ctx.closePath();
+  var last = pressureHistory[pressureHistory.length-1];
+  ctx.fillStyle = last > 50 ? 'rgba(248,81,73,0.15)' : 'rgba(63,185,80,0.15)';
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  pressureHistory.forEach(function(v, i) {
+    var x = i * step;
+    var y = h - (v / 100 * h);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = last > 50 ? '#f85149' : '#3fb950';
+  ctx.stroke();
+}
+
+function tick() {
+  var data = getDepthData(currentScenario);
+  var pressure = calcPressure(data);
+  updateUI(data, pressure);
+}
+
+function setScenario(name) {
+  currentScenario = name;
+  document.querySelectorAll('.btn-scenario').forEach(function(b) {
+    b.classList.remove('active');
+    if (b.textContent.toLowerCase().replace(/ /g,'_') === name ||
+        b.getAttribute('onclick').indexOf("'" + name + "'") > -1) {
+      b.classList.add('active');
+    }
+  });
+}
+
+// Seed some history
+for (var i = 0; i < 30; i++) tick();
+
+// Live simulation
+setInterval(tick, 800);
+</script>
+</body>
+</html>
