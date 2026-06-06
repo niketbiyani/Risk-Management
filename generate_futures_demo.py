@@ -272,8 +272,7 @@ html = f"""<!DOCTYPE html>
   <div class="key">
     <span><span class="dot" style="background:#f85149"></span> Bearish rejection (high vol, long upper wick)</span>
     <span><span class="dot" style="background:#3fb950"></span> Bullish rejection (high vol, long lower wick)</span>
-    <span style="color:#d29922;">── Key level (2+ rejections at same price)</span>
-    <span style="color:#58a6ff;">▌ High-volume bar (>{VOL_MULTIPLIER}x avg)</span>
+    <span style="color:#58a6ff;">▌ Bright bar = high volume (&gt;{VOL_MULTIPLIER}x avg) &nbsp;|&nbsp; Dim bar = normal volume</span>
   </div>
 
   <div class="stats" id="stats-box">
@@ -372,16 +371,7 @@ var lwMarkers = MARKERS.map(function(m) {{
 candleSeries.setMarkers(lwMarkers);
 
 // ── Key level lines ───────────────────────────────────────────────
-LEVELS.forEach(function(lvl) {{
-  candleSeries.createPriceLine({{
-    price: lvl,
-    color: '#d29922',
-    lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    axisLabelVisible: true,
-    title: lvl.toString(),
-  }});
-}});
+// Removed — snapping to nearest 50 creates too many lines at arbitrary levels
 
 pc.timeScale().fitContent();
 vc.timeScale().fitContent();
@@ -408,7 +398,7 @@ document.getElementById('stats-box').innerHTML =
   '<span class="hl">Rejection summary:</span> &nbsp;' +
   '<span class="bear">▼ ' + bearCount + ' bearish</span> &nbsp;|&nbsp; ' +
   '<span class="bull">▲ ' + bullCount + ' bullish</span> &nbsp;|&nbsp; ' +
-  '<span class="gold">' + LEVELS.length + ' key levels: ' + LEVELS.join(', ') + '</span><br>' +
+  '<br>' +
   '<span style="color:#8b949e;">Each marker label shows volume multiple (e.g. "2.3x vol" = 2.3× average volume at that moment). ' +
   'Higher multiple = stronger conviction.</span>';
 </script>
