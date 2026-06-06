@@ -160,6 +160,7 @@ class TradeManager:
         self._detected_spreads: list[SpreadPosition] = []
         self._pending_spreads: dict[str, PendingSpreadOrder] = {}
         self._spread_counter = 0
+        self._position_cache: dict = {}
         logger.info("Trade manager initialized")
 
     # ── Spread Detection ───────────────────────────────────────────────
@@ -435,6 +436,78 @@ class TradeManager:
                         "ltp": ltp,
                     })
                     config.is_active = False
+
+        return triggered
+
+    def update_position_cache(self, positions: list[dict]):
+        """Called from monitor poll loop to keep position metadata fresh for WS callbacks."""
+        self._position_cache = {
+            str(p.get("securityId", "")): p
+            for p in positions if p.get("netQty", 0) != 0
+        }
+
+    def check_sl_tp_for_security(self, security_id: str, ltp: float) -> list[dict]:
+        """Called from WebSocket tick callback. Fast path — single-instrument SL/TP check."""
+        if security_id not in self._sl_tp_orders:
+            return []
+        config = self._sl_tp_orders[security_id]
+        if not config.is_active:
+            return []
+
+        pos = self._position_cache.get(security_id)
+        if not pos:
+            return []
+
+        net_qty = pos.get("netQty", 0)
+        if net_qty == 0:
+            return []
+
+        is_long = net_qty > 0
+        avg_price = pos.get("avgPrice", 0)
+
+        # Update trailing SL
+        if config.trailing_sl and config.trailing_sl_points > 0:
+            pnl_per_unit = (ltp - avg_price) if is_long else (avg_price - ltp)
+            if pnl_per_unit >= config.trailing_sl_trigger:
+                new_sl = (ltp - config.trailing_sl_points) if is_long else (ltp + config.trailing_sl_points)
+                if config.current_sl_price is None:
+                    config.current_sl_price = new_sl
+                elif is_long and new_sl > config.current_sl_price:
+                    config.current_sl_price = new_sl
+                elif not is_long and new_sl < config.current_sl_price:
+                    config.current_sl_price = new_sl
+
+        sl_price = config.current_sl_price or config.stop_loss_price
+        tp_price = config.take_profit_price
+        triggered = []
+
+        if sl_price:
+            if (is_long and ltp <= sl_price) or (not is_long and ltp >= sl_price):
+                triggered.append({
+                    "action": "STOP_LOSS",
+                    "security_id": security_id,
+                    "exchange_segment": pos.get("exchangeSegment", ""),
+                    "product_type": pos.get("productType", ""),
+                    "quantity": abs(net_qty),
+                    "transaction_type": "SELL" if is_long else "BUY",
+                    "trigger_price": sl_price,
+                    "ltp": ltp,
+                })
+                config.is_active = False
+
+        if tp_price and not triggered:
+            if (is_long and ltp >= tp_price) or (not is_long and ltp <= tp_price):
+                triggered.append({
+                    "action": "TAKE_PROFIT",
+                    "security_id": security_id,
+                    "exchange_segment": pos.get("exchangeSegment", ""),
+                    "product_type": pos.get("productType", ""),
+                    "quantity": abs(net_qty),
+                    "transaction_type": "SELL" if is_long else "BUY",
+                    "trigger_price": tp_price,
+                    "ltp": ltp,
+                })
+                config.is_active = False
 
         return triggered
 

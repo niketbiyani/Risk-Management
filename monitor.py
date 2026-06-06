@@ -51,6 +51,12 @@ class PositionMonitor:
         self._prev_realized_pnl = 0.0
         self._lockout_executed = False
 
+        # WebSocket state
+        self._market_feed_thread: threading.Thread | None = None
+        self._order_update_thread: threading.Thread | None = None
+        self._subscribed_instruments: list = []
+        self._sl_tp_executing: set = set()
+
     def start(self):
         """Start the monitoring loop."""
         errors = Config.validate()
@@ -75,6 +81,11 @@ class PositionMonitor:
         logger.info("=" * 60)
 
         self._running = True
+
+        # Start WebSocket feeds (non-blocking daemon threads)
+        self._start_market_feed()
+        self._order_update_thread = self.api.start_order_updates_async(self._on_order_update)
+
         self._monitor_loop()
 
     def _monitor_loop(self):
@@ -128,6 +139,12 @@ class PositionMonitor:
             # Fetch current positions
             positions = self.api.get_positions()
             self._last_positions = positions
+
+            # Keep position cache fresh for WebSocket SL/TP callback
+            self.trade_mgr.update_position_cache(positions)
+
+            # Re-subscribe MarketFeed if open positions changed
+            self._refresh_market_feed(positions)
 
             # Calculate realized + unrealized P&L from positions
             realized_pnl = 0.0
@@ -205,6 +222,141 @@ class PositionMonitor:
                     status["trades"]["winners"],
                     status["trades"]["losers"],
                 )
+
+    def _start_market_feed(self):
+        """Build instrument list from current positions and start MarketFeed."""
+        try:
+            positions = self.api.get_positions()
+            instruments = self._build_instrument_list(positions)
+            if not instruments:
+                logger.info("No open positions — MarketFeed not started yet")
+                return
+            self._subscribed_instruments = instruments
+            self._market_feed_thread = self.api.start_market_feed_async(
+                instruments, self._on_market_tick
+            )
+            logger.info("MarketFeed started for %d instruments", len(instruments))
+        except Exception as e:
+            logger.error("Failed to start MarketFeed: %s", e)
+
+    def _build_instrument_list(self, positions: list[dict]) -> list:
+        """Convert positions to MarketFeed instrument tuples."""
+        seg_map = {
+            "NSE_FNO": 1,
+            "BSE_FNO": 2,
+            "NSE_EQ": 3,
+            "BSE_EQ": 4,
+            "IDX_I": 0,
+        }
+        instruments = []
+        seen = set()
+        for pos in positions:
+            if pos.get("netQty", 0) == 0:
+                continue
+            seg_str = pos.get("exchangeSegment", "NSE_FNO")
+            seg_int = seg_map.get(seg_str, 1)
+            sec_id = str(pos.get("securityId", ""))
+            if sec_id and (seg_int, sec_id) not in seen:
+                seen.add((seg_int, sec_id))
+                instruments.append((seg_int, sec_id, "LTP"))
+        return instruments
+
+    def _refresh_market_feed(self, positions: list[dict]):
+        """Restart MarketFeed if the set of open position instruments has changed."""
+        new_instruments = self._build_instrument_list(positions)
+        new_set = set((i[0], i[1]) for i in new_instruments)
+        old_set = set((i[0], i[1]) for i in self._subscribed_instruments)
+
+        if new_set == old_set:
+            return
+
+        logger.info("Position change detected — refreshing MarketFeed subscriptions")
+        self._subscribed_instruments = new_instruments
+        if new_instruments:
+            self._market_feed_thread = self.api.start_market_feed_async(
+                new_instruments, self._on_market_tick
+            )
+        else:
+            logger.info("No open positions — MarketFeed paused")
+
+    def _on_market_tick(self, tick_data: dict):
+        """
+        Called from MarketFeed daemon thread on every LTP tick.
+        Must return quickly — no blocking I/O.
+        """
+        try:
+            logger.debug("RAW TICK: %s", tick_data)
+            security_id = str(
+                tick_data.get("security_id")
+                or tick_data.get("securityId")
+                or tick_data.get("Security Id", "")
+            )
+            ltp = float(
+                tick_data.get("LTP")
+                or tick_data.get("ltp")
+                or tick_data.get("last_price")
+                or 0
+            )
+            if not security_id or ltp <= 0:
+                return
+
+            # Check SL/TP — skip if already executing for this instrument
+            if security_id in self._sl_tp_executing:
+                return
+            triggers = self.trade_mgr.check_sl_tp_for_security(security_id, ltp)
+            for trigger in triggers:
+                self._sl_tp_executing.add(security_id)
+                threading.Thread(
+                    target=self._execute_sl_tp_and_cleanup,
+                    args=(trigger,),
+                    daemon=True,
+                ).start()
+
+        except Exception as e:
+            logger.error("Error in market tick callback: %s", e)
+
+    def _execute_sl_tp_and_cleanup(self, trigger: dict):
+        """Execute SL/TP order then remove instrument from executing set."""
+        try:
+            self._execute_sl_tp(trigger)
+        finally:
+            self._sl_tp_executing.discard(trigger["security_id"])
+
+    def _on_order_update(self, update: dict):
+        """
+        Called from OrderUpdate daemon thread on every order status change.
+        Emits SocketIO events to dashboard for real-time order status.
+        """
+        try:
+            logger.debug("OrderUpdate RAW: %s", update)
+            order_id = str(update.get("orderId", ""))
+            status = update.get("orderStatus", "")
+            symbol = update.get("tradingSymbol", order_id)
+            qty = update.get("tradedQuantity", 0)
+            reason = update.get("omsErrorDescription") or update.get("rejectedReason", "")
+
+            logger.info("Order %s → %s (%s)", order_id, status, symbol)
+
+            try:
+                from dashboard import socketio
+                socketio.emit("order_update", {
+                    "orderId": order_id,
+                    "orderStatus": status,
+                    "symbol": symbol,
+                    "tradedQty": qty,
+                    "reason": reason,
+                })
+
+                if status == "REJECTED":
+                    socketio.emit("SPREAD_FAILED", {
+                        "orderId": order_id,
+                        "reason": reason or "Rejected by exchange",
+                    })
+            except Exception:
+                pass
+
+        except Exception as e:
+            logger.error("Error in order update callback: %s", e)
 
     def _check_new_trades(self):
         """Check tradebook for newly executed trades and record them."""

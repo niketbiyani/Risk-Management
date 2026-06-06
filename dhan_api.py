@@ -9,6 +9,7 @@ import logging
 import ssl
 import struct
 import threading
+import time
 import urllib.parse
 from datetime import datetime
 from typing import Any
@@ -464,6 +465,48 @@ class DhanAPI:
         if self._market_feed:
             self._market_feed.close_connection()
             self._market_feed = None
+
+    def start_market_feed_async(self, instruments: list, callback) -> threading.Thread:
+        """Start MarketFeed in a daemon thread with auto-reconnect. Non-blocking."""
+        # Close existing feed if running
+        try:
+            if self._market_feed:
+                self._market_feed.close_connection()
+        except Exception:
+            pass
+
+        def _run():
+            while True:
+                try:
+                    logger.info("MarketFeed: connecting with %d instruments", len(instruments))
+                    self._market_feed = MarketFeed(
+                        self._context, instruments, version="v2", on_message=callback
+                    )
+                    self._market_feed.run_forever()
+                except Exception as e:
+                    logger.error("MarketFeed disconnected: %s — reconnecting in 5s", e)
+                time.sleep(5)
+
+        t = threading.Thread(target=_run, daemon=True, name="MarketFeed")
+        t.start()
+        return t
+
+    def start_order_updates_async(self, callback) -> threading.Thread:
+        """Start OrderUpdate in a daemon thread with auto-reconnect. Non-blocking."""
+        def _run():
+            while True:
+                try:
+                    logger.info("OrderUpdate: connecting")
+                    self._order_update_client = OrderUpdate(self._context)
+                    self._order_update_client.on_update = callback
+                    self._order_update_client.connect_to_dhan_websocket_sync()
+                except Exception as e:
+                    logger.error("OrderUpdate disconnected: %s — reconnecting in 5s", e)
+                time.sleep(5)
+
+        t = threading.Thread(target=_run, daemon=True, name="OrderUpdate")
+        t.start()
+        return t
 
 
 # ── 20-Level Depth of Market WebSocket ────────────────────────────

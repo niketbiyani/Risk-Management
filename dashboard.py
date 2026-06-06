@@ -1224,6 +1224,17 @@ DASHBOARD_HTML = """
             if (typeof safeUpdate === 'function') {
                 socket.on('status_update', safeUpdate);
             }
+            socket.on('order_update', function(data) {
+                if (data.orderStatus === 'TRADED') {
+                    playAlert('order');
+                    showToast('\\u2713 Filled: ' + data.symbol + ' qty ' + data.tradedQty, 'success');
+                }
+                // REJECTED is handled by SPREAD_FAILED event
+            });
+            socket.on('SPREAD_FAILED', function(data) {
+                playAlert('error');
+                showToast('Order REJECTED: ' + (data.reason || 'unknown'), 'error');
+            });
         }
         if (socket) setupSocketListeners();
 
