@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Option Price + Volume Chart Mockup</title>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  body { background:#0d1117; color:#e6edf3; font-family:monospace; padding:24px; margin:0; }
+  .card { background:#161b22; border:1px solid #21262d; border-radius:8px; padding:16px; max-width:820px; }
+  .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+  h3 { margin:0; font-size:14px; color:#e6edf3; }
+  .tag { font-size:10px; padding:2px 7px; border-radius:3px; font-weight:700; background:#2d1117; color:#f85149; border:1px solid #f85149; }
+  .subtitle { font-size:11px; color:#8b949e; margin-bottom:12px; }
+  #chart-container { position:relative; }
+  #price-chart { width:100%; height:320px; }
+  #vol-chart   { width:100%; height:100px; }
+  .legend { position:absolute; top:8px; left:8px; font-size:11px; color:#8b949e; pointer-events:none; z-index:10; }
+  .legend span { margin-right:12px; }
+  .rejection-key { display:flex; gap:16px; margin-top:10px; font-size:11px; color:#8b949e; align-items:center; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:4px; }
+  .dot-sell { background:#f85149; }
+  .dot-buy  { background:#3fb950; }
+  .controls { margin-top:14px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .btn { padding:5px 12px; border-radius:4px; border:none; cursor:pointer; font-size:11px; font-weight:700; font-family:monospace; }
+  .btn-scenario { background:#21262d; color:#e6edf3; border:1px solid #30363d; }
+  .btn-scenario:hover,.btn-scenario.active { background:#1f3a5c; border-color:#58a6ff; color:#58a6ff; }
+  .info-box { margin-top:14px; padding:10px 14px; border-radius:6px; font-size:11px; background:#0d1117; border:1px solid #21262d; color:#8b949e; line-height:1.7; }
+  .highlight { color:#e6edf3; font-weight:700; }
+  .bear { color:#f85149; }
+  .bull { color:#3fb950; }
+  .gold { color:#d29922; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header">
+    <h3>NIFTY-Jun2026-24500-CE &nbsp;<span style="color:#8b949e;font-weight:400;">1m chart</span></h3>
+    <span class="tag">SELL LEG</span>
+  </div>
+  <div class="subtitle">Price rejections at key levels detected from volume. Markers show where price was rejected with above-average volume.</div>
+
+  <div id="chart-container">
+    <div class="legend" id="legend">Hover over a candle</div>
+    <div id="price-chart"></div>
+    <div id="vol-chart"></div>
+  </div>
+
+  <div class="rejection-key">
+    <span><span class="dot dot-sell"></span> Rejection DOWN (bearish — good for your sell)</span>
+    <span><span class="dot dot-buy"></span> Rejection UP (bullish — caution)</span>
+    <span style="color:#d29922;">── Key level (2+ rejections)</span>
+  </div>
+
+  <div class="controls">
+    <span style="font-size:11px;color:#8b949e;">Scenario:</span>
+    <button class="btn btn-scenario active" onclick="loadScenario('ranging')">Ranging / Wall</button>
+    <button class="btn btn-scenario" onclick="loadScenario('breakout_down')">Breakout Down</button>
+    <button class="btn btn-scenario" onclick="loadScenario('breakout_up')">Breakout Up</button>
+    <button class="btn btn-scenario" onclick="loadScenario('trending_down')">Trending Down</button>
+  </div>
+
+  <div class="info-box" id="info-box">
+    Select a scenario to see how price + volume tells a story.
+  </div>
+</div>
+
+<script>
+// ── Chart setup ────────────────────────────────────────────────────
+var priceChart = LightweightCharts.createChart(document.getElementById('price-chart'), {
+  width: document.getElementById('price-chart').clientWidth,
+  height: 320,
+  layout: { background: { color: '#0d1117' }, textColor: '#8b949e' },
+  grid: { vertLines: { color: '#161b22' }, horzLines: { color: '#161b22' } },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  rightPriceScale: { borderColor: '#21262d' },
+  timeScale: { borderColor: '#21262d', timeVisible: true },
+  handleScroll: true, handleScale: true,
+});
+
+var volChart = LightweightCharts.createChart(document.getElementById('vol-chart'), {
+  width: document.getElementById('vol-chart').clientWidth,
+  height: 100,
+  layout: { background: { color: '#0d1117' }, textColor: '#8b949e' },
+  grid: { vertLines: { color: '#161b22' }, horzLines: { color: '#161b22' } },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  rightPriceScale: { borderColor: '#21262d', scaleMargins: { top: 0.1, bottom: 0 } },
+  timeScale: { borderColor: '#21262d', timeVisible: true, visible: false },
+  handleScroll: true, handleScale: true,
+});
+
+// Sync crosshair
+priceChart.subscribeCrosshairMove(function(param) {
+  if (param.time) volChart.setCrosshairPosition(0, param.time, volSeries);
+});
+
+var candleSeries = priceChart.addCandlestickSeries({
+  upColor: '#3fb950', downColor: '#f85149',
+  borderUpColor: '#3fb950', borderDownColor: '#f85149',
+  wickUpColor: '#3fb950', wickDownColor: '#f85149',
+});
+
+var volSeries = volChart.addHistogramSeries({
+  priceFormat: { type: 'volume' },
+  priceScaleId: '',
+});
+
+var markerSeries = null; // will use candleSeries.setMarkers
+
+// ── Candle generator ───────────────────────────────────────────────
+function baseTime() {
+  // Start at 09:15 IST = 03:45 UTC, today
+  var d = new Date();
+  d.setUTCHours(3, 45, 0, 0);
+  return Math.floor(d.getTime() / 1000);
+}
+
+function makeCandles(template) {
+  // template: array of {o,h,l,c,v} relative to a base price
+  var t = baseTime();
+  return template.map(function(bar, i) {
+    return {
+      time: t + i * 60,
+      open: bar.o, high: bar.h, low: bar.l, close: bar.c,
+      volume: bar.v,
+    };
+  });
+}
+
+// ── Scenarios ──────────────────────────────────────────────────────
+var scenarios = {
+
+  ranging: {
+    info: '<span class="highlight">What you see:</span> Price keeps hitting ~₹152 and getting rejected downward — twice with <span class="bear">high volume (red bars)</span>. The dashed line marks that level as a confirmed resistance wall.<br><br>' +
+          '<span class="highlight">What it means for your trade:</span> The CE (call) can\'t break higher. Call sellers are defending ₹152 aggressively. <span class="bear">This is good context for a bear call spread</span> — there\'s structural resistance above your sell price.',
+    bars: [
+      {o:145,h:148,l:143,c:147,v:1200},
+      {o:147,h:149,l:145,c:148,v:1100},
+      {o:148,h:152,l:146,c:149,v:3800}, // high vol rejection DOWN at 152
+      {o:149,h:150,l:146,c:147,v:1400},
+      {o:147,h:148,l:144,c:145,v:1000},
+      {o:145,h:147,l:143,c:146,v:900},
+      {o:146,h:152,l:145,c:148,v:4200}, // second high vol rejection DOWN at 152
+      {o:148,h:150,l:145,c:146,v:1300},
+      {o:146,h:148,l:144,c:145,v:1100},
+      {o:145,h:147,l:143,c:144,v:1000},
+      {o:144,h:146,l:142,c:143,v:900},
+      {o:143,h:145,l:141,c:144,v:850},
+    ],
+    rejections: [2, 6], // indices of rejection candles
+    rejectionDir: ['down','down'],
+    keyLevel: 152,
+  },
+
+  breakout_down: {
+    info: '<span class="highlight">What you see:</span> Price tried to hold ₹148 twice (support) but the <span class="bear">third test broke through with massive volume</span>. After the break, price accelerated lower.<br><br>' +
+          '<span class="highlight">What it means:</span> The support level was genuine (first two bounces had volume) but got overwhelmed. <span class="bear">The breakout candle with 5x average volume confirms the move is real</span>, not a fake-out. If you\'re already in a bear call spread, this is your spread working.',
+    bars: [
+      {o:155,h:157,l:152,c:153,v:1200},
+      {o:153,h:155,l:149,c:150,v:1400},
+      {o:150,h:152,l:147,c:151,v:2800}, // bounce at 148 with vol
+      {o:151,h:153,l:149,c:150,v:1300},
+      {o:150,h:151,l:147,c:149,v:1100},
+      {o:149,h:150,l:146,c:148,v:1000},
+      {o:148,h:149,l:145,c:147,v:2600}, // second bounce at 148
+      {o:147,h:149,l:145,c:146,v:1200},
+      {o:146,h:148,l:144,c:145,v:1100},
+      {o:145,h:146,l:140,c:141,v:6800}, // BREAKOUT — massive vol
+      {o:141,h:143,l:138,c:139,v:3200},
+      {o:139,h:141,l:136,c:137,v:2400},
+    ],
+    rejections: [2, 6, 9],
+    rejectionDir: ['up','up','down'],
+    keyLevel: 148,
+  },
+
+  breakout_up: {
+    info: '<span class="highlight">What you see:</span> Price breaks above ₹150 resistance with <span class="bull">very high volume</span> and keeps going. This is a bullish breakout on the call option.<br><br>' +
+          '<span class="highlight">What it means for your trade:</span> <span class="bear">Stay out of a bear call spread here.</span> Call buyers are aggressively pushing the CE higher — this tells you the market is expecting Nifty to move up. Entering a bear call sell against this momentum would be fighting the tape.',
+    bars: [
+      {o:144,h:146,l:142,c:145,v:900},
+      {o:145,h:147,l:143,c:146,v:1000},
+      {o:146,h:150,l:144,c:147,v:2200}, // test of 150, rejected
+      {o:147,h:149,l:145,c:146,v:1100},
+      {o:146,h:148,l:144,c:147,v:1000},
+      {o:147,h:150,l:145,c:148,v:1900}, // second test, rejected
+      {o:148,h:149,l:146,c:147,v:1100},
+      {o:147,h:148,l:145,c:146,v:900},
+      {o:146,h:155,l:145,c:154,v:7200}, // BREAKOUT UP — massive vol
+      {o:154,h:158,l:152,c:157,v:4100},
+      {o:157,h:160,l:155,c:159,v:3200},
+      {o:159,h:162,l:157,c:161,v:2600},
+    ],
+    rejections: [2, 5, 8],
+    rejectionDir: ['down','down','up'],
+    keyLevel: 150,
+  },
+
+  trending_down: {
+    info: '<span class="highlight">What you see:</span> A clean downtrend — each bounce gets <span class="bear">rejected lower with moderate volume</span>, and the down moves have higher volume than the bounces. No single huge volume spike, just consistent pressure.<br><br>' +
+          '<span class="highlight">What it means:</span> This is the ideal backdrop for a bear call spread. <span class="bear">Each red bar is heavier than each green bar</span> — sellers are in control. No need to wait for a breakout — the trend itself is your signal.',
+    bars: [
+      {o:162,h:164,l:159,c:160,v:2100},
+      {o:160,h:162,l:157,c:158,v:2400},
+      {o:158,h:160,l:155,c:156,v:2600},
+      {o:156,h:159,l:154,c:155,v:1400}, // small bounce, low vol
+      {o:155,h:156,l:152,c:153,v:2800},
+      {o:153,h:155,l:150,c:151,v:3000},
+      {o:151,h:154,l:149,c:150,v:1600}, // small bounce, low vol
+      {o:150,h:151,l:147,c:148,v:3200},
+      {o:148,h:150,l:145,c:146,v:3400},
+      {o:146,h:148,l:143,c:144,v:3600},
+      {o:144,h:146,l:141,c:142,v:1800}, // small bounce
+      {o:142,h:143,l:139,c:140,v:3800},
+    ],
+    rejections: [3, 6, 10],
+    rejectionDir: ['down','down','down'],
+    keyLevel: null,
+  },
+};
+
+function avgVolume(bars) {
+  var total = bars.reduce(function(s,b){return s+b.v;},0);
+  return total / bars.length;
+}
+
+function loadScenario(name) {
+  // Update buttons
+  document.querySelectorAll('.btn-scenario').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('onclick').indexOf("'"+name+"'") > -1);
+  });
+
+  var s = scenarios[name];
+  var candles = makeCandles(s.bars);
+  var avg = avgVolume(s.bars);
+
+  // Candlesticks
+  candleSeries.setData(candles);
+
+  // Volume bars — colour by candle direction, brighten high-volume bars
+  var volData = candles.map(function(c, i) {
+    var isUp = c.close >= c.open;
+    var isHighVol = c.volume > avg * 1.8;
+    return {
+      time: c.time,
+      value: c.volume,
+      color: isHighVol
+        ? (isUp ? '#3fb950' : '#f85149')
+        : (isUp ? '#1a4a1a' : '#4a1a1a'),
+    };
+  });
+  volSeries.setData(volData);
+
+  // Average volume line on vol chart
+  // (draw as a separate histogram at avg height, subtle)
+
+  // Markers for rejections
+  var markers = s.rejections.map(function(idx, mi) {
+    var dir = s.rejectionDir[mi];
+    var c = candles[idx];
+    return {
+      time: c.time,
+      position: dir === 'down' ? 'aboveBar' : 'belowBar',
+      color: dir === 'down' ? '#f85149' : '#3fb950',
+      shape: dir === 'down' ? 'arrowDown' : 'arrowUp',
+      text: dir === 'down' ? 'Rejected ↓' : 'Rejected ↑',
+      size: 1,
+    };
+  });
+  candleSeries.setMarkers(markers);
+
+  // Key level line
+  priceChart.removePriceLine && priceChart.removePriceLine();
+  if (s.keyLevel) {
+    candleSeries.createPriceLine({
+      price: s.keyLevel,
+      color: '#d29922',
+      lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: 'Key level',
+    });
+  }
+
+  priceChart.timeScale().fitContent();
+  volChart.timeScale().fitContent();
+
+  document.getElementById('info-box').innerHTML = s.info;
+}
+
+// Crosshair legend
+candleSeries.subscribeCrosshairMove && priceChart.subscribeCrosshairMove(function(param) {
+  if (!param.time || !param.seriesData) return;
+  var c = param.seriesData.get(candleSeries);
+  if (!c) return;
+  document.getElementById('legend').innerHTML =
+    'O: <span style="color:#e6edf3">₹' + c.open.toFixed(2) + '</span>  ' +
+    'H: <span style="color:#3fb950">₹' + c.high.toFixed(2) + '</span>  ' +
+    'L: <span style="color:#f85149">₹' + c.low.toFixed(2) + '</span>  ' +
+    'C: <span style="color:#e6edf3">₹' + c.close.toFixed(2) + '</span>';
+});
+
+// Init
+loadScenario('ranging');
+</script>
+</body>
+</html>
