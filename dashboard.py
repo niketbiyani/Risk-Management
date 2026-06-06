@@ -1224,6 +1224,40 @@ DASHBOARD_HTML = """
             if (typeof safeUpdate === 'function') {
                 socket.on('status_update', safeUpdate);
             }
+            socket.on('oc_ltp', function(data) {
+                // Real-time LTP update for option chain cells
+                var el = document.getElementById('oc-ltp-' + data.sid);
+                if (el) el.textContent = parseFloat(data.ltp).toFixed(2);
+                // Update quick bar if this is the selected sell/buy leg
+                if (_spreadSellLeg && String(_spreadSellLeg.securityId) === String(data.sid)) {
+                    _spreadSellLeg.ltp = data.ltp;
+                    if (!_sqbSellPriceDirty) {
+                        var sp = document.getElementById('sqb-sell-price');
+                        if (sp) sp.value = data.ltp.toFixed(2);
+                    }
+                    // Update live chart bar
+                    if (_lwSeries && _lwCurrentSecurity === _spreadSellLeg.securityId) {
+                        var nowSec = Math.floor(Date.now() / 1000);
+                        var barSec = nowSec - (nowSec % 60);
+                        var ltp = data.ltp;
+                        if (barSec !== _liveBarTime) {
+                            _liveBarTime = barSec; _liveBarOpen = ltp;
+                            _liveBarHigh = ltp;    _liveBarLow  = ltp;
+                        } else {
+                            if (ltp > _liveBarHigh) _liveBarHigh = ltp;
+                            if (ltp < _liveBarLow)  _liveBarLow  = ltp;
+                        }
+                        try { _lwSeries.update({time: barSec, open: _liveBarOpen, high: _liveBarHigh, low: _liveBarLow, close: ltp}); } catch(e) {}
+                    }
+                }
+                if (_spreadBuyLeg && String(_spreadBuyLeg.securityId) === String(data.sid)) {
+                    _spreadBuyLeg.ltp = data.ltp;
+                    if (!_sqbBuyPriceDirty) {
+                        var bp = document.getElementById('sqb-buy-price');
+                        if (bp) bp.value = data.ltp.toFixed(2);
+                    }
+                }
+            });
             socket.on('order_update', function(data) {
                 if (data.orderStatus === 'TRADED') {
                     playAlert('order');
@@ -2549,7 +2583,7 @@ DASHBOARD_HTML = """
                     html += '<button class="oc-b-btn" id="qsb-CE-' + stk.toFixed(0) + '-B" ';
                     html += 'onclick="spreadSelectLeg(\\'buy\\',\\'' + ceSid + '\\',' + stk + ',' + ceLtpVal + ',\\'CE\\');event.stopPropagation();" title="Spread BUY">B</button>';
                 }
-                html += '<span style="color:#3fb950;font-weight:600;cursor:pointer;" ';
+                html += '<span id="oc-ltp-' + ceSid + '" style="color:#3fb950;font-weight:600;cursor:pointer;" ';
                 html += 'onclick="ocSelect(\\'' + ceSid + '\\',\\'CE\\',\\'' + expiry + '\\',' + stk + ',' + ceLtpVal + ')">' + ceLtp + '</span>';
                 html += '</td>';
 
@@ -2558,7 +2592,7 @@ DASHBOARD_HTML = """
 
                 // PE cell: LTP [S][B]
                 html += '<td style="text-align:left;padding:5px 8px;white-space:nowrap;">';
-                html += '<span style="color:#f85149;font-weight:600;cursor:pointer;" ';
+                html += '<span id="oc-ltp-' + peSid + '" style="color:#f85149;font-weight:600;cursor:pointer;" ';
                 html += 'onclick="ocSelect(\\'' + peSid + '\\',\\'PE\\',\\'' + expiry + '\\',' + stk + ',' + peLtpVal + ')">' + peLtp + '</span>';
                 if (peSid) {
                     html += '<button class="oc-s-btn" id="qsb-PE-' + stk.toFixed(0) + '-S" ';
@@ -2574,6 +2608,28 @@ DASHBOARD_HTML = """
             });
             body.innerHTML = html;
             restoreSpreadPillHighlights();
+        }
+
+        var _ocLtpSubscribed = false;
+
+        function subscribeOcLtp(chain) {
+            // Subscribe ATM±10 strikes (CE + PE) for real-time LTP updates
+            var atmIdx = Math.floor(chain.length / 2);
+            var lo = Math.max(0, atmIdx - 10);
+            var hi = Math.min(chain.length - 1, atmIdx + 10);
+            var instruments = [];
+            for (var i = lo; i <= hi; i++) {
+                var row = chain[i];
+                if (row.ce_security_id) instruments.push({sid: String(row.ce_security_id), type: 'CE'});
+                if (row.pe_security_id) instruments.push({sid: String(row.pe_security_id), type: 'PE'});
+            }
+            if (!instruments.length) return;
+            fetch('/api/option_chain/subscribe_ltp', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({instruments: instruments})
+            }).catch(function(){});
+            _ocLtpSubscribed = true;
         }
 
         function loadOptionChain(silent) {
@@ -2600,6 +2656,7 @@ DASHBOARD_HTML = """
                         return;
                     }
                     renderOcChain(d, expiry);
+                    subscribeOcLtp(d.chain || []);
                     // Update live chart candle with latest sell-leg LTP
                     if (_spreadSellLeg && _lwSeries && _lwCurrentSecurity === _spreadSellLeg.securityId) {
                         var chain = d.chain || [];
@@ -3437,6 +3494,43 @@ def api_option_chain_expiries():
 
 _oc_data_cache: dict = {}  # (underlying, expiry) -> (timestamp, response_dict)
 _OC_CACHE_TTL = 2.0  # seconds — match frontend refresh rate
+
+# Exchange segment mapping for MarketFeed subscription (NSE_FNO default for options)
+_OC_SEG_MAP = {"NSE_FNO": 1, "BSE_FNO": 2, "NSE_EQ": 3, "BSE_EQ": 4}
+
+@app.route("/api/option_chain/subscribe_ltp", methods=["POST"])
+def api_oc_subscribe_ltp():
+    """Subscribe ATM±10 option chain strikes to MarketFeed for real-time LTP pushes."""
+    global _oc_ltp_subscribed
+    if _monitor is None:
+        return jsonify({"status": "no_monitor"})
+    data = request.get_json(force=True) or {}
+    instruments_req = data.get("instruments", [])  # [{sid, type}]
+    if not instruments_req:
+        return jsonify({"status": "empty"})
+
+    # Determine exchange segment — options are NSE_FNO by default
+    seg_int = _OC_SEG_MAP.get("NSE_FNO", 1)
+    instruments = [(seg_int, str(i["sid"]), "LTP") for i in instruments_req if i.get("sid")]
+    new_sids = {str(i["sid"]) for i in instruments_req if i.get("sid")}
+
+    # Only restart feed if the subscribed set has changed
+    if new_sids == _oc_ltp_subscribed:
+        return jsonify({"status": "unchanged"})
+
+    _oc_ltp_subscribed = new_sids
+
+    # Merge with existing position instruments so SL/TP feed stays intact
+    pos_instruments = _monitor._subscribed_instruments or []
+    pos_sids = {(i[0], i[1]) for i in pos_instruments}
+    merged = list(pos_instruments)
+    for inst in instruments:
+        if (inst[0], inst[1]) not in pos_sids:
+            merged.append(inst)
+
+    _monitor.api.start_market_feed_async(merged, _monitor._on_market_tick)
+    return jsonify({"status": "ok", "count": len(merged)})
+
 
 @app.route("/api/option_chain/data")
 def api_option_chain_data():
@@ -4336,6 +4430,15 @@ def emit_status_update(status_data: dict):
 def emit_sl_tp_trigger(trigger_data: dict):
     """Push SL/TP trigger notification to dashboard."""
     socketio.emit("sl_tp_triggered", trigger_data)
+
+
+# Security IDs subscribed for real-time option chain LTP updates
+_oc_ltp_subscribed: set = set()
+
+
+def emit_oc_ltp(security_id: str, ltp: float):
+    """Push real-time LTP tick for option chain cell update."""
+    socketio.emit("oc_ltp", {"sid": security_id, "ltp": ltp})
 
 
 # ── Depth of Market ──────────────────────────────────────────────

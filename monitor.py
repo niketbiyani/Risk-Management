@@ -300,6 +300,14 @@ class PositionMonitor:
             if not security_id or ltp <= 0:
                 return
 
+            # Push LTP to option chain UI if this instrument is subscribed for display
+            try:
+                from dashboard import emit_oc_ltp, _oc_ltp_subscribed
+                if security_id in _oc_ltp_subscribed:
+                    emit_oc_ltp(security_id, ltp)
+            except Exception:
+                pass
+
             # Check SL/TP — skip if already executing for this instrument
             if security_id in self._sl_tp_executing:
                 return
