@@ -26,7 +26,7 @@ cache.load()
 # Search for NIFTY FUTIDX instruments using InstrumentCache's _instruments list
 nifty_futures = [
     i for i in cache._instruments
-    if 'NIFTY' in i.trading_symbol.upper()
+    if i.trading_symbol.upper().startswith('NIFTY')
     and i.instrument_type == 'FUTIDX'
     and i.exchange_segment == 'NSE_FNO'
 ]
