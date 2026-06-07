@@ -3920,7 +3920,7 @@ def api_place_order():
             transaction_type=data.get("transaction_type", "BUY"),
             quantity=quantity,
             order_type=order_type,
-            product_type=data.get("product_type", "INTRADAY"),
+            product_type=data.get("product_type", "MARGIN"),
             price=price,
             trigger_price=trigger_price,
             sl_price=float(data.get("sl_price", 0)),
@@ -4092,7 +4092,7 @@ def api_calculate_size():
             exchange_segment=exchange_segment or "NSE_FNO",
             transaction_type=data.get("transaction_type", "BUY"),
             quantity=quantity,
-            product_type=data.get("product_type", "INTRADAY"),
+            product_type=data.get("product_type", "MARGIN"),
             price=entry_price,
         )
         if isinstance(margin_resp, dict) and "data" in margin_resp:
