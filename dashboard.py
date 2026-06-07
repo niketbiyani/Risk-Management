@@ -2190,6 +2190,9 @@ DASHBOARD_HTML = """
                     playAlert('order');
                     showToast(txn + ' ' + qty + ' @ ' + (orderType === 'LIMIT' ? '\\u20B9' + price.toFixed(2) + ' LMT' : 'MKT') + ' sent', 'success');
                     hideExitForm(sid);
+                    // Capture exit screenshot for journal if this is a tracked sell leg
+                    var exitPx = orderType === 'LIMIT' ? price : 0;
+                    closeJournalEntry(String(sid), exitPx, 0, null);
                 } else {
                     showToast('Exit failed: ' + (d.message || d.remarks || ''), 'error');
                 }
@@ -3014,10 +3017,10 @@ DASHBOARD_HTML = """
             fetch('/api/chart/nifty')
             .then(function(r){ return r.json(); })
             .then(function(d) {
-                var candles = (d.candles || []).slice(-120);
+                var candles = (d.candles || []).slice(-150);
                 if (!candles.length) { callback(null); return; }
                 var canvas = document.createElement('canvas');
-                canvas.width = 520; canvas.height = 170;
+                canvas.width = 900; canvas.height = 200;
                 drawChartOnCanvas(canvas, candles, entryPrice, exitPrice);
                 var dataUrl = canvas.toDataURL('image/png');
                 fetch('/api/journal/screenshot', {
@@ -4530,7 +4533,7 @@ def api_chart_nifty():
         except Exception:
             pass
     candles.sort(key=lambda c: c["time"])
-    return jsonify({"candles": candles[-240:]})
+    return jsonify({"candles": candles[-150:]})
 
 
 @app.route("/journal")
