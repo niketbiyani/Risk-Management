@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Trade Journal — Demo</title>
+<style>
+* { box-sizing: border-box; }
+body { background:#0d1117; color:#e6edf3; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace; margin:0; padding:20px; }
+
+/* ── Top bar ── */
+.topbar { display:flex; align-items:center; gap:16px; margin-bottom:20px; border-bottom:1px solid #21262d; padding-bottom:14px; }
+.topbar h2 { margin:0; font-size:16px; color:#e6edf3; }
+.filter-row { display:flex; gap:8px; margin-left:auto; align-items:center; }
+.filter-btn { background:#161b22; border:1px solid #30363d; color:#8b949e; padding:4px 12px;
+              border-radius:6px; cursor:pointer; font-size:12px; }
+.filter-btn.active { background:#1f6feb; border-color:#388bfd; color:#e6edf3; }
+
+/* ── Stats row ── */
+.stats-row { display:flex; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
+.stat-card { background:#161b22; border:1px solid #21262d; border-radius:8px; padding:12px 18px; min-width:130px; }
+.stat-card .label { font-size:10px; color:#484f58; text-transform:uppercase; letter-spacing:.5px; }
+.stat-card .value { font-size:18px; font-weight:700; margin-top:4px; }
+.green { color:#3fb950; } .red { color:#f85149; } .gold { color:#d29922; } .blue { color:#58a6ff; }
+
+/* ── Journal grid ── */
+.journal-grid { display:flex; flex-direction:column; gap:12px; }
+
+.trade-card { background:#161b22; border:1px solid #21262d; border-radius:8px; overflow:hidden;
+              transition: border-color .15s; }
+.trade-card:hover { border-color:#30363d; }
+.trade-card.win  { border-left:3px solid #3fb950; }
+.trade-card.loss { border-left:3px solid #f85149; }
+.trade-card.open { border-left:3px solid #d29922; }
+
+.card-header { display:flex; align-items:center; gap:12px; padding:10px 14px;
+               cursor:pointer; user-select:none; }
+.card-header:hover { background:rgba(255,255,255,.02); }
+
+.trade-badge { font-size:10px; font-weight:700; padding:2px 8px; border-radius:4px; white-space:nowrap; }
+.badge-spread { background:#1a2d1a; color:#3fb950; border:1px solid #2ea04326; }
+.badge-naked  { background:#2d1a1a; color:#f85149; border:1px solid #f8514926; }
+
+.trade-instrument { font-size:13px; font-weight:700; color:#e6edf3; min-width:220px; }
+.trade-time { font-size:11px; color:#484f58; white-space:nowrap; }
+
+.price-col { display:flex; flex-direction:column; align-items:flex-end; min-width:90px; }
+.price-col .main { font-size:13px; font-weight:700; }
+.price-col .sub  { font-size:10px; color:#484f58; }
+
+.pnl-col { font-size:15px; font-weight:700; min-width:90px; text-align:right; }
+.pnl-col .lots { font-size:10px; color:#484f58; font-weight:400; display:block; }
+
+.expand-btn { margin-left:auto; color:#484f58; font-size:12px; transition:transform .2s; }
+.expanded .expand-btn { transform:rotate(180deg); }
+
+/* ── Expanded detail ── */
+.card-detail { display:none; border-top:1px solid #21262d; padding:14px; }
+.card-detail.show { display:block; }
+
+.detail-row { display:flex; gap:16px; flex-wrap:wrap; }
+
+.screenshots { display:flex; gap:10px; flex:1; min-width:300px; }
+.screenshot-box { flex:1; }
+.screenshot-box .ss-label { font-size:10px; color:#484f58; margin-bottom:4px; text-transform:uppercase; letter-spacing:.5px; }
+.screenshot-box img { width:100%; border-radius:6px; border:1px solid #21262d; cursor:zoom-in;
+                      transition:border-color .15s; display:block; }
+.screenshot-box img:hover { border-color:#58a6ff; }
+.screenshot-box .ss-time { font-size:10px; color:#484f58; margin-top:3px; text-align:center; }
+
+.trade-meta { flex:1; min-width:220px; }
+.meta-table { width:100%; font-size:11px; border-collapse:collapse; }
+.meta-table td { padding:3px 0; color:#8b949e; }
+.meta-table td:first-child { color:#484f58; width:110px; }
+.meta-table td .val { color:#e6edf3; }
+.meta-table td .val.green { color:#3fb950; }
+.meta-table td .val.red   { color:#f85149; }
+.meta-table td .val.gold  { color:#d29922; }
+
+.notes-box { margin-top:10px; }
+.notes-box textarea { width:100%; background:#0d1117; border:1px solid #21262d; border-radius:6px;
+                      color:#e6edf3; font-size:11px; padding:8px; resize:vertical; min-height:48px;
+                      font-family:inherit; }
+.notes-box textarea:focus { outline:none; border-color:#388bfd; }
+.notes-box textarea::placeholder { color:#484f58; }
+.save-note-btn { background:#1f6feb; border:none; color:#e6edf3; padding:4px 12px; border-radius:6px;
+                 font-size:11px; cursor:pointer; margin-top:4px; }
+
+/* ── Lightbox ── */
+#lightbox { display:none; position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:1000;
+            align-items:center; justify-content:center; cursor:zoom-out; }
+#lightbox.show { display:flex; }
+#lightbox img { max-width:90vw; max-height:90vh; border-radius:8px; border:1px solid #30363d; }
+
+/* ── Empty state ── */
+.empty { text-align:center; padding:60px 20px; color:#484f58; }
+.empty .icon { font-size:48px; margin-bottom:12px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h2>📓 Trade Journal</h2>
+  <div style="font-size:12px;color:#484f58;">Last 30 days</div>
+  <div class="filter-row">
+    <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
+    <button class="filter-btn" onclick="setFilter('win',this)">Winners</button>
+    <button class="filter-btn" onclick="setFilter('loss',this)">Losers</button>
+    <button class="filter-btn" onclick="setFilter('open',this)">Open</button>
+    <input style="background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:4px 10px;
+                  border-radius:6px;font-size:12px;width:140px;" placeholder="🔍 Search…">
+  </div>
+</div>
+
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="label">Total Trades</div>
+    <div class="value blue" id="s-total">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Win Rate</div>
+    <div class="value green" id="s-wr">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Total P&amp;L</div>
+    <div class="value" id="s-pnl">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Avg Credit</div>
+    <div class="value gold" id="s-credit">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Avg Winner</div>
+    <div class="value green" id="s-avgw">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Avg Loser</div>
+    <div class="value red" id="s-avgl">—</div>
+  </div>
+</div>
+
+<div class="journal-grid" id="journal"></div>
+
+<!-- Lightbox -->
+<div id="lightbox" onclick="closeLightbox()">
+  <img id="lb-img" src="">
+</div>
+
+<script>
+// ── Generate fake chart screenshots ──────────────────────────────
+function drawFakeChart(canvasEl, type, entryPrice, exitPrice, isEntry) {
+  var ctx = canvasEl.getContext('2d');
+  var W = canvasEl.width, H = canvasEl.height;
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = '#161b22';
+  ctx.lineWidth = 1;
+  for (var i = 1; i < 5; i++) {
+    ctx.beginPath(); ctx.moveTo(0, H*i/5); ctx.lineTo(W, H*i/5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(W*i/5, 0); ctx.lineTo(W*i/5, H); ctx.stroke();
+  }
+
+  // Generate fake candles
+  var numCandles = 60;
+  var cw = (W - 20) / numCandles;
+  var prices = [entryPrice || 150];
+  for (var i = 1; i < numCandles; i++) {
+    var prev = prices[i-1];
+    var move = (Math.random() - 0.48) * 8;
+    prices.push(Math.max(10, prev + move));
+  }
+
+  // If exit, trend toward exit price in last 20 candles
+  if (!isEntry && exitPrice) {
+    var diff = exitPrice - prices[numCandles - 20];
+    for (var i = numCandles-20; i < numCandles; i++) {
+      prices[i] += diff * (i-(numCandles-20)) / 20;
+    }
+  }
+
+  var minP = Math.min.apply(null, prices) * 0.98;
+  var maxP = Math.max.apply(null, prices) * 1.02;
+  var range = maxP - minP;
+
+  function toY(p) { return H - 10 - (p - minP) / range * (H - 20); }
+
+  // Draw candles
+  for (var i = 0; i < numCandles; i++) {
+    var o = prices[i];
+    var c = i < numCandles-1 ? prices[i+1] : o * (1 + (Math.random()-.5)*.02);
+    var h = Math.max(o,c) + Math.random()*4;
+    var l = Math.min(o,c) - Math.random()*4;
+    var x = 10 + i * cw + cw/2;
+    var up = c >= o;
+    ctx.strokeStyle = up ? '#3fb950' : '#f85149';
+    ctx.fillStyle   = up ? '#3fb950' : '#f85149';
+
+    // Wick
+    ctx.beginPath(); ctx.moveTo(x, toY(h)); ctx.lineTo(x, toY(l)); ctx.stroke();
+    // Body
+    var bh = Math.abs(toY(c) - toY(o));
+    ctx.fillRect(x - cw*0.3, Math.min(toY(o),toY(c)), cw*0.6, Math.max(1, bh));
+  }
+
+  // Entry/exit line
+  var linePrice = isEntry ? (entryPrice||prices[numCandles-1]) : (exitPrice||prices[numCandles-1]);
+  var ly = toY(linePrice);
+  ctx.strokeStyle = isEntry ? '#d29922' : '#58a6ff';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(0, ly); ctx.lineTo(W, ly); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Label
+  ctx.fillStyle = isEntry ? '#d29922' : '#58a6ff';
+  ctx.font = '10px monospace';
+  ctx.fillText((isEntry ? 'ENTRY ' : 'EXIT ') + linePrice.toFixed(1), 6, ly - 4);
+
+  // Timestamp label
+  ctx.fillStyle = '#484f58';
+  ctx.font = '9px monospace';
+  ctx.fillText(isEntry ? 'NIFTY · 1m · Entry' : 'NIFTY · 1m · Exit', 6, H - 5);
+
+  return canvasEl.toDataURL('image/png');
+}
+
+function makeScreenshot(entryPrice, exitPrice, isEntry) {
+  var c = document.createElement('canvas');
+  c.width = 480; c.height = 160;
+  return drawFakeChart(c, 'line', entryPrice, exitPrice, isEntry);
+}
+
+// ── Mock trade data ───────────────────────────────────────────────
+var TRADES = [
+  {
+    id: 'T-001', status: 'open',
+    type: 'spread',
+    instrument: 'NIFTY 23400 PE',
+    hedge: 'NIFTY 23300 PE',
+    entry_time: '07-Jun 10:32',
+    exit_time: null,
+    sell_entry: 87.50, buy_entry: 42.10,
+    sell_exit: null, buy_exit: null,
+    lots: 2, lot_size: 25,
+    notes: '',
+  },
+  {
+    id: 'T-002', status: 'win',
+    type: 'spread',
+    instrument: 'NIFTY 23500 CE',
+    hedge: 'NIFTY 23600 CE',
+    entry_time: '06-Jun 11:15',
+    exit_time: '06-Jun 13:44',
+    sell_entry: 112.30, buy_entry: 58.20,
+    sell_exit: 44.10, buy_exit: 22.80,
+    lots: 3, lot_size: 25,
+    notes: 'Clean breakout rejection at 23500 resistance. Exited at 60% profit.',
+  },
+  {
+    id: 'T-003', status: 'loss',
+    type: 'spread',
+    instrument: 'NIFTY 23450 PE',
+    hedge: 'NIFTY 23350 PE',
+    entry_time: '05-Jun 09:48',
+    exit_time: '05-Jun 11:20',
+    sell_entry: 95.00, buy_entry: 47.50,
+    sell_exit: 142.00, buy_exit: 89.00,
+    lots: 2, lot_size: 25,
+    notes: 'SL hit. Spike down after RBI announcement, did not account for event risk.',
+  },
+  {
+    id: 'T-004', status: 'win',
+    type: 'naked',
+    instrument: 'NIFTY 23300 PE',
+    hedge: null,
+    entry_time: '04-Jun 14:22',
+    exit_time: '04-Jun 15:10',
+    sell_entry: 68.00, buy_entry: null,
+    sell_exit: 18.50, buy_exit: null,
+    lots: 1, lot_size: 25,
+    notes: '',
+  },
+  {
+    id: 'T-005', status: 'win',
+    type: 'spread',
+    instrument: 'NIFTY 23550 CE',
+    hedge: 'NIFTY 23650 CE',
+    entry_time: '03-Jun 10:05',
+    exit_time: '03-Jun 12:30',
+    sell_entry: 78.40, buy_entry: 31.20,
+    sell_exit: 22.10, buy_exit: 8.90,
+    lots: 4, lot_size: 25,
+    notes: 'Perfect rejection candle at open. Held until 70% profit.',
+  },
+];
+
+// Pre-generate screenshots
+TRADES.forEach(function(t) {
+  t._entry_img = makeScreenshot(t.sell_entry, t.sell_exit, true);
+  t._exit_img  = t.sell_exit ? makeScreenshot(t.sell_entry, t.sell_exit, false) : null;
+});
+
+// ── Calc stats ────────────────────────────────────────────────────
+function calcPnl(t) {
+  if (t.status === 'open') return null;
+  var nc_entry = (t.sell_entry - (t.buy_entry||0));
+  var nc_exit  = (t.sell_exit  - (t.buy_exit ||0));
+  return (nc_entry - nc_exit) * t.lots * t.lot_size;
+}
+
+function netCredit(t) {
+  return t.sell_entry - (t.buy_entry || 0);
+}
+
+function renderStats(trades) {
+  var closed = trades.filter(function(t){ return t.status !== 'open'; });
+  var wins   = closed.filter(function(t){ return t.status === 'win'; });
+  var pnls   = closed.map(calcPnl).filter(function(v){ return v !== null; });
+  var total  = pnls.reduce(function(s,v){ return s+v; }, 0);
+  var avgW   = wins.length ? wins.map(calcPnl).reduce(function(s,v){return s+v;},0)/wins.length : 0;
+  var losses = closed.filter(function(t){ return t.status === 'loss'; });
+  var avgL   = losses.length ? losses.map(calcPnl).reduce(function(s,v){return s+v;},0)/losses.length : 0;
+  var avgCr  = trades.length ? trades.map(netCredit).reduce(function(s,v){return s+v;},0)/trades.length : 0;
+
+  document.getElementById('s-total').textContent  = trades.length;
+  document.getElementById('s-wr').textContent      = closed.length ? Math.round(wins.length/closed.length*100)+'%' : '—';
+  var pnlEl = document.getElementById('s-pnl');
+  pnlEl.textContent = (total>=0?'₹+':'₹') + Math.round(total).toLocaleString('en-IN');
+  pnlEl.className   = 'value ' + (total>=0?'green':'red');
+  document.getElementById('s-credit').textContent = '₹' + avgCr.toFixed(1);
+  document.getElementById('s-avgw').textContent   = wins.length   ? '₹+'+Math.round(avgW) : '—';
+  document.getElementById('s-avgl').textContent   = losses.length ? '₹'+Math.round(avgL)  : '—';
+}
+
+// ── Render trades ─────────────────────────────────────────────────
+var _filter = 'all';
+function setFilter(f, btn) {
+  _filter = f;
+  document.querySelectorAll('.filter-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  renderAll();
+}
+
+function renderAll() {
+  var list = TRADES.filter(function(t){
+    if (_filter === 'all')  return true;
+    if (_filter === 'open') return t.status === 'open';
+    if (_filter === 'win')  return t.status === 'win';
+    if (_filter === 'loss') return t.status === 'loss';
+  });
+  renderStats(list);
+  var el = document.getElementById('journal');
+  el.innerHTML = '';
+  if (!list.length) {
+    el.innerHTML = '<div class="empty"><div class="icon">📭</div>No trades found</div>';
+    return;
+  }
+  list.forEach(function(t) { el.appendChild(buildCard(t)); });
+}
+
+function buildCard(t) {
+  var pnl    = calcPnl(t);
+  var nc     = netCredit(t);
+  var qty    = t.lots * t.lot_size;
+
+  var pnlHtml = t.status === 'open'
+    ? '<span class="gold">OPEN</span>'
+    : '<span class="' + (pnl>=0?'green':'red') + '">₹' + (pnl>=0?'+':'') + Math.round(pnl).toLocaleString('en-IN') + '</span>';
+
+  var exitPriceHtml = t.sell_exit
+    ? '<div class="main ' + (t.status==='win'?'green':'red') + '">₹' + t.sell_exit.toFixed(2) + '</div><div class="sub">exit</div>'
+    : '<div class="main" style="color:#484f58;">—</div><div class="sub">not exited</div>';
+
+  var spreadDetail = t.type === 'spread'
+    ? '<tr><td>Hedge leg</td><td><span class="val">' + (t.hedge||'—') + '</span></td></tr>'
+      + '<tr><td>Net credit</td><td><span class="val gold">₹' + nc.toFixed(2) + ' × ' + qty + ' = ₹' + Math.round(nc*qty).toLocaleString('en-IN') + '</span></td></tr>'
+    : '<tr><td>Type</td><td><span class="val" style="color:#f85149;">Naked short</span></td></tr>'
+      + '<tr><td>Premium received</td><td><span class="val gold">₹' + t.sell_entry.toFixed(2) + ' × ' + qty + ' = ₹' + Math.round(t.sell_entry*qty).toLocaleString('en-IN') + '</span></td></tr>';
+
+  var card = document.createElement('div');
+  card.className = 'trade-card ' + t.status;
+  card.innerHTML = `
+    <div class="card-header" onclick="toggleCard('${t.id}')">
+      <span class="trade-badge ${t.type==='spread'?'badge-spread':'badge-naked'}">${t.type==='spread'?'SPREAD':'NAKED'}</span>
+      <div class="trade-instrument">${t.instrument}</div>
+      <div class="trade-time">${t.entry_time}${t.exit_time?' → '+t.exit_time:''}</div>
+      <div class="price-col">
+        <div class="main gold">₹${t.sell_entry.toFixed(2)}</div>
+        <div class="sub">sell entry</div>
+      </div>
+      <div class="price-col">${exitPriceHtml}</div>
+      <div class="pnl-col">${pnlHtml}<span class="lots">${t.lots} lot${t.lots>1?'s':''} · ${qty} qty</span></div>
+      <span class="expand-btn">▼</span>
+    </div>
+    <div class="card-detail" id="detail-${t.id}">
+      <div class="detail-row">
+        <div class="screenshots">
+          <div class="screenshot-box">
+            <div class="ss-label">Entry chart</div>
+            <img src="${t._entry_img}" onclick="openLightbox(this)" title="Entry chart">
+            <div class="ss-time">${t.entry_time}</div>
+          </div>
+          <div class="screenshot-box">
+            <div class="ss-label">Exit chart</div>
+            ${t._exit_img
+              ? `<img src="${t._exit_img}" onclick="openLightbox(this)" title="Exit chart"><div class="ss-time">${t.exit_time}</div>`
+              : `<div style="background:#0d1117;border:1px dashed #21262d;border-radius:6px;height:100px;display:flex;align-items:center;justify-content:center;color:#484f58;font-size:11px;">Captured on exit</div>`
+            }
+          </div>
+        </div>
+        <div class="trade-meta">
+          <table class="meta-table">
+            <tr><td>Instrument</td><td><span class="val">${t.instrument}</span></td></tr>
+            ${spreadDetail}
+            <tr><td>Lots / Qty</td><td><span class="val">${t.lots} lots · ${qty} qty</span></td></tr>
+            <tr><td>Entry time</td><td><span class="val">${t.entry_time}</span></td></tr>
+            <tr><td>Exit time</td><td><span class="val">${t.exit_time||'—'}</span></td></tr>
+            ${pnl!==null?`<tr><td>P&amp;L</td><td><span class="val ${pnl>=0?'green':'red'}">₹${(pnl>=0?'+':'')+Math.round(pnl).toLocaleString('en-IN')}</span></td></tr>`:''}
+          </table>
+          <div class="notes-box">
+            <div style="font-size:10px;color:#484f58;margin-bottom:3px;text-transform:uppercase;letter-spacing:.5px;">Notes</div>
+            <textarea placeholder="Add notes about this trade…" id="notes-${t.id}">${t.notes}</textarea>
+            <button class="save-note-btn" onclick="saveNote('${t.id}')">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  return card;
+}
+
+function toggleCard(id) {
+  var detail = document.getElementById('detail-' + id);
+  var card   = detail.closest('.trade-card');
+  var isOpen = detail.classList.contains('show');
+  detail.classList.toggle('show', !isOpen);
+  card.classList.toggle('expanded', !isOpen);
+}
+
+function saveNote(id) {
+  var val = document.getElementById('notes-'+id).value;
+  var t   = TRADES.find(function(t){ return t.id===id; });
+  if (t) t.notes = val;
+  // Flash feedback
+  var btn = document.querySelector('#detail-'+id+' .save-note-btn');
+  btn.textContent = '✓ Saved';
+  btn.style.background = '#2ea043';
+  setTimeout(function(){ btn.textContent='Save'; btn.style.background=''; }, 1500);
+}
+
+function openLightbox(img) {
+  event.stopPropagation();
+  document.getElementById('lb-img').src = img.src;
+  document.getElementById('lightbox').classList.add('show');
+}
+function closeLightbox() { document.getElementById('lightbox').classList.remove('show'); }
+document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeLightbox(); });
+
+renderAll();
+
+// Auto-expand first open trade
+var firstOpen = TRADES.find(function(t){ return t.status==='open'; });
+if (firstOpen) toggleCard(firstOpen.id);
+</script>
+</body>
+</html>
