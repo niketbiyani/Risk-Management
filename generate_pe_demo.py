@@ -346,16 +346,43 @@ histSeries.setData(macdData.hist);
 // ── Fit & sync ────────────────────────────────────────────────────
 allCharts.forEach(function(ch){{ ch.timeScale().fitContent(); }});
 
-var _sync = false;
+// Build time→value maps for crosshair price lookup in sub-panels
+var _volMap = {{}}, _rsiMap = {{}}, _macdMap = {{}};
+CANDLES.forEach(function(c,i) {{
+  var avg = rollingAvg(CANDLES,i,20);
+  _volMap[c.time] = c.volume;
+}});
+calcRSI(CANDLES, 14).forEach(function(d){{ _rsiMap[d.time] = d.value; }});
+macdData.macd.forEach(function(d){{ _macdMap[d.time] = d.value; }});
+
+// Crosshair sync — use actual series value so horizontal line appears in each panel
+var _csync = false;
 allCharts.forEach(function(ch) {{
   ch.subscribeCrosshairMove(function(p) {{
-    if (_sync || !p.time) return;
-    _sync = true;
+    if (_csync) return;
+    _csync = true;
+    if (p.time) {{
+      if (ch !== vc) vc.setCrosshairPosition(_volMap[p.time]  || 0, p.time, volSeries);
+      if (ch !== rc) rc.setCrosshairPosition(_rsiMap[p.time]  || 50, p.time, rsiSeries);
+      if (ch !== mc) mc.setCrosshairPosition(_macdMap[p.time] || 0, p.time, macdLine);
+      if (ch !== pc) pc.setCrosshairPosition(0, p.time, candleSeries);
+    }} else {{
+      allCharts.forEach(function(other){{ if (other !== ch) other.clearCrosshairPosition(); }});
+    }}
+    _csync = false;
+  }});
+}});
+
+// Time range sync — pan/zoom one panel scrolls all others
+var _tsync = false;
+allCharts.forEach(function(ch) {{
+  ch.timeScale().subscribeVisibleLogicalRangeChange(function(range) {{
+    if (_tsync || !range) return;
+    _tsync = true;
     allCharts.forEach(function(other) {{
-      if (other !== ch) other.setCrosshairPosition(0, p.time,
-        other===vc ? volSeries : other===rc ? rsiSeries : macdLine);
+      if (other !== ch) other.timeScale().setVisibleLogicalRange(range);
     }});
-    _sync = false;
+    _tsync = false;
   }});
 }});
 
