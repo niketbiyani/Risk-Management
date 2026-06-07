@@ -432,6 +432,7 @@ DASHBOARD_HTML = """
                 <button id="mute-btn" onclick="toggleMute()" style="background:none;border:1px solid #30363d;color:#8b949e;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:14px;">&#x1f50a;</button>
                 <input type="range" id="volume-slider" min="0" max="100" value="30" style="-webkit-appearance:none;width:70px;height:4px;background:#30363d;border-radius:2px;outline:none;cursor:pointer;">
             </div>
+            <a href="/journal" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Open Trade Journal">&#x1F4D3; Journal</a>
             <span id="token-status" style="font-size:12px;padding:4px 10px;border-radius:12px;cursor:pointer;border:1px solid #30363d;color:#8b949e;" onclick="refreshToken()" title="Click to refresh token">API: ...</span>
             <span id="status-badge" class="status-badge status-active">ACTIVE</span>
         </div>
@@ -1220,6 +1221,12 @@ DASHBOARD_HTML = """
                           ' (LTP: \\u20B9' + (data.ltp || 0).toFixed(2) + ')';
                 showToast(msg, isTP ? 'success' : 'error');
                 showBrowserNotif(data.action, msg);
+                // Capture exit screenshot for journal
+                if (data.security_id) {
+                    closeJournalEntry(String(data.security_id),
+                        data.exit_price || data.ltp || 0, 0,
+                        data.pnl || null);
+                }
             });
             if (typeof safeUpdate === 'function') {
                 socket.on('status_update', safeUpdate);
@@ -2974,12 +2981,157 @@ DASHBOARD_HTML = """
                     showToast('Spread rejected: ' + (result.message || result.reason || ''), 'error');
                 } else {
                     showToast('Spread order sent — awaiting fill confirmation...', 'info');
+                    // Capture entry screenshot and create journal entry
+                    var sellLegSnap = _spreadSellLeg;
+                    var buyLegSnap  = _spreadBuyLeg;
+                    var qtySnap     = qty;
+                    var sellPriceSnap = isMarket ? (sellLegSnap.ltp || 0) : sellPrice;
+                    captureNiftyScreenshot(sellPriceSnap, null, function(entryImg) {
+                        var entryData = {
+                            trade_type:        'spread',
+                            instrument:        sellLegSnap.strike.toFixed(0) + ' ' + sellLegSnap.optType + ' ' + sellLegSnap.expiry,
+                            hedge_instrument:  buyLegSnap.strike.toFixed(0)  + ' ' + buyLegSnap.optType  + ' ' + buyLegSnap.expiry,
+                            sell_security_id:  String(sellLegSnap.securityId),
+                            sell_entry_price:  sellPriceSnap,
+                            buy_entry_price:   buyLegSnap.ltp || 0,
+                            lots:              Math.round(qtySnap / 25) || 1,
+                            lot_size:          25,
+                            entry_screenshot:  entryImg
+                        };
+                        createJournalEntry(entryData);
+                    });
                     clearSpreadQuickBar();
                 }
             })
             .catch(function(e) { showToast('Network error: ' + e, 'error'); });
         }
 
+
+        // ── Journal screenshot + entry helpers ─────────────────────────
+        var _journalOpenEntries = {};  // sell_security_id → entry_id
+
+        function captureNiftyScreenshot(entryPrice, exitPrice, callback) {
+            fetch('/api/chart/nifty')
+            .then(function(r){ return r.json(); })
+            .then(function(d) {
+                var candles = (d.candles || []).slice(-120);
+                if (!candles.length) { callback(null); return; }
+                var canvas = document.createElement('canvas');
+                canvas.width = 520; canvas.height = 170;
+                drawChartOnCanvas(canvas, candles, entryPrice, exitPrice);
+                var dataUrl = canvas.toDataURL('image/png');
+                fetch('/api/journal/screenshot', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({data_url: dataUrl})
+                })
+                .then(function(r){ return r.json(); })
+                .then(function(res){ callback(res.filename || null); })
+                .catch(function(){ callback(null); });
+            })
+            .catch(function(){ callback(null); });
+        }
+
+        function drawChartOnCanvas(canvas, candles, entryPrice, exitPrice) {
+            var ctx = canvas.getContext('2d');
+            var W = canvas.width, H = canvas.height, PAD = 10;
+            ctx.fillStyle = '#0d1117'; ctx.fillRect(0,0,W,H);
+
+            // Grid
+            ctx.strokeStyle = '#161b22'; ctx.lineWidth = 1;
+            for (var g = 1; g < 4; g++) {
+                ctx.beginPath(); ctx.moveTo(0,H*g/4); ctx.lineTo(W,H*g/4); ctx.stroke();
+            }
+
+            var minP = Infinity, maxP = -Infinity;
+            candles.forEach(function(c){ if(c.low<minP)minP=c.low; if(c.high>maxP)maxP=c.high; });
+            if (entryPrice) { if(entryPrice<minP)minP=entryPrice; if(entryPrice>maxP)maxP=entryPrice; }
+            if (exitPrice)  { if(exitPrice<minP) minP=exitPrice;  if(exitPrice>maxP) maxP=exitPrice; }
+            var pRange = maxP - minP || 1;
+            var cw = (W - PAD*2) / candles.length;
+
+            function toY(p){ return H - PAD - (p - minP) / pRange * (H - PAD*2 - 12); }
+
+            candles.forEach(function(c, i) {
+                var x = PAD + i * cw + cw * 0.5;
+                var up = c.close >= c.open;
+                ctx.strokeStyle = up ? '#3fb950' : '#f85149';
+                ctx.fillStyle   = up ? '#3fb950' : '#f85149';
+                ctx.beginPath(); ctx.moveTo(x, toY(c.high)); ctx.lineTo(x, toY(c.low)); ctx.stroke();
+                var bTop = Math.min(toY(c.open), toY(c.close));
+                var bH   = Math.max(1, Math.abs(toY(c.close) - toY(c.open)));
+                ctx.fillRect(x - cw*0.35, bTop, cw*0.7, bH);
+            });
+
+            // Entry marker
+            if (entryPrice) {
+                var ey = toY(entryPrice);
+                ctx.strokeStyle = '#d29922'; ctx.lineWidth = 1;
+                ctx.setLineDash([3,3]);
+                ctx.beginPath(); ctx.moveTo(0,ey); ctx.lineTo(W,ey); ctx.stroke();
+                ctx.setLineDash([]);
+                // Arrow at last candle x
+                var ex = PAD + (candles.length-1)*cw + cw*0.5;
+                ctx.fillStyle = '#d29922';
+                ctx.beginPath(); ctx.moveTo(ex+10,ey); ctx.lineTo(ex+4,ey-5); ctx.lineTo(ex+4,ey+5); ctx.closePath(); ctx.fill();
+                ctx.font = '10px monospace'; ctx.fillStyle = '#d29922';
+                ctx.fillText('ENTRY ' + entryPrice.toFixed(1), 4, ey - 3);
+            }
+            // Exit marker
+            if (exitPrice) {
+                var xy = toY(exitPrice);
+                ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 1;
+                ctx.setLineDash([3,3]);
+                ctx.beginPath(); ctx.moveTo(0,xy); ctx.lineTo(W,xy); ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.font = '10px monospace'; ctx.fillStyle = '#58a6ff';
+                ctx.fillText('EXIT ' + exitPrice.toFixed(1), 4, xy - 3);
+            }
+            // Timestamp
+            if (candles.length) {
+                var last = candles[candles.length-1];
+                var d = new Date(last.time * 1000);
+                var ts = d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+                ctx.font = '9px monospace'; ctx.fillStyle = '#484f58';
+                ctx.fillText('NIFTY · 1m · ' + ts, 4, H - 2);
+            }
+        }
+
+        function createJournalEntry(entryData) {
+            fetch('/api/journal/entry', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(entryData)
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(res) {
+                if (res.entry_id && entryData.sell_security_id) {
+                    _journalOpenEntries[entryData.sell_security_id] = res.entry_id;
+                }
+            })
+            .catch(function(){});
+        }
+
+        function closeJournalEntry(securityId, sellExitPrice, buyExitPrice, pnl) {
+            var entryId = _journalOpenEntries[securityId];
+            if (!entryId) return;
+            captureNiftyScreenshot(null, sellExitPrice, function(exitImg) {
+                fetch('/api/journal/entry/' + entryId, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        action: 'exit',
+                        sell_exit_price: sellExitPrice,
+                        buy_exit_price:  buyExitPrice,
+                        exit_screenshot: exitImg,
+                        pnl: pnl
+                    })
+                }).then(function(){
+                    delete _journalOpenEntries[securityId];
+                }).catch(function(){});
+            });
+        }
+        // ── End journal helpers ────────────────────────────────────────
 
         function clearSpreadQuickBar() {
             _spreadSellLeg = null;
@@ -4292,6 +4444,367 @@ def api_journal_analytics():
         return jsonify({})
     days = int(request.args.get("days", 30))
     return jsonify(_monitor.state.journal.get_analytics(days=days))
+
+
+# ── Journal Entry Endpoints (screenshots + detailed per-trade) ───
+
+@app.route("/api/journal/entry", methods=["POST"])
+def api_journal_create_entry():
+    data = request.json or {}
+    if not _monitor:
+        return jsonify({"status": "error"}), 503
+    journal = _monitor.state.journal
+    entry_id = journal.create_entry(data)
+    return jsonify({"status": "ok", "entry_id": entry_id})
+
+
+@app.route("/api/journal/entry/<entry_id>", methods=["PUT"])
+def api_journal_update_entry(entry_id):
+    data = request.json or {}
+    if not _monitor:
+        return jsonify({"status": "error"}), 503
+    journal = _monitor.state.journal
+    action = data.get("action")
+    if action == "exit":
+        journal.update_entry_exit(entry_id, data)
+    elif action == "notes":
+        journal.update_notes(entry_id, data.get("notes", ""))
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/journal/entries")
+def api_journal_entries():
+    if not _monitor:
+        return jsonify([])
+    limit = int(request.args.get("limit", 100))
+    return jsonify(_monitor.state.journal.get_entries(limit=limit))
+
+
+@app.route("/api/journal/screenshot", methods=["POST"])
+def api_journal_screenshot():
+    data = request.json or {}
+    data_url = data.get("data_url", "")
+    if not data_url or not _monitor:
+        return jsonify({"status": "error"}), 400
+    filename = _monitor.state.journal.save_screenshot(data_url)
+    return jsonify({"status": "ok", "filename": filename})
+
+
+@app.route("/api/journal/screenshots/<filename>")
+def api_journal_screenshot_file(filename):
+    import os as _os
+    from flask import send_file
+    from trade_journal import SCREENSHOTS_DIR
+    path = _os.path.join(SCREENSHOTS_DIR, filename)
+    if not _os.path.exists(path):
+        return "", 404
+    return send_file(path, mimetype="image/png")
+
+
+@app.route("/api/chart/nifty")
+def api_chart_nifty():
+    """Nifty index 1m candles for today — used for journal screenshots."""
+    if not _monitor:
+        return jsonify({"candles": []})
+    from datetime import date as _date, timedelta as _td
+    today = _date.today().strftime("%Y-%m-%d")
+    # Try NIFTY index (security_id=13, NSE_EQ)
+    raw = _monitor.api.get_chart_data("13", "NSE_EQ", "INDEX", today, today)
+    data = raw.get("data", raw) if isinstance(raw, dict) else {}
+    candles = []
+    ts_list = data.get("timestamp", [])
+    opens   = data.get("open",   [])
+    highs   = data.get("high",   [])
+    lows    = data.get("low",    [])
+    closes  = data.get("close",  [])
+    for i, ts in enumerate(ts_list):
+        try:
+            if isinstance(ts, str):
+                from datetime import datetime as _dt
+                unix_ts = int(_dt.strptime(f"{today} {ts}", "%Y-%m-%d %H:%M:%S").timestamp())
+            else:
+                unix_ts = int(ts)
+            candles.append({"time": unix_ts, "open": float(opens[i]),
+                             "high": float(highs[i]), "low": float(lows[i]),
+                             "close": float(closes[i])})
+        except Exception:
+            pass
+    candles.sort(key=lambda c: c["time"])
+    return jsonify({"candles": candles[-240:]})
+
+
+@app.route("/journal")
+def journal_page():
+    return _build_journal_page()
+
+
+def _build_journal_page():
+    return """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Trade Journal</title>
+<style>
+*{box-sizing:border-box}
+body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace;margin:0;padding:20px}
+.topbar{display:flex;align-items:center;gap:16px;margin-bottom:20px;border-bottom:1px solid #21262d;padding-bottom:14px}
+.topbar h2{margin:0;font-size:16px;color:#e6edf3}
+.filter-row{display:flex;gap:8px;margin-left:auto;align-items:center}
+.filter-btn{background:#161b22;border:1px solid #30363d;color:#8b949e;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px}
+.filter-btn.active{background:#1f6feb;border-color:#388bfd;color:#e6edf3}
+.stats-row{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+.stat-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:12px 18px;min-width:120px}
+.stat-card .label{font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.5px}
+.stat-card .value{font-size:18px;font-weight:700;margin-top:4px}
+.green{color:#3fb950}.red{color:#f85149}.gold{color:#d29922}.blue{color:#58a6ff}.muted{color:#8b949e}
+.journal-grid{display:flex;flex-direction:column;gap:10px}
+.trade-card{background:#161b22;border:1px solid #21262d;border-radius:8px;overflow:hidden}
+.trade-card:hover{border-color:#30363d}
+.trade-card.win{border-left:3px solid #3fb950}
+.trade-card.loss{border-left:3px solid #f85149}
+.trade-card.open{border-left:3px solid #d29922}
+.card-header{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;user-select:none;flex-wrap:wrap}
+.card-header:hover{background:rgba(255,255,255,.02)}
+.trade-badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap}
+.badge-spread{background:#1a2d1a;color:#3fb950;border:1px solid #2ea04326}
+.badge-naked{background:#2d1a1a;color:#f85149;border:1px solid #f8514926}
+.trade-instrument{font-size:13px;font-weight:700;color:#e6edf3;min-width:200px}
+.trade-time{font-size:11px;color:#484f58;white-space:nowrap}
+.price-col{display:flex;flex-direction:column;align-items:flex-end;min-width:80px}
+.price-col .main{font-size:13px;font-weight:700}
+.price-col .sub{font-size:10px;color:#484f58}
+.pnl-col{font-size:15px;font-weight:700;min-width:90px;text-align:right}
+.pnl-col .lots{font-size:10px;color:#484f58;font-weight:400;display:block}
+.expand-btn{margin-left:auto;color:#484f58;font-size:12px;transition:transform .2s}
+.expanded .expand-btn{transform:rotate(180deg)}
+.card-detail{display:none;border-top:1px solid #21262d;padding:14px}
+.card-detail.show{display:block}
+.detail-row{display:flex;gap:16px;flex-wrap:wrap}
+.screenshots{display:flex;gap:10px;flex:1;min-width:280px}
+.screenshot-box{flex:1}
+.screenshot-box .ss-label{font-size:10px;color:#484f58;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+.screenshot-box img{width:100%;border-radius:6px;border:1px solid #21262d;cursor:zoom-in;transition:border-color .15s;display:block}
+.screenshot-box img:hover{border-color:#58a6ff}
+.screenshot-box .ss-time{font-size:10px;color:#484f58;margin-top:3px;text-align:center}
+.screenshot-placeholder{background:#0d1117;border:1px dashed #21262d;border-radius:6px;height:90px;display:flex;align-items:center;justify-content:center;color:#484f58;font-size:11px}
+.trade-meta{flex:1;min-width:200px}
+.meta-table{width:100%;font-size:11px;border-collapse:collapse}
+.meta-table td{padding:3px 0;color:#8b949e}
+.meta-table td:first-child{color:#484f58;width:110px}
+.notes-box{margin-top:10px}
+.notes-box textarea{width:100%;background:#0d1117;border:1px solid #21262d;border-radius:6px;color:#e6edf3;font-size:11px;padding:8px;resize:vertical;min-height:48px;font-family:inherit}
+.notes-box textarea:focus{outline:none;border-color:#388bfd}
+.notes-box textarea::placeholder{color:#484f58}
+.save-note-btn{background:#1f6feb;border:none;color:#e6edf3;padding:4px 12px;border-radius:6px;font-size:11px;cursor:pointer;margin-top:4px}
+#lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1000;align-items:center;justify-content:center;cursor:zoom-out}
+#lightbox.show{display:flex}
+#lightbox img{max-width:90vw;max-height:90vh;border-radius:8px;border:1px solid #30363d}
+.empty{text-align:center;padding:60px 20px;color:#484f58}
+.refresh-btn{background:none;border:1px solid #30363d;color:#8b949e;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px}
+.refresh-btn:hover{border-color:#58a6ff;color:#58a6ff}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h2>&#x1F4D3; Trade Journal</h2>
+  <div style="font-size:12px;color:#484f58;" id="last-updated"></div>
+  <div class="filter-row">
+    <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
+    <button class="filter-btn" onclick="setFilter('open',this)">Open</button>
+    <button class="filter-btn" onclick="setFilter('win',this)">Winners</button>
+    <button class="filter-btn" onclick="setFilter('loss',this)">Losers</button>
+    <button class="refresh-btn" onclick="loadEntries()">&#x21bb; Refresh</button>
+  </div>
+</div>
+<div class="stats-row" id="stats-row"></div>
+<div class="journal-grid" id="journal"></div>
+<div id="lightbox" onclick="closeLightbox()"><img id="lb-img" src=""></div>
+<script>
+var _entries = [], _filter = 'all';
+
+function loadEntries() {
+  fetch('/api/journal/entries?limit=200')
+    .then(function(r){return r.json();})
+    .then(function(data) {
+      _entries = data;
+      document.getElementById('last-updated').textContent =
+        'Updated ' + new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+      renderAll();
+    });
+}
+
+function setFilter(f, btn) {
+  _filter = f;
+  document.querySelectorAll('.filter-btn').forEach(function(b){b.classList.remove('active');});
+  btn.classList.add('active');
+  renderAll();
+}
+
+function renderAll() {
+  var list = _entries.filter(function(t) {
+    if (_filter === 'all')  return true;
+    if (_filter === 'open') return t.status === 'open';
+    if (_filter === 'win')  return t.status === 'closed' && (t.pnl||0) >= 0;
+    if (_filter === 'loss') return t.status === 'closed' && (t.pnl||0) < 0;
+    return true;
+  });
+  renderStats(list);
+  var el = document.getElementById('journal');
+  el.innerHTML = '';
+  if (!list.length) {
+    el.innerHTML = '<div class="empty"><div style="font-size:40px;margin-bottom:10px">&#x1F4ED;</div>No trades found</div>';
+    return;
+  }
+  list.forEach(function(t){ el.appendChild(buildCard(t)); });
+}
+
+function renderStats(list) {
+  var closed = list.filter(function(t){return t.status==='closed';});
+  var wins   = closed.filter(function(t){return (t.pnl||0)>=0;});
+  var total  = closed.reduce(function(s,t){return s+(t.pnl||0);},0);
+  var avgW   = wins.length ? wins.reduce(function(s,t){return s+(t.pnl||0);},0)/wins.length : 0;
+  var losses = closed.filter(function(t){return (t.pnl||0)<0;});
+  var avgL   = losses.length ? losses.reduce(function(s,t){return s+(t.pnl||0);},0)/losses.length : 0;
+  var avgCr  = list.length ? list.reduce(function(s,t){
+    return s + ((t.sell_entry_price||0) - (t.buy_entry_price||0));
+  },0)/list.length : 0;
+
+  var wr = closed.length ? Math.round(wins.length/closed.length*100) : 0;
+  var pnlClass = total>=0?'green':'red';
+
+  document.getElementById('stats-row').innerHTML =
+    stat('Total', list.length, 'blue') +
+    stat('Win Rate', closed.length ? wr+'%' : '—', 'green') +
+    stat('Total P&amp;L', (total>=0?'&#8377;+':'&#8377;')+Math.round(total).toLocaleString('en-IN'), pnlClass) +
+    stat('Avg Credit', '&#8377;'+avgCr.toFixed(1), 'gold') +
+    stat('Avg Winner', wins.length?'&#8377;+'+Math.round(avgW):'—','green') +
+    stat('Avg Loser',  losses.length?'&#8377;'+Math.round(avgL):'—','red');
+}
+
+function stat(label, val, cls) {
+  return '<div class="stat-card"><div class="label">'+label+'</div>' +
+         '<div class="value '+cls+'">'+val+'</div></div>';
+}
+
+function nc(t) { return (t.sell_entry_price||0) - (t.buy_entry_price||0); }
+function qty(t) { return (t.lots||0) * (t.lot_size||25); }
+
+function buildCard(t) {
+  var pnl = t.pnl;
+  var isOpen = t.status === 'open';
+  var cardClass = isOpen ? 'open' : (pnl>=0?'win':'loss');
+
+  var pnlHtml = isOpen
+    ? '<span class="gold">OPEN</span>'
+    : '<span class="'+(pnl>=0?'green':'red')+'">&#8377;'+(pnl>=0?'+':'')
+      +Math.round(pnl).toLocaleString('en-IN')+'</span>';
+
+  var exitHtml = t.sell_exit_price
+    ? '<div class="main '+(cardClass==='win'?'green':'red')+'">&#8377;'+parseFloat(t.sell_exit_price).toFixed(2)+'</div><div class="sub">exit</div>'
+    : '<div class="main muted">—</div><div class="sub">not exited</div>';
+
+  var timeStr = t.entry_time + (t.exit_time ? ' &#x2192; ' + t.exit_time : '');
+
+  var metaRows = '';
+  if (t.trade_type === 'spread') {
+    metaRows += '<tr><td>Hedge leg</td><td><span style="color:#e6edf3">'+(t.hedge_instrument||'—')+'</span></td></tr>';
+    var ncVal = nc(t);
+    metaRows += '<tr><td>Net credit</td><td><span class="gold">&#8377;'+ncVal.toFixed(2)
+      +' &times; '+qty(t)+' = &#8377;'+Math.round(ncVal*qty(t)).toLocaleString('en-IN')+'</span></td></tr>';
+  } else {
+    metaRows += '<tr><td>Type</td><td><span class="red">Naked short</span></td></tr>';
+    var prem = (t.sell_entry_price||0)*qty(t);
+    metaRows += '<tr><td>Premium rcvd</td><td><span class="gold">&#8377;'+parseFloat(t.sell_entry_price||0).toFixed(2)
+      +' &times; '+qty(t)+' = &#8377;'+Math.round(prem).toLocaleString('en-IN')+'</span></td></tr>';
+  }
+  if (pnl !== null && pnl !== undefined)
+    metaRows += '<tr><td>P&amp;L</td><td><span class="'+(pnl>=0?'green':'red')
+      +'">&#8377;'+(pnl>=0?'+':'')+Math.round(pnl).toLocaleString('en-IN')+'</span></td></tr>';
+
+  var entryImg = t.entry_screenshot
+    ? '<img src="/api/journal/screenshots/'+t.entry_screenshot+'" onclick="openLightbox(this)">'
+      +'<div class="ss-time">'+t.entry_time+'</div>'
+    : '<div class="screenshot-placeholder">No screenshot</div>';
+
+  var exitImg = t.exit_screenshot
+    ? '<img src="/api/journal/screenshots/'+t.exit_screenshot+'" onclick="openLightbox(this)">'
+      +'<div class="ss-time">'+t.exit_time+'</div>'
+    : '<div class="screenshot-placeholder">'+(isOpen?'Captured on exit':'No screenshot')+'</div>';
+
+  var div = document.createElement('div');
+  div.className = 'trade-card '+cardClass;
+  div.id = 'card-'+t.id;
+  div.innerHTML =
+    '<div class="card-header" onclick="toggleCard(\\'' + t.id + '\\')">' +
+      '<span class="trade-badge '+(t.trade_type==='spread'?'badge-spread':'badge-naked')+'">'
+        +(t.trade_type==='spread'?'SPREAD':'NAKED')+'</span>' +
+      '<div class="trade-instrument">'+t.instrument+'</div>' +
+      '<div class="trade-time">'+timeStr+'</div>' +
+      '<div class="price-col"><div class="main gold">&#8377;'+parseFloat(t.sell_entry_price||0).toFixed(2)+'</div>'
+        +'<div class="sub">sell entry</div></div>' +
+      '<div class="price-col">'+exitHtml+'</div>' +
+      '<div class="pnl-col">'+pnlHtml+'<span class="lots">'+t.lots+' lot'+(t.lots!==1?'s':'')+' &middot; '+qty(t)+' qty</span></div>' +
+      '<span class="expand-btn">&#9660;</span>' +
+    '</div>' +
+    '<div class="card-detail" id="detail-'+t.id+'">' +
+      '<div class="detail-row">' +
+        '<div class="screenshots">' +
+          '<div class="screenshot-box"><div class="ss-label">Entry chart</div>'+entryImg+'</div>' +
+          '<div class="screenshot-box"><div class="ss-label">Exit chart</div>'+exitImg+'</div>' +
+        '</div>' +
+        '<div class="trade-meta">' +
+          '<table class="meta-table">' +
+            '<tr><td>Instrument</td><td><span style="color:#e6edf3">'+t.instrument+'</span></td></tr>' +
+            metaRows +
+            '<tr><td>Lots / Qty</td><td><span style="color:#e6edf3">'+t.lots+' lots &middot; '+qty(t)+' qty</span></td></tr>' +
+            '<tr><td>Entry time</td><td><span style="color:#e6edf3">'+t.entry_time+'</span></td></tr>' +
+            '<tr><td>Exit time</td><td><span style="color:#e6edf3">'+(t.exit_time||'—')+'</span></td></tr>' +
+          '</table>' +
+          '<div class="notes-box">' +
+            '<div style="font-size:10px;color:#484f58;margin-bottom:3px;text-transform:uppercase;letter-spacing:.5px">Notes</div>' +
+            '<textarea placeholder="Add trade notes…" id="notes-'+t.id+'">'+(t.notes||'')+'</textarea>' +
+            '<button class="save-note-btn" onclick="saveNote(\\''+t.id+'\\')">Save</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  return div;
+}
+
+function toggleCard(id) {
+  var detail = document.getElementById('detail-'+id);
+  var card   = document.getElementById('card-'+id);
+  var isOpen = detail.classList.contains('show');
+  detail.classList.toggle('show', !isOpen);
+  card.classList.toggle('expanded', !isOpen);
+}
+
+function saveNote(id) {
+  var notes = document.getElementById('notes-'+id).value;
+  fetch('/api/journal/entry/'+id, {
+    method:'PUT',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'notes', notes:notes})
+  }).then(function() {
+    var btn = document.querySelector('#card-'+id+' .save-note-btn');
+    btn.textContent = '&#x2713; Saved'; btn.style.background='#2ea043';
+    setTimeout(function(){btn.textContent='Save';btn.style.background='';},1500);
+  });
+}
+
+function openLightbox(img) {
+  event.stopPropagation();
+  document.getElementById('lb-img').src = img.src;
+  document.getElementById('lightbox').classList.add('show');
+}
+function closeLightbox() { document.getElementById('lightbox').classList.remove('show'); }
+document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeLightbox(); });
+
+loadEntries();
+setInterval(loadEntries, 30000);
+</script>
+</body>
+</html>"""
 
 
 # ── Token Update ──────────────────────────────────────────────────

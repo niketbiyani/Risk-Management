@@ -5,16 +5,20 @@ in risk decisions. The tamper-proof state remains the source of truth for
 risk enforcement. This module can be deleted without affecting risk rules.
 """
 
+import base64
 import logging
 import os
 import sqlite3
 import threading
 import time
+import uuid
 from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_journal.db")
+DB_PATH         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_journal.db")
+SCREENSHOTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal_screenshots")
+os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 
 class TradeJournal:
@@ -69,6 +73,29 @@ class TradeJournal:
                     total REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_pnl_date ON pnl_snapshots(date);
+
+                CREATE TABLE IF NOT EXISTS trade_entries (
+                    id TEXT PRIMARY KEY,
+                    created_at REAL NOT NULL,
+                    entry_time TEXT NOT NULL,
+                    exit_time TEXT,
+                    status TEXT DEFAULT 'open',
+                    trade_type TEXT NOT NULL,
+                    instrument TEXT NOT NULL,
+                    hedge_instrument TEXT,
+                    sell_security_id TEXT,
+                    sell_entry_price REAL,
+                    buy_entry_price REAL,
+                    sell_exit_price REAL,
+                    buy_exit_price REAL,
+                    lots INTEGER DEFAULT 0,
+                    lot_size INTEGER DEFAULT 25,
+                    pnl REAL,
+                    entry_screenshot TEXT,
+                    exit_screenshot TEXT,
+                    notes TEXT DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_entries_created ON trade_entries(created_at);
             """)
 
     def record_trade(self, trade_info: dict):
@@ -244,6 +271,87 @@ class TradeJournal:
             "SELECT timestamp, realized, unrealized, total "
             "FROM pnl_snapshots WHERE date = ? ORDER BY timestamp",
             (day,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    # ── Detailed trade entries (with screenshots) ─────────────────────
+
+    def create_entry(self, data: dict) -> str:
+        entry_id = str(uuid.uuid4())[:12]
+        now = time.time()
+        entry_time = datetime.now().strftime("%d-%b %H:%M:%S")
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO trade_entries (id, created_at, entry_time, status, trade_type, "
+                    "instrument, hedge_instrument, sell_security_id, sell_entry_price, "
+                    "buy_entry_price, lots, lot_size, entry_screenshot, notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (entry_id, now, entry_time, "open",
+                     data.get("trade_type", "spread"),
+                     data.get("instrument", ""),
+                     data.get("hedge_instrument"),
+                     data.get("sell_security_id"),
+                     data.get("sell_entry_price"),
+                     data.get("buy_entry_price"),
+                     data.get("lots", 0),
+                     data.get("lot_size", 25),
+                     data.get("entry_screenshot"),
+                     data.get("notes", ""))
+                )
+        return entry_id
+
+    def update_entry_exit(self, entry_id: str, data: dict):
+        exit_time = datetime.now().strftime("%d-%b %H:%M:%S")
+        sell_exit = data.get("sell_exit_price")
+        buy_exit  = data.get("buy_exit_price")
+        screenshot = data.get("exit_screenshot")
+        pnl = data.get("pnl")
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE trade_entries SET status='closed', exit_time=?, "
+                    "sell_exit_price=?, buy_exit_price=?, exit_screenshot=?, pnl=? "
+                    "WHERE id=?",
+                    (exit_time, sell_exit, buy_exit, screenshot, pnl, entry_id)
+                )
+
+    def update_notes(self, entry_id: str, notes: str):
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE trade_entries SET notes=? WHERE id=?", (notes, entry_id)
+                )
+
+    def save_screenshot(self, data_url: str) -> str:
+        """Save base64 PNG data_url to file, return filename."""
+        header, b64 = data_url.split(",", 1)
+        img_bytes = base64.b64decode(b64)
+        filename = str(uuid.uuid4())[:12] + ".png"
+        path = os.path.join(SCREENSHOTS_DIR, filename)
+        with open(path, "wb") as f:
+            f.write(img_bytes)
+        return filename
+
+    def get_screenshot_path(self, filename: str) -> str:
+        return os.path.join(SCREENSHOTS_DIR, filename)
+
+    def get_entries(self, limit: int = 100) -> list:
+        cur = self._conn.execute(
+            "SELECT * FROM trade_entries ORDER BY created_at DESC LIMIT ?", (limit,)
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_entry(self, entry_id: str) -> dict | None:
+        cur = self._conn.execute(
+            "SELECT * FROM trade_entries WHERE id=?", (entry_id,)
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def get_open_entries(self) -> list:
+        cur = self._conn.execute(
+            "SELECT * FROM trade_entries WHERE status='open' ORDER BY created_at DESC"
         )
         return [dict(r) for r in cur.fetchall()]
 
