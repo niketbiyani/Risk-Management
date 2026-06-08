@@ -1233,8 +1233,10 @@ DASHBOARD_HTML = """
                 socket.on('status_update', safeUpdate);
             }
             socket.on('oc_ltp', function(data) {
-                // Cache every tick so re-renders don't lose live prices
-                _ltpCache[String(data.sid)] = data.ltp;
+                // Only cache non-zero prices — zero bid means no active market
+                var ltp = parseFloat(data.ltp);
+                if (!ltp || ltp <= 0) return;
+                _ltpCache[String(data.sid)] = ltp;
                 // Real-time LTP update for option chain cells
                 var el = document.getElementById('oc-ltp-' + data.sid);
                 if (el) el.textContent = parseFloat(data.ltp).toFixed(2);
@@ -2593,15 +2595,16 @@ DASHBOARD_HTML = """
                         if (el) el.textContent = row.pe_ltp ? row.pe_ltp.toFixed(2) : '-';
                     }
                 });
-                // Always apply WebSocket cache on top
+                // Always apply WebSocket cache on top (values guaranteed > 0)
                 Object.keys(_ltpCache).forEach(function(sid) {
                     var el = document.getElementById('oc-ltp-' + sid);
-                    if (el) el.textContent = parseFloat(_ltpCache[sid]).toFixed(2);
+                    if (el) el.textContent = _ltpCache[sid].toFixed(2);
                 });
                 return;
             }
 
             // Structure changed — full rebuild
+            console.log('[OC] Full rebuild. ATM strikes:', chain.map(function(r){return r.strike;}));
             _ocRenderedKey = structKey;
             var atmIdx = Math.floor(chain.length / 2);
             var html = '';
@@ -2653,7 +2656,7 @@ DASHBOARD_HTML = """
             // Apply WebSocket cache on top of initial REST values
             Object.keys(_ltpCache).forEach(function(sid) {
                 var el = document.getElementById('oc-ltp-' + sid);
-                if (el) el.textContent = parseFloat(_ltpCache[sid]).toFixed(2);
+                if (el) el.textContent = _ltpCache[sid].toFixed(2);
             });
             restoreSpreadPillHighlights();
         }
