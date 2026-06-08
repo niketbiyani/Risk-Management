@@ -319,7 +319,7 @@ class PositionMonitor:
                     import dashboard as _dash
                     _dash._bse_last_spot = ltp
                     try:
-                        _dash.api_option_chain_data._bse_spot_cache = (0, 0.0)  # force refresh
+                        _dash.api_option_chain_data._bse_spot_cache = (time.time(), ltp)
                     except Exception:
                         pass
             except Exception:
