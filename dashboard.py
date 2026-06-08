@@ -2678,7 +2678,7 @@ DASHBOARD_HTML = """
             fetch('/api/option_chain/subscribe_ltp', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({instruments: instruments})
+                body: JSON.stringify({instruments: instruments, underlying: underlying})
             }).catch(function(){});
             _ocLtpSubscribed = true;
         }
@@ -3656,8 +3656,9 @@ def api_reload_instruments():
         return jsonify({"error": "Instrument cache not initialized"}), 500
     count = _instrument_cache.reload()
     # Reset spot and ATM caches so stale values don't persist after reload
-    global _bse_last_spot
+    global _bse_last_spot, _bse_futures_sids
     _bse_last_spot = 0.0
+    _bse_futures_sids.clear()
     _oc_atm_cache.clear()
     try:
         del api_option_chain_data._bse_spot_cache
@@ -3734,6 +3735,28 @@ def api_oc_subscribe_ltp():
 
     _oc_ltp_subscribed = new_sids
 
+    # For SENSEX/BANKEX: also subscribe nearest futures for real-time spot
+    underlying = data.get("underlying", "")
+    bse_futures_sid = None
+    if underlying in ("SENSEX", "BANKEX") and _instrument_cache:
+        from datetime import date as _date
+        today_str = str(_date.today())
+        fut_inst = None
+        fut_name = "SENSEX" if underlying == "SENSEX" else "BANKEX"
+        for inst in _instrument_cache._instruments:
+            if (inst.instrument_type == "FUTIDX"
+                    and fut_name in inst.trading_symbol.upper()
+                    and "50" not in inst.trading_symbol.upper()
+                    and inst.expiry_date and inst.expiry_date[:10] >= today_str):
+                if fut_inst is None or inst.expiry_date < fut_inst.expiry_date:
+                    fut_inst = inst
+        if fut_inst:
+            bse_futures_sid = str(fut_inst.security_id)
+            instruments.append((8, bse_futures_sid, 15))  # BSE_FNO=8
+            new_sids.add(bse_futures_sid)
+            _oc_ltp_subscribed.add(bse_futures_sid)
+            _bse_futures_sids.add(bse_futures_sid)
+
     # Store as extra instruments so position-change refreshes don't drop them
     _monitor._extra_instruments = instruments
 
@@ -3746,7 +3769,7 @@ def api_oc_subscribe_ltp():
             merged.append(inst)
 
     _monitor.api.start_ltp_feed_async(merged, _monitor._on_market_tick)
-    return jsonify({"status": "ok", "count": len(merged)})
+    return jsonify({"status": "ok", "count": len(merged), "bse_futures_sid": bse_futures_sid})
 
 
 @app.route("/api/option_chain/data")
@@ -5078,6 +5101,8 @@ def emit_sl_tp_trigger(trigger_data: dict):
 
 # Security IDs subscribed for real-time option chain LTP updates
 _oc_ltp_subscribed: set = set()
+# Security IDs of BSE index futures — ticks update _bse_last_spot in real-time
+_bse_futures_sids: set = set()
 
 
 def emit_oc_ltp(security_id: str, ltp: float):
