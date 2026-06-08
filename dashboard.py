@@ -3859,7 +3859,7 @@ def api_option_chain_data():
                     global _bse_last_spot
                     # BSE: Use nearest SENSEX futures LTP as spot (reliable, BSE_FNO segment)
                     _bse_spot_cache = getattr(api_option_chain_data, "_bse_spot_cache", (0, 0.0))
-                    if time.time() - _bse_spot_cache[0] > 10 or _bse_spot_cache[1] == 0:
+                    if time.time() - _bse_spot_cache[0] > 2 or _bse_spot_cache[1] == 0:
                         try:
                             # Find nearest-expiry SENSEX futures from instrument cache
                             from datetime import date as _date
@@ -3886,7 +3886,7 @@ def api_option_chain_data():
                                                     spot = float(ltp_val)
                                                     _bse_last_spot = spot
                                                     api_option_chain_data._bse_spot_cache = (time.time(), spot)
-                                                    logger.debug("BSE: SENSEX spot from futures %s: %.0f", fut_inst.trading_symbol, spot)
+                                                    logger.info("BSE: SENSEX spot from futures %s: %.0f", fut_inst.trading_symbol, spot)
                         except Exception as _se:
                             logger.debug("BSE: futures spot fetch failed: %s", _se)
                     else:
