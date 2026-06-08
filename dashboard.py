@@ -37,6 +37,7 @@ _depth_subscribe_gen = 0  # Incremented on each new subscription to reset no-dat
 def set_monitor(monitor):
     global _monitor
     _monitor = monitor
+    _start_bse_spot_updater()
 
 
 def set_instrument_cache(cache):
@@ -3701,9 +3702,46 @@ def api_option_chain_expiries():
 
 _oc_data_cache: dict = {}  # (underlying, expiry) -> (timestamp, response_dict)
 _OC_CACHE_TTL = 1.0  # seconds — match frontend refresh rate
-_bse_last_spot: float = 0.0  # last valid SENSEX spot from put-call parity
+_bse_last_spot: float = 0.0  # last valid SENSEX spot (updated by background thread)
 _nse_last_spot: dict = {}   # underlying -> last valid NSE spot (survives API failures)
 _oc_atm_cache: dict = {}    # (underlying, expiry) -> (atm_strike, atm_idx) with hysteresis
+
+
+def _start_bse_spot_updater():
+    """Background thread: fetches nearest SENSEX futures LTP every 3s."""
+    import time as _time
+    def _run():
+        while True:
+            try:
+                if _monitor and _instrument_cache:
+                    from datetime import date as _date
+                    today_str = str(_date.today())
+                    fut_inst = None
+                    for inst in _instrument_cache._instruments:
+                        if (inst.instrument_type == "FUTIDX"
+                                and "SENSEX" in inst.trading_symbol.upper()
+                                and "50" not in inst.trading_symbol.upper()
+                                and inst.expiry_date and inst.expiry_date[:10] >= today_str):
+                            if fut_inst is None or inst.expiry_date < fut_inst.expiry_date:
+                                fut_inst = inst
+                    if fut_inst:
+                        ltp_res = _monitor.api.get_ltp({"BSE_FNO": [int(fut_inst.security_id)]})
+                        if isinstance(ltp_res, dict):
+                            d = ltp_res.get("data", ltp_res)
+                            if isinstance(d, dict) and "data" in d:
+                                d = d["data"]
+                            for seg_data in (d.values() if isinstance(d, dict) else []):
+                                if isinstance(seg_data, dict):
+                                    for val in seg_data.values():
+                                        ltp_val = val.get("last_price", 0) if isinstance(val, dict) else val
+                                        if ltp_val and float(ltp_val) > 0:
+                                            global _bse_last_spot
+                                            _bse_last_spot = float(ltp_val)
+            except Exception:
+                pass
+            _time.sleep(3)
+    t = threading.Thread(target=_run, daemon=True, name="BseSpotUpdater")
+    t.start()
 
 # Exchange segment mapping for MarketFeed subscription (NSE_FNO default for options)
 _OC_SEG_MAP = {"IDX_I": 0, "NSE_EQ": 1, "NSE_FNO": 2, "NSE_CURR": 3, "BSE_EQ": 4, "MCX": 5, "BSE_CURR": 7, "BSE_FNO": 8}
@@ -3856,43 +3894,8 @@ def api_option_chain_data():
                                 row["ce_ltp"] = strike_data["ce_ltp"]
                                 row["pe_ltp"] = strike_data["pe_ltp"]
                 else:
-                    global _bse_last_spot
-                    # BSE: Use nearest SENSEX futures LTP as spot (reliable, BSE_FNO segment)
-                    _bse_spot_cache = getattr(api_option_chain_data, "_bse_spot_cache", (0, 0.0))
-                    if time.time() - _bse_spot_cache[0] > 2 or _bse_spot_cache[1] == 0:
-                        try:
-                            # Find nearest-expiry SENSEX futures from instrument cache
-                            from datetime import date as _date
-                            today_str = str(_date.today())
-                            fut_inst = None
-                            for inst in _instrument_cache._instruments:
-                                if (inst.instrument_type == "FUTIDX"
-                                        and "SENSEX" in inst.trading_symbol.upper()
-                                        and "50" not in inst.trading_symbol.upper()
-                                        and inst.expiry_date and inst.expiry_date[:10] >= today_str):
-                                    if fut_inst is None or inst.expiry_date < fut_inst.expiry_date:
-                                        fut_inst = inst
-                            if fut_inst:
-                                ltp_res = _monitor.api.get_ltp({"BSE_FNO": [int(fut_inst.security_id)]})
-                                if isinstance(ltp_res, dict):
-                                    d = ltp_res.get("data", ltp_res)
-                                    if isinstance(d, dict) and "data" in d:
-                                        d = d["data"]
-                                    for seg_data in (d.values() if isinstance(d, dict) else []):
-                                        if isinstance(seg_data, dict):
-                                            for val in seg_data.values():
-                                                ltp_val = val.get("last_price", 0) if isinstance(val, dict) else val
-                                                if ltp_val and float(ltp_val) > 0:
-                                                    spot = float(ltp_val)
-                                                    _bse_last_spot = spot
-                                                    api_option_chain_data._bse_spot_cache = (time.time(), spot)
-                                                    logger.info("BSE: SENSEX spot from futures %s: %.0f", fut_inst.trading_symbol, spot)
-                        except Exception as _se:
-                            logger.debug("BSE: futures spot fetch failed: %s", _se)
-                    else:
-                        spot = _bse_spot_cache[1]
-                    if spot == 0 and _bse_last_spot > 0:
-                        spot = _bse_last_spot
+                    # BSE: spot is maintained by _start_bse_spot_updater() background thread
+                    spot = _bse_last_spot
                     # Two-pass approach:
                     #   Pass 1: sample every 10th strike (~20 IDs) to estimate spot
                     #   Pass 2: fetch ATM±12 (~50 IDs) using estimated spot
