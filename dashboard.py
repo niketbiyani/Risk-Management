@@ -3695,7 +3695,7 @@ _OC_CACHE_TTL = 1.0  # seconds — match frontend refresh rate
 _bse_last_spot: float = 0.0  # last valid SENSEX spot from put-call parity
 
 # Exchange segment mapping for MarketFeed subscription (NSE_FNO default for options)
-_OC_SEG_MAP = {"NSE_FNO": 1, "BSE_FNO": 2, "NSE_EQ": 3, "BSE_EQ": 4}
+_OC_SEG_MAP = {"IDX_I": 0, "NSE_EQ": 1, "NSE_FNO": 2, "NSE_CURR": 3, "BSE_EQ": 4, "MCX": 5, "BSE_CURR": 7, "BSE_FNO": 8}
 
 @app.route("/api/option_chain/subscribe_ltp", methods=["POST"])
 def api_oc_subscribe_ltp():
@@ -3715,7 +3715,7 @@ def api_oc_subscribe_ltp():
             continue
         seg_key = i.get("exchange_segment", "NSE_FNO")
         seg_int = _OC_SEG_MAP.get(seg_key, 1)
-        instruments.append((seg_int, str(i["sid"]), "Ticker"))
+        instruments.append((seg_int, str(i["sid"]), 15))
     new_sids = {str(i["sid"]) for i in instruments_req if i.get("sid")}
 
     # Only restart feed if the subscribed set has changed

@@ -243,11 +243,14 @@ class PositionMonitor:
     def _build_instrument_list(self, positions: list[dict]) -> list:
         """Convert positions to MarketFeed instrument tuples."""
         seg_map = {
-            "NSE_FNO": 1,
-            "BSE_FNO": 2,
-            "NSE_EQ": 3,
-            "BSE_EQ": 4,
             "IDX_I": 0,
+            "NSE_EQ": 1,
+            "NSE_FNO": 2,
+            "NSE_CURR": 3,
+            "BSE_EQ": 4,
+            "MCX": 5,
+            "BSE_CURR": 7,
+            "BSE_FNO": 8,
         }
         instruments = []
         seen = set()
@@ -259,7 +262,7 @@ class PositionMonitor:
             sec_id = str(pos.get("securityId", ""))
             if sec_id and (seg_int, sec_id) not in seen:
                 seen.add((seg_int, sec_id))
-                instruments.append((seg_int, sec_id, "Ticker"))
+                instruments.append((seg_int, sec_id, 15))
         return instruments
 
     def _refresh_market_feed(self, positions: list[dict]):
@@ -293,7 +296,6 @@ class PositionMonitor:
         Must return quickly — no blocking I/O.
         """
         try:
-            logger.info("RAW TICK: %s", tick_data)
             security_id = str(
                 tick_data.get("security_id")
                 or tick_data.get("securityId")
