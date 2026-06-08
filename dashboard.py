@@ -3693,6 +3693,8 @@ def api_option_chain_expiries():
 _oc_data_cache: dict = {}  # (underlying, expiry) -> (timestamp, response_dict)
 _OC_CACHE_TTL = 1.0  # seconds — match frontend refresh rate
 _bse_last_spot: float = 0.0  # last valid SENSEX spot from put-call parity
+_nse_last_spot: dict = {}   # underlying -> last valid NSE spot (survives API failures)
+_oc_atm_cache: dict = {}    # (underlying, expiry) -> (atm_strike, atm_idx) with hysteresis
 
 # Exchange segment mapping for MarketFeed subscription (NSE_FNO default for options)
 _OC_SEG_MAP = {"IDX_I": 0, "NSE_EQ": 1, "NSE_FNO": 2, "NSE_CURR": 3, "BSE_EQ": 4, "MCX": 5, "BSE_CURR": 7, "BSE_FNO": 8}
@@ -3802,6 +3804,8 @@ def api_option_chain_data():
                         if isinstance(oc_data, dict) and "data" in oc_data and isinstance(oc_data["data"], dict):
                             oc_data = oc_data["data"]
                         spot = oc_data.get("last_price", 0) or 0
+                        if spot > 0:
+                            _nse_last_spot[underlying] = spot
                         oc_strikes = oc_data.get("oc", {})
                         ltp_by_strike = {}
                         for strike_str, sides in oc_strikes.items():
@@ -3823,25 +3827,29 @@ def api_option_chain_data():
                 else:
                     global _bse_last_spot
                     # BSE: Dhan option_chain API doesn't support BSE index LTP.
-                    # The full chain has 190+ strikes; Dhan limits ticker_data to ~40 IDs.
-                    # Step 0: Fetch SENSEX spot directly from intraday_minute_data (reliable)
-                    try:
-                        from datetime import date as _date
-                        today_str = str(_date.today())
-                        sensex_raw = _monitor.api.dhan.intraday_minute_data(
-                            security_id="1", exchange_segment="BSE_EQ",
-                            instrument_type="INDEX", from_date=today_str, to_date=today_str
-                        )
-                        if isinstance(sensex_raw, dict):
-                            s_data = sensex_raw.get("data", sensex_raw)
-                            closes = s_data.get("close", []) if isinstance(s_data, dict) else []
-                            if closes:
-                                spot = float(closes[-1])
-                                _bse_last_spot = spot
-                                logger.debug("BSE: SENSEX spot from intraday_minute_data: %.0f", spot)
-                    except Exception as _se:
-                        logger.debug("BSE: intraday_minute_data spot fetch failed: %s", _se)
-                    # Fall back to cached spot if intraday fetch failed
+                    # Step 0: Fetch SENSEX spot from intraday_minute_data (cached 60s to avoid hammering API)
+                    _bse_spot_cache = getattr(api_option_chain_data, "_bse_spot_cache", (0, 0.0))
+                    if time.time() - _bse_spot_cache[0] > 60 or _bse_spot_cache[1] == 0:
+                        try:
+                            from datetime import date as _date
+                            today_str = str(_date.today())
+                            sensex_raw = _monitor.api.dhan.intraday_minute_data(
+                                security_id="1", exchange_segment="BSE_EQ",
+                                instrument_type="INDEX", from_date=today_str, to_date=today_str
+                            )
+                            if isinstance(sensex_raw, dict):
+                                s_data = sensex_raw.get("data", sensex_raw)
+                                closes = s_data.get("close", []) if isinstance(s_data, dict) else []
+                                if closes:
+                                    spot = float(closes[-1])
+                                    _bse_last_spot = spot
+                                    api_option_chain_data._bse_spot_cache = (time.time(), spot)
+                                    logger.info("BSE: SENSEX spot from intraday_minute_data: %.0f", spot)
+                        except Exception as _se:
+                            logger.debug("BSE: intraday_minute_data spot fetch failed: %s", _se)
+                    else:
+                        spot = _bse_spot_cache[1]
+                    # Fall back to long-lived cache if all else fails
                     if spot == 0 and _bse_last_spot > 0:
                         spot = _bse_last_spot
                     # Two-pass approach:
@@ -3913,15 +3921,40 @@ def api_option_chain_data():
             except Exception as e:
                 logger.error("Option chain price fetch failed: %s", e, exc_info=True)
 
-        # Find ATM index
+        # Use cached NSE spot if current poll failed to get one
+        if spot == 0 and not (underlying in {"SENSEX", "BANKEX"}):
+            spot = _nse_last_spot.get(underlying, 0)
+
+        # Find ATM index with hysteresis — only shift if spot moves >40% of strike interval
+        # away from current ATM strike, preventing oscillation when spot sits near midpoint
         atm_idx = len(chain) // 2
-        if spot > 0:
-            min_dist = float("inf")
-            for i, row in enumerate(chain):
-                d = abs(row["strike"] - spot)
-                if d < min_dist:
-                    min_dist = d
-                    atm_idx = i
+        if spot > 0 and chain:
+            # Estimate strike interval from chain
+            if len(chain) > 1:
+                strike_interval = chain[1]["strike"] - chain[0]["strike"]
+            else:
+                strike_interval = 50
+            hysteresis = strike_interval * 0.4
+
+            prev_atm_strike, prev_atm_idx = _oc_atm_cache.get(cache_key, (None, None))
+            if prev_atm_strike is not None and abs(spot - prev_atm_strike) < hysteresis:
+                # Spot hasn't moved far enough from current ATM — keep cached ATM
+                # but re-validate the index (chain may have been rebuilt)
+                best_i, best_d = prev_atm_idx, float("inf")
+                for i, row in enumerate(chain):
+                    d = abs(row["strike"] - prev_atm_strike)
+                    if d < best_d:
+                        best_d, best_i = d, i
+                atm_idx = best_i
+            else:
+                # Spot has moved significantly — find new ATM
+                min_dist = float("inf")
+                for i, row in enumerate(chain):
+                    d = abs(row["strike"] - spot)
+                    if d < min_dist:
+                        min_dist = d
+                        atm_idx = i
+                _oc_atm_cache[cache_key] = (chain[atm_idx]["strike"], atm_idx)
 
         # Trim to ATM +/- 6 strikes (13 total)
         start = max(0, atm_idx - 6)
