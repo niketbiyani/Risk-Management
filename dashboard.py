@@ -3715,7 +3715,7 @@ def api_oc_subscribe_ltp():
             continue
         seg_key = i.get("exchange_segment", "NSE_FNO")
         seg_int = _OC_SEG_MAP.get(seg_key, 1)
-        instruments.append((seg_int, str(i["sid"]), "LTP"))
+        instruments.append((seg_int, str(i["sid"]), "Ticker"))
     new_sids = {str(i["sid"]) for i in instruments_req if i.get("sid")}
 
     # Only restart feed if the subscribed set has changed

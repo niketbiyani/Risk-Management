@@ -259,7 +259,7 @@ class PositionMonitor:
             sec_id = str(pos.get("securityId", ""))
             if sec_id and (seg_int, sec_id) not in seen:
                 seen.add((seg_int, sec_id))
-                instruments.append((seg_int, sec_id, "LTP"))
+                instruments.append((seg_int, sec_id, "Ticker"))
         return instruments
 
     def _refresh_market_feed(self, positions: list[dict]):
