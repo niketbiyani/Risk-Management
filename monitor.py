@@ -293,7 +293,7 @@ class PositionMonitor:
         Must return quickly — no blocking I/O.
         """
         try:
-            logger.debug("RAW TICK: %s", tick_data)
+            logger.info("RAW TICK: %s", tick_data)
             security_id = str(
                 tick_data.get("security_id")
                 or tick_data.get("securityId")

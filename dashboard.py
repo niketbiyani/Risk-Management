@@ -2661,14 +2661,18 @@ DASHBOARD_HTML = """
 
         function subscribeOcLtp(chain) {
             // Subscribe ATM±10 strikes (CE + PE) for real-time LTP updates
+            var sel = document.getElementById('oc-underlying');
+            var underlying = sel ? sel.options[sel.selectedIndex].text : 'NIFTY';
+            var isBse = (underlying === 'SENSEX' || underlying === 'BANKEX');
+            var exchange_segment = isBse ? 'BSE_FNO' : 'NSE_FNO';
             var atmIdx = Math.floor(chain.length / 2);
             var lo = Math.max(0, atmIdx - 10);
             var hi = Math.min(chain.length - 1, atmIdx + 10);
             var instruments = [];
             for (var i = lo; i <= hi; i++) {
                 var row = chain[i];
-                if (row.ce_security_id) instruments.push({sid: String(row.ce_security_id), type: 'CE'});
-                if (row.pe_security_id) instruments.push({sid: String(row.pe_security_id), type: 'PE'});
+                if (row.ce_security_id) instruments.push({sid: String(row.ce_security_id), type: 'CE', exchange_segment: exchange_segment});
+                if (row.pe_security_id) instruments.push({sid: String(row.pe_security_id), type: 'PE', exchange_segment: exchange_segment});
             }
             if (!instruments.length) return;
             fetch('/api/option_chain/subscribe_ltp', {
@@ -3704,9 +3708,14 @@ def api_oc_subscribe_ltp():
     if not instruments_req:
         return jsonify({"status": "empty"})
 
-    # Determine exchange segment — options are NSE_FNO by default
-    seg_int = _OC_SEG_MAP.get("NSE_FNO", 1)
-    instruments = [(seg_int, str(i["sid"]), "LTP") for i in instruments_req if i.get("sid")]
+    # Use exchange segment from each instrument (client passes 'BSE_FNO' for SENSEX)
+    instruments = []
+    for i in instruments_req:
+        if not i.get("sid"):
+            continue
+        seg_key = i.get("exchange_segment", "NSE_FNO")
+        seg_int = _OC_SEG_MAP.get(seg_key, 1)
+        instruments.append((seg_int, str(i["sid"]), "LTP"))
     new_sids = {str(i["sid"]) for i in instruments_req if i.get("sid")}
 
     # Only restart feed if the subscribed set has changed

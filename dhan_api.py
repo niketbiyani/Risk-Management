@@ -468,15 +468,21 @@ class DhanAPI:
 
     def start_market_feed_async(self, instruments: list, callback) -> threading.Thread:
         """Start MarketFeed in a daemon thread with auto-reconnect. Non-blocking."""
-        # Close existing feed if running
+        import threading as _threading
+        # Signal any existing feed thread to stop, then close connection
+        self._market_feed_stop = getattr(self, "_market_feed_stop", None)
+        if self._market_feed_stop:
+            self._market_feed_stop.set()
+        stop_flag = _threading.Event()
+        self._market_feed_stop = stop_flag
         try:
             if self._market_feed:
                 self._market_feed.close_connection()
         except Exception:
             pass
 
-        def _run():
-            while True:
+        def _run(stop):
+            while not stop.is_set():
                 try:
                     logger.info("MarketFeed: connecting with %d instruments", len(instruments))
                     self._market_feed = MarketFeed(
@@ -484,10 +490,13 @@ class DhanAPI:
                     )
                     self._market_feed.run_forever()
                 except Exception as e:
+                    if stop.is_set():
+                        break
                     logger.error("MarketFeed disconnected: %s — reconnecting in 5s", e)
-                time.sleep(5)
+                if not stop.is_set():
+                    stop.wait(5)
 
-        t = threading.Thread(target=_run, daemon=True, name="MarketFeed")
+        t = threading.Thread(target=_run, args=(stop_flag,), daemon=True, name="MarketFeed")
         t.start()
         return t
 
