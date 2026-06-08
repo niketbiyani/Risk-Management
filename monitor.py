@@ -318,10 +318,6 @@ class PositionMonitor:
                 if security_id in _bse_futures_sids:
                     import dashboard as _dash
                     _dash._bse_last_spot = ltp
-                    try:
-                        _dash.api_option_chain_data._bse_spot_cache = (time.time(), ltp)
-                    except Exception:
-                        pass
             except Exception:
                 pass
 

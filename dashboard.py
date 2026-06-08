@@ -3661,10 +3661,6 @@ def api_reload_instruments():
     _bse_last_spot = 0.0
     _bse_futures_sids.clear()
     _oc_atm_cache.clear()
-    try:
-        del api_option_chain_data._bse_spot_cache
-    except AttributeError:
-        pass
     return jsonify({"status": "ok", "instruments_loaded": count})
 
 
