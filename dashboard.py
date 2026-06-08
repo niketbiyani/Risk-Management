@@ -2604,7 +2604,7 @@ DASHBOARD_HTML = """
             }
 
             // Structure changed — full rebuild
-            console.log('[OC] Full rebuild. ATM strikes:', chain.map(function(r){return r.strike;}));
+            console.log('[OC] Rebuild triggered. old:', JSON.stringify(_ocRenderedKey), 'new:', JSON.stringify(structKey));
             _ocRenderedKey = structKey;
             var atmIdx = Math.floor(chain.length / 2);
             var html = '';
