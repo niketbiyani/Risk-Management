@@ -3655,6 +3655,14 @@ def api_reload_instruments():
     if not _instrument_cache:
         return jsonify({"error": "Instrument cache not initialized"}), 500
     count = _instrument_cache.reload()
+    # Reset spot and ATM caches so stale values don't persist after reload
+    global _bse_last_spot
+    _bse_last_spot = 0.0
+    _oc_atm_cache.clear()
+    try:
+        del api_option_chain_data._bse_spot_cache
+    except AttributeError:
+        pass
     return jsonify({"status": "ok", "instruments_loaded": count})
 
 
@@ -3826,30 +3834,40 @@ def api_option_chain_data():
                                 row["pe_ltp"] = strike_data["pe_ltp"]
                 else:
                     global _bse_last_spot
-                    # BSE: Dhan option_chain API doesn't support BSE index LTP.
-                    # Step 0: Fetch SENSEX spot from intraday_minute_data (cached 60s to avoid hammering API)
+                    # BSE: Use nearest SENSEX futures LTP as spot (reliable, BSE_FNO segment)
                     _bse_spot_cache = getattr(api_option_chain_data, "_bse_spot_cache", (0, 0.0))
-                    if time.time() - _bse_spot_cache[0] > 60 or _bse_spot_cache[1] == 0:
+                    if time.time() - _bse_spot_cache[0] > 10 or _bse_spot_cache[1] == 0:
                         try:
+                            # Find nearest-expiry SENSEX futures from instrument cache
                             from datetime import date as _date
                             today_str = str(_date.today())
-                            sensex_raw = _monitor.api.dhan.intraday_minute_data(
-                                security_id="1", exchange_segment="BSE_EQ",
-                                instrument_type="INDEX", from_date=today_str, to_date=today_str
-                            )
-                            if isinstance(sensex_raw, dict):
-                                s_data = sensex_raw.get("data", sensex_raw)
-                                closes = s_data.get("close", []) if isinstance(s_data, dict) else []
-                                if closes:
-                                    spot = float(closes[-1])
-                                    _bse_last_spot = spot
-                                    api_option_chain_data._bse_spot_cache = (time.time(), spot)
-                                    logger.info("BSE: SENSEX spot from intraday_minute_data: %.0f", spot)
+                            fut_inst = None
+                            for inst in _instrument_cache._instruments:
+                                if (inst.instrument_type == "FUTIDX"
+                                        and "SENSEX" in inst.trading_symbol.upper()
+                                        and "50" not in inst.trading_symbol.upper()
+                                        and inst.expiry_date and inst.expiry_date[:10] >= today_str):
+                                    if fut_inst is None or inst.expiry_date < fut_inst.expiry_date:
+                                        fut_inst = inst
+                            if fut_inst:
+                                ltp_res = _monitor.api.get_ltp({"BSE_FNO": [int(fut_inst.security_id)]})
+                                if isinstance(ltp_res, dict):
+                                    d = ltp_res.get("data", ltp_res)
+                                    if isinstance(d, dict) and "data" in d:
+                                        d = d["data"]
+                                    for seg_data in (d.values() if isinstance(d, dict) else []):
+                                        if isinstance(seg_data, dict):
+                                            for val in seg_data.values():
+                                                ltp_val = val.get("last_price", 0) if isinstance(val, dict) else val
+                                                if ltp_val and float(ltp_val) > 0:
+                                                    spot = float(ltp_val)
+                                                    _bse_last_spot = spot
+                                                    api_option_chain_data._bse_spot_cache = (time.time(), spot)
+                                                    logger.debug("BSE: SENSEX spot from futures %s: %.0f", fut_inst.trading_symbol, spot)
                         except Exception as _se:
-                            logger.debug("BSE: intraday_minute_data spot fetch failed: %s", _se)
+                            logger.debug("BSE: futures spot fetch failed: %s", _se)
                     else:
                         spot = _bse_spot_cache[1]
-                    # Fall back to long-lived cache if all else fails
                     if spot == 0 and _bse_last_spot > 0:
                         spot = _bse_last_spot
                     # Two-pass approach:
