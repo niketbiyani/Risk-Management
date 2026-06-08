@@ -330,6 +330,15 @@ class PositionMonitor:
                     daemon=True,
                 ).start()
 
+            # Check ARM TRIGGER pending spreads for this security on every tick
+            pending_triggers = self.trade_mgr.check_pending_spreads_for_security(security_id, ltp)
+            for spread_action in pending_triggers:
+                threading.Thread(
+                    target=self._execute_spread,
+                    args=(spread_action,),
+                    daemon=True,
+                ).start()
+
         except Exception as e:
             logger.error("Error in market tick callback: %s", e)
 

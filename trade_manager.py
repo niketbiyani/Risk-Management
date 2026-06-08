@@ -674,6 +674,36 @@ class TradeManager:
 
         return triggered
 
+    def check_pending_spreads_for_security(self, security_id: str, ltp: float) -> list[dict]:
+        """Check pending spreads for a specific security on a WebSocket tick. No API call."""
+        triggered = []
+        for spread in list(self._pending_spreads.values()):
+            if spread.status != "PENDING":
+                continue
+            if str(spread.sell_security_id) != str(security_id):
+                continue
+            if ltp <= spread.sell_trigger_price:
+                spread.status = "TRIGGERED"
+                spread.triggered_at = time.time()
+                triggered.append({
+                    "spread_id": spread.spread_id,
+                    "sell_security_id": spread.sell_security_id,
+                    "sell_exchange_segment": spread.sell_exchange_segment,
+                    "sell_price": spread.sell_price,
+                    "sell_order_type": spread.sell_order_type,
+                    "sell_sl": spread.sell_sl,
+                    "buy_security_id": spread.buy_security_id,
+                    "buy_exchange_segment": spread.buy_exchange_segment,
+                    "quantity": spread.quantity,
+                    "ltp": ltp,
+                })
+                logger.warning(
+                    "Spread %s TRIGGERED via tick: sell %s LTP=%.2f <= trigger=%.2f",
+                    spread.spread_id, spread.sell_security_id,
+                    ltp, spread.sell_trigger_price,
+                )
+        return triggered
+
     def update_spread_status(self, spread_id: str, status: str,
                              hedge_order_id: str = "", sell_order_id: str = "",
                              error_message: str = ""):
