@@ -2714,8 +2714,8 @@ DASHBOARD_HTML = """
             if (_ocAutoTimer) return;  // Already running
             _ocAutoTimer = setInterval(function() {
                 loadOptionChain(true);
-            }, 2000);
-            console.log('[OC] Auto-refresh started (2s interval)');
+            }, 1000);
+            console.log('[OC] Auto-refresh started (1s interval)');
             var statusEl = document.getElementById('oc-auto-status');
             if (statusEl) statusEl.style.color = '#3fb950';
         }
@@ -3657,7 +3657,8 @@ def api_option_chain_expiries():
 
 
 _oc_data_cache: dict = {}  # (underlying, expiry) -> (timestamp, response_dict)
-_OC_CACHE_TTL = 2.0  # seconds — match frontend refresh rate
+_OC_CACHE_TTL = 1.0  # seconds — match frontend refresh rate
+_bse_last_spot: float = 0.0  # last valid SENSEX spot from put-call parity
 
 # Exchange segment mapping for MarketFeed subscription (NSE_FNO default for options)
 _OC_SEG_MAP = {"NSE_FNO": 1, "BSE_FNO": 2, "NSE_EQ": 3, "BSE_EQ": 4}
@@ -3845,6 +3846,14 @@ def api_option_chain_data():
                                         best_diff2, best_row2 = d, row
                             if best_row2:
                                 spot = best_row2["strike"] + best_row2["ce_ltp"] - best_row2["pe_ltp"]
+
+                    # Cache valid spot; fall back to cached value if current calc failed
+                    global _bse_last_spot
+                    if spot > 0:
+                        _bse_last_spot = spot
+                    elif _bse_last_spot > 0:
+                        spot = _bse_last_spot
+                        logger.debug("BSE: using cached spot %.0f (current calc returned 0)", spot)
             except Exception as e:
                 logger.error("Option chain price fetch failed: %s", e, exc_info=True)
 
