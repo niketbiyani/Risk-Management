@@ -233,7 +233,7 @@ class PositionMonitor:
                 logger.info("No open positions — MarketFeed not started yet")
                 return
             self._subscribed_instruments = instruments
-            self._market_feed_thread = self.api.start_market_feed_async(
+            self._market_feed_thread = self.api.start_ltp_feed_async(
                 instruments, self._on_market_tick
             )
             logger.info("MarketFeed started for %d instruments", len(instruments))
@@ -284,7 +284,7 @@ class PositionMonitor:
                 merged.append(inst)
                 existing.add((inst[0], inst[1]))
         if merged:
-            self._market_feed_thread = self.api.start_market_feed_async(
+            self._market_feed_thread = self.api.start_ltp_feed_async(
                 merged, self._on_market_tick
             )
         else:

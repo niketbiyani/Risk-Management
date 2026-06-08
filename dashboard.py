@@ -3737,7 +3737,7 @@ def api_oc_subscribe_ltp():
         if (inst[0], inst[1]) not in pos_sids:
             merged.append(inst)
 
-    _monitor.api.start_market_feed_async(merged, _monitor._on_market_tick)
+    _monitor.api.start_ltp_feed_async(merged, _monitor._on_market_tick)
     return jsonify({"status": "ok", "count": len(merged)})
 
 

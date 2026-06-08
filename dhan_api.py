@@ -500,6 +500,17 @@ class DhanAPI:
         t.start()
         return t
 
+    def start_ltp_feed_async(self, instruments: list, callback) -> threading.Thread:
+        """Start LtpFeedWebSocket (depth endpoint, multi-instrument). Non-blocking."""
+        if not hasattr(self, "_ltp_feed"):
+            self._ltp_feed = None
+        if self._ltp_feed:
+            self._ltp_feed.stop()
+        token = self._context.get_access_token()
+        client_id = self._context.get_client_id()
+        self._ltp_feed = LtpFeedWebSocket(token, client_id)
+        return self._ltp_feed.start(instruments, callback)
+
     def start_order_updates_async(self, callback) -> threading.Thread:
         """Start OrderUpdate in a daemon thread with auto-reconnect. Non-blocking."""
         def _run():
@@ -516,6 +527,107 @@ class DhanAPI:
         t = threading.Thread(target=_run, daemon=True, name="OrderUpdate")
         t.start()
         return t
+
+
+# ── Multi-instrument LTP feed via depth WebSocket ─────────────────
+# Uses the same proven endpoint as the DOM depth panel, bypassing the
+# unreliable MarketFeed SDK. Best-bid price used as LTP (options have
+# thin spreads so bid ≈ last traded price).
+
+class LtpFeedWebSocket:
+    WS_URL = "wss://depth-api-feed.dhan.co/twentydepth"
+    FEED_BID = 41
+    FEED_DISCONNECT = 50
+    HEADER_SIZE = 12   # msg_len(2) + feed_code(1) + exchange_seg(1) + security_id(4) + sequence(4)
+    LEVEL_SIZE = 16    # price(f64=8) + quantity(u32=4) + orders(u32=4)
+
+    def __init__(self, access_token: str, client_id: str):
+        self._token = access_token
+        self._client_id = client_id
+        self._ws = None
+        self._stop = threading.Event()
+        self._instruments = []
+        self._callback = None
+
+    def start(self, instruments: list, callback) -> threading.Thread:
+        """Start feed. instruments: [(seg_int, security_id_str, feed_type), ...]"""
+        self.stop()
+        self._stop.clear()
+        self._callback = callback
+        seg_map = {0:"IDX_I", 1:"NSE_EQ", 2:"NSE_FNO", 3:"NSE_CURRENCY",
+                   4:"BSE_EQ", 5:"MCX_COMM", 7:"BSE_CURRENCY", 8:"BSE_FNO"}
+        self._instruments = [(str(i[1]), seg_map.get(i[0], "NSE_FNO")) for i in instruments]
+        t = threading.Thread(target=self._run, daemon=True, name="LtpFeed")
+        t.start()
+        return t
+
+    def stop(self):
+        self._stop.set()
+        try:
+            if self._ws:
+                self._ws.close()
+        except Exception:
+            pass
+
+    def _run(self):
+        token_encoded = urllib.parse.quote(self._token, safe="")
+        client_encoded = urllib.parse.quote(self._client_id, safe="")
+        url = f"{self.WS_URL}?token={token_encoded}&clientId={client_encoded}&authType=2"
+        ssl_ctx = ssl.create_default_context()
+        while not self._stop.is_set():
+            try:
+                self._ws = websocket.WebSocketApp(
+                    url,
+                    on_open=self._on_open,
+                    on_message=self._on_message,
+                    on_error=lambda ws, e: logger.error("LtpFeed error: %s", e),
+                    on_close=lambda ws, c, m: None,
+                )
+                self._ws.run_forever(ping_interval=30, ping_timeout=10,
+                                     sslopt={"context": ssl_ctx})
+            except Exception as e:
+                logger.error("LtpFeed run_forever: %s", e)
+            if not self._stop.is_set():
+                logger.info("LtpFeed: reconnecting in 2s")
+                self._stop.wait(2)
+
+    def _on_open(self, ws):
+        payload = json.dumps({
+            "RequestCode": 23,
+            "InstrumentCount": len(self._instruments),
+            "InstrumentList": [
+                {"ExchangeSegment": seg, "SecurityId": sid}
+                for sid, seg in self._instruments
+            ],
+        })
+        ws.send(payload)
+        logger.info("LtpFeed: connected, subscribed %d instruments", len(self._instruments))
+
+    def _on_message(self, ws, message):
+        if not isinstance(message, (bytes, bytearray)):
+            return
+        data = message
+        offset = 0
+        total = len(data)
+        while offset < total:
+            if total - offset < self.HEADER_SIZE:
+                break
+            msg_len    = struct.unpack_from("<h", data, offset)[0]
+            feed_code  = struct.unpack_from("<B", data, offset + 2)[0]
+            security_id = struct.unpack_from("<i", data, offset + 4)[0]
+            pkt_size = msg_len if msg_len > 0 else (self.HEADER_SIZE + self.LEVEL_SIZE)
+            if offset + pkt_size > total:
+                break
+            if feed_code == self.FEED_BID:
+                # Best bid price is first level, float64 right after header
+                if total - offset >= self.HEADER_SIZE + 8:
+                    price = struct.unpack_from("<d", data, offset + self.HEADER_SIZE)[0]
+                    if price > 0 and self._callback:
+                        self._callback({"security_id": str(security_id), "LTP": f"{price:.2f}"})
+            elif feed_code == self.FEED_DISCONNECT:
+                err_code = struct.unpack_from("<I", data, offset + 8)[0] if total - offset >= 12 else 0
+                logger.warning("LtpFeed: server disconnect code=%d", err_code)
+            offset += max(pkt_size, self.HEADER_SIZE)
 
 
 # ── 20-Level Depth of Market WebSocket ────────────────────────────
