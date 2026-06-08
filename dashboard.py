@@ -3661,6 +3661,8 @@ def api_reload_instruments():
     _bse_last_spot = 0.0
     _bse_futures_sids.clear()
     _oc_atm_cache.clear()
+    _oc_ltp_subscribed.clear()
+    _oc_ltp_instruments.clear()
     return jsonify({"status": "ok", "instruments_loaded": count})
 
 
@@ -3757,21 +3759,27 @@ def api_oc_subscribe_ltp():
     if not instruments_req:
         return jsonify({"status": "empty"})
 
+    global _oc_ltp_instruments
     # Use exchange segment from each instrument (client passes 'BSE_FNO' for SENSEX)
-    instruments = []
     for i in instruments_req:
         if not i.get("sid"):
             continue
+        sid = str(i["sid"])
         seg_key = i.get("exchange_segment", "NSE_FNO")
         seg_int = _OC_SEG_MAP.get(seg_key, 1)
-        instruments.append((seg_int, str(i["sid"]), 15))
+        _oc_ltp_instruments[sid] = (seg_int, sid, 15)
+
     new_sids = {str(i["sid"]) for i in instruments_req if i.get("sid")}
 
-    # Only restart feed if the subscribed set has changed
-    if new_sids == _oc_ltp_subscribed:
+    # Only restart feed if there are genuinely new SIDs not already subscribed.
+    # Never shrink the set — once a strike is subscribed it stays subscribed so
+    # _ltpCache always has a warm value when the strike re-enters the display window.
+    truly_new = new_sids - _oc_ltp_subscribed
+    if not truly_new:
         return jsonify({"status": "unchanged"})
 
-    _oc_ltp_subscribed = new_sids
+    _oc_ltp_subscribed = _oc_ltp_subscribed | new_sids
+    instruments = list(_oc_ltp_instruments.values())
 
     # For SENSEX/BANKEX: also subscribe nearest futures for real-time spot
     underlying = data.get("underlying", "")
@@ -5103,6 +5111,8 @@ def emit_sl_tp_trigger(trigger_data: dict):
 
 # Security IDs subscribed for real-time option chain LTP updates
 _oc_ltp_subscribed: set = set()
+# Full instrument tuples for all ever-subscribed OC strikes: sid -> (seg_int, sid, 15)
+_oc_ltp_instruments: dict = {}
 # Security IDs of BSE index futures — ticks update _bse_last_spot in real-time
 _bse_futures_sids: set = set()
 
