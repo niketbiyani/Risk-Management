@@ -3707,6 +3707,7 @@ def _start_bse_spot_updater():
     """Background thread: fetches nearest SENSEX futures LTP every 3s."""
     import time as _time
     def _run():
+        global _bse_last_spot
         while True:
             try:
                 if _monitor and _instrument_cache:
@@ -3722,6 +3723,7 @@ def _start_bse_spot_updater():
                                 fut_inst = inst
                     if fut_inst:
                         ltp_res = _monitor.api.get_ltp({"BSE_FNO": [int(fut_inst.security_id)]})
+                        logger.debug("BSE spot raw response: %s", ltp_res)
                         if isinstance(ltp_res, dict):
                             d = ltp_res.get("data", ltp_res)
                             if isinstance(d, dict) and "data" in d:
@@ -3731,10 +3733,12 @@ def _start_bse_spot_updater():
                                     for val in seg_data.values():
                                         ltp_val = val.get("last_price", 0) if isinstance(val, dict) else val
                                         if ltp_val and float(ltp_val) > 0:
-                                            global _bse_last_spot
                                             _bse_last_spot = float(ltp_val)
-            except Exception:
-                pass
+                                            logger.info("BSE spot updated: %.2f (from %s)", _bse_last_spot, fut_inst.trading_symbol)
+                    else:
+                        logger.warning("BSE spot updater: no SENSEX FUTIDX found in instrument cache")
+            except Exception as e:
+                logger.error("BSE spot updater error: %s", e)
             _time.sleep(3)
     t = threading.Thread(target=_run, daemon=True, name="BseSpotUpdater")
     t.start()
