@@ -3959,9 +3959,8 @@ def api_option_chain_data():
                             if best_row2:
                                 spot = best_row2["strike"] + best_row2["ce_ltp"] - best_row2["pe_ltp"]
 
-                    # Refine cached spot if put-call parity gave a better value
-                    if spot > 0:
-                        _bse_last_spot = spot
+                    # Put-call parity gives a local estimate for ATM centering only;
+                    # don't overwrite _bse_last_spot (futures-based, more reliable)
             except Exception as e:
                 logger.error("Option chain price fetch failed: %s", e, exc_info=True)
 
@@ -3978,7 +3977,7 @@ def api_option_chain_data():
                 strike_interval = chain[1]["strike"] - chain[0]["strike"]
             else:
                 strike_interval = 50
-            hysteresis = strike_interval * 0.4
+            hysteresis = strike_interval * 0.6
 
             prev_atm_strike, prev_atm_idx = _oc_atm_cache.get(cache_key, (None, None))
             if prev_atm_strike is not None and abs(spot - prev_atm_strike) < hysteresis:
