@@ -2558,6 +2558,8 @@ DASHBOARD_HTML = """
         var _ocAutoTimer = null;
         var _ocRefreshing = false;  // Prevent overlapping requests
 
+        var _ocRenderedKey = '';  // tracks last rendered chain structure
+
         function renderOcChain(d, expiry) {
             var body = document.getElementById('oc-body');
             var spot = d.spot || 0;
@@ -2569,9 +2571,37 @@ DASHBOARD_HTML = """
             var chain = d.chain || [];
             if (chain.length === 0) {
                 body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#484f58;padding:20px;">No strikes found</td></tr>';
+                _ocRenderedKey = '';
                 return;
             }
 
+            // Build a key representing the chain structure (strikes + expiry)
+            var structKey = expiry + '|' + chain.map(function(r){return r.strike;}).join(',');
+
+            if (structKey === _ocRenderedKey) {
+                // Structure unchanged — update LTP values in-place only (no flicker)
+                chain.forEach(function(row) {
+                    var ceSid = String(row.ce_security_id || '');
+                    var peSid = String(row.pe_security_id || '');
+                    if (ceSid && !_ltpCache[ceSid]) {
+                        var el = document.getElementById('oc-ltp-' + ceSid);
+                        if (el) el.textContent = row.ce_ltp ? row.ce_ltp.toFixed(2) : '-';
+                    }
+                    if (peSid && !_ltpCache[peSid]) {
+                        var el = document.getElementById('oc-ltp-' + peSid);
+                        if (el) el.textContent = row.pe_ltp ? row.pe_ltp.toFixed(2) : '-';
+                    }
+                });
+                // Always apply WebSocket cache on top
+                Object.keys(_ltpCache).forEach(function(sid) {
+                    var el = document.getElementById('oc-ltp-' + sid);
+                    if (el) el.textContent = parseFloat(_ltpCache[sid]).toFixed(2);
+                });
+                return;
+            }
+
+            // Structure changed — full rebuild
+            _ocRenderedKey = structKey;
             var atmIdx = Math.floor(chain.length / 2);
             var html = '';
             chain.forEach(function(row, i) {
@@ -2619,7 +2649,7 @@ DASHBOARD_HTML = """
                 html += '</tr>';
             });
             body.innerHTML = html;
-            // Re-apply any live WebSocket prices that arrived before this render
+            // Apply WebSocket cache on top of initial REST values
             Object.keys(_ltpCache).forEach(function(sid) {
                 var el = document.getElementById('oc-ltp-' + sid);
                 if (el) el.textContent = parseFloat(_ltpCache[sid]).toFixed(2);
@@ -3782,8 +3812,29 @@ def api_option_chain_data():
                                 row["ce_ltp"] = strike_data["ce_ltp"]
                                 row["pe_ltp"] = strike_data["pe_ltp"]
                 else:
+                    global _bse_last_spot
                     # BSE: Dhan option_chain API doesn't support BSE index LTP.
                     # The full chain has 190+ strikes; Dhan limits ticker_data to ~40 IDs.
+                    # Step 0: Fetch SENSEX spot directly from intraday_minute_data (reliable)
+                    try:
+                        from datetime import date as _date
+                        today_str = str(_date.today())
+                        sensex_raw = _monitor.api.dhan.intraday_minute_data(
+                            security_id="1", exchange_segment="BSE_EQ",
+                            instrument_type="INDEX", from_date=today_str, to_date=today_str
+                        )
+                        if isinstance(sensex_raw, dict):
+                            s_data = sensex_raw.get("data", sensex_raw)
+                            closes = s_data.get("close", []) if isinstance(s_data, dict) else []
+                            if closes:
+                                spot = float(closes[-1])
+                                _bse_last_spot = spot
+                                logger.debug("BSE: SENSEX spot from intraday_minute_data: %.0f", spot)
+                    except Exception as _se:
+                        logger.debug("BSE: intraday_minute_data spot fetch failed: %s", _se)
+                    # Fall back to cached spot if intraday fetch failed
+                    if spot == 0 and _bse_last_spot > 0:
+                        spot = _bse_last_spot
                     # Two-pass approach:
                     #   Pass 1: sample every 10th strike (~20 IDs) to estimate spot
                     #   Pass 2: fetch ATM±12 (~50 IDs) using estimated spot
@@ -3847,13 +3898,9 @@ def api_option_chain_data():
                             if best_row2:
                                 spot = best_row2["strike"] + best_row2["ce_ltp"] - best_row2["pe_ltp"]
 
-                    # Cache valid spot; fall back to cached value if current calc failed
-                    global _bse_last_spot
+                    # Refine cached spot if put-call parity gave a better value
                     if spot > 0:
                         _bse_last_spot = spot
-                    elif _bse_last_spot > 0:
-                        spot = _bse_last_spot
-                        logger.debug("BSE: using cached spot %.0f (current calc returned 0)", spot)
             except Exception as e:
                 logger.error("Option chain price fetch failed: %s", e, exc_info=True)
 
