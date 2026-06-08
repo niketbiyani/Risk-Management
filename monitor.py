@@ -55,6 +55,7 @@ class PositionMonitor:
         self._market_feed_thread: threading.Thread | None = None
         self._order_update_thread: threading.Thread | None = None
         self._subscribed_instruments: list = []
+        self._extra_instruments: list = []   # OC / UI-requested instruments, preserved across position changes
         self._sl_tp_executing: set = set()
 
     def start(self):
@@ -262,19 +263,26 @@ class PositionMonitor:
         return instruments
 
     def _refresh_market_feed(self, positions: list[dict]):
-        """Restart MarketFeed if the set of open position instruments has changed."""
-        new_instruments = self._build_instrument_list(positions)
-        new_set = set((i[0], i[1]) for i in new_instruments)
+        """Restart MarketFeed only when position set changes, preserving extra (OC) instruments."""
+        new_pos = self._build_instrument_list(positions)
+        new_set = set((i[0], i[1]) for i in new_pos)
         old_set = set((i[0], i[1]) for i in self._subscribed_instruments)
 
         if new_set == old_set:
             return
 
         logger.info("Position change detected — refreshing MarketFeed subscriptions")
-        self._subscribed_instruments = new_instruments
-        if new_instruments:
+        self._subscribed_instruments = new_pos
+        # Merge with extra (OC) instruments, dedup by (seg, sid)
+        merged = list(new_pos)
+        existing = {(i[0], i[1]) for i in new_pos}
+        for inst in self._extra_instruments:
+            if (inst[0], inst[1]) not in existing:
+                merged.append(inst)
+                existing.add((inst[0], inst[1]))
+        if merged:
             self._market_feed_thread = self.api.start_market_feed_async(
-                new_instruments, self._on_market_tick
+                merged, self._on_market_tick
             )
         else:
             logger.info("No open positions — MarketFeed paused")

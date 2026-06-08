@@ -1232,6 +1232,8 @@ DASHBOARD_HTML = """
                 socket.on('status_update', safeUpdate);
             }
             socket.on('oc_ltp', function(data) {
+                // Cache every tick so re-renders don't lose live prices
+                _ltpCache[String(data.sid)] = data.ltp;
                 // Real-time LTP update for option chain cells
                 var el = document.getElementById('oc-ltp-' + data.sid);
                 if (el) el.textContent = parseFloat(data.ltp).toFixed(2);
@@ -2617,6 +2619,11 @@ DASHBOARD_HTML = """
                 html += '</tr>';
             });
             body.innerHTML = html;
+            // Re-apply any live WebSocket prices that arrived before this render
+            Object.keys(_ltpCache).forEach(function(sid) {
+                var el = document.getElementById('oc-ltp-' + sid);
+                if (el) el.textContent = parseFloat(_ltpCache[sid]).toFixed(2);
+            });
             restoreSpreadPillHighlights();
         }
 
@@ -2754,6 +2761,8 @@ DASHBOARD_HTML = """
         });
 
         initOptionChain();
+
+        var _ltpCache = {};  // sid → ltp — persists across re-renders
 
         // ── Spread Quick Entry ───────────────────────────────────────────
         var _spreadSellLeg = null;  // {securityId, strike, ltp, optType}
@@ -3674,6 +3683,9 @@ def api_oc_subscribe_ltp():
         return jsonify({"status": "unchanged"})
 
     _oc_ltp_subscribed = new_sids
+
+    # Store as extra instruments so position-change refreshes don't drop them
+    _monitor._extra_instruments = instruments
 
     # Merge with existing position instruments so SL/TP feed stays intact
     pos_instruments = _monitor._subscribed_instruments or []
