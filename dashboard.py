@@ -3173,7 +3173,19 @@ DASHBOARD_HTML = """
 
         function closeJournalEntry(securityId, sellExitPrice, buyExitPrice, pnl) {
             var entryId = _journalOpenEntries[securityId];
-            if (!entryId) return;
+            if (!entryId) {
+                // Not in local map (e.g. page was refreshed mid-trade) — ask server
+                fetch('/api/journal/open_entry/' + encodeURIComponent(securityId))
+                    .then(function(r){ return r.json(); })
+                    .then(function(res) {
+                        if (res.entry_id) {
+                            _journalOpenEntries[securityId] = res.entry_id;
+                            closeJournalEntry(securityId, sellExitPrice, buyExitPrice, pnl);
+                        }
+                    })
+                    .catch(function(){});
+                return;
+            }
             captureNiftyScreenshot(null, sellExitPrice, function(exitImg) {
                 fetch('/api/journal/entry/' + entryId, {
                     method: 'PUT',
@@ -4656,6 +4668,20 @@ def api_journal_entries():
         return jsonify([])
     limit = int(request.args.get("limit", 100))
     return jsonify(_monitor.state.journal.get_entries(limit=limit))
+
+
+@app.route("/api/journal/open_entry/<security_id>")
+def api_journal_open_entry(security_id):
+    """Return the most recent open journal entry for a sell leg security_id."""
+    if not _monitor:
+        return jsonify({"entry_id": None})
+    journal = _monitor.state.journal
+    with journal._lock:
+        row = journal._conn.execute(
+            "SELECT id FROM trade_entries WHERE sell_security_id=? AND status='open' ORDER BY created_at DESC LIMIT 1",
+            (str(security_id),)
+        ).fetchone()
+    return jsonify({"entry_id": row[0] if row else None})
 
 
 @app.route("/api/journal/screenshot", methods=["POST"])
