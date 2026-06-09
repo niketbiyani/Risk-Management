@@ -2182,14 +2182,18 @@ DASHBOARD_HTML = """
             document.getElementById('exit-row-' + sid).style.display = 'none';
         }
 
-        function _placeExitOrder(sid, exSeg, prodType, qty, direction, orderType, price) {
+        function _placeExitOrder(sid, exSeg, prodType, qty, direction, orderType, price, fullQty) {
             var txn = direction > 0 ? 'SELL' : 'BUY';
-            // Cancel any live exchange SL order for this position before exiting manually,
-            // otherwise it can fire a spurious BUY after the position is flat.
-            fetch('/api/order/cancel_sl/' + encodeURIComponent(sid), { method: 'POST' })
-                .catch(function(){})  // fire-and-forget, don't block the exit
-                .finally(function() { _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price); });
-            return;
+            var isFullExit = !fullQty || qty >= fullQty;
+            // Only cancel the exchange SL when closing the full position.
+            // A partial exit still needs the SL protecting the remaining size.
+            if (isFullExit) {
+                fetch('/api/order/cancel_sl/' + encodeURIComponent(sid), { method: 'POST' })
+                    .catch(function(){})
+                    .finally(function() { _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price); });
+            } else {
+                _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price);
+            }
         }
         function _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price) {
             fetch('/api/order/place', {
@@ -2219,21 +2223,25 @@ DASHBOARD_HTML = """
         }
 
         function exitPositionMkt(sid, exSeg, prodType, qty, direction) {
-            _placeExitOrder(sid, exSeg, prodType, qty, direction, 'MARKET', 0);
+            _placeExitOrder(sid, exSeg, prodType, qty, direction, 'MARKET', 0, qty);
         }
 
         function exitPositionLmt(sid, exSeg, prodType, direction) {
+            var pos    = _openPositions.find(function(p){ return String(p.securityId) === String(sid); });
+            var fullQty = pos ? Math.abs(pos.netQty || 0) : 0;
             var qty   = parseInt(document.getElementById('exit-qty-' + sid).value) || 0;
             var price = parseFloat(document.getElementById('exit-price-' + sid).value) || 0;
             if (!qty || qty <= 0) { showToast('Enter quantity', 'warning'); return; }
             if (!price || price <= 0) { showToast('Enter price', 'warning'); return; }
-            _placeExitOrder(sid, exSeg, prodType, qty, direction, 'LIMIT', price);
+            _placeExitOrder(sid, exSeg, prodType, qty, direction, 'LIMIT', price, fullQty);
         }
 
         function exitPositionPartialMkt(sid, exSeg, prodType, direction) {
+            var pos    = _openPositions.find(function(p){ return String(p.securityId) === String(sid); });
+            var fullQty = pos ? Math.abs(pos.netQty || 0) : 0;
             var qty = parseInt(document.getElementById('exit-qty-' + sid).value) || 0;
             if (!qty || qty <= 0) { showToast('Enter quantity', 'warning'); return; }
-            _placeExitOrder(sid, exSeg, prodType, qty, direction, 'MARKET', 0);
+            _placeExitOrder(sid, exSeg, prodType, qty, direction, 'MARKET', 0, fullQty);
         }
 
         function exitAllPositions() {
