@@ -2662,6 +2662,7 @@ DASHBOARD_HTML = """
         }
 
         var _ocLtpSubscribed = false;
+        var _ocLastUnderlying = '';  // detect underlying switches to force feed restart
 
         function subscribeOcLtp(chain) {
             // Subscribe ATM±10 strikes (CE + PE) for real-time LTP updates
@@ -2679,10 +2680,12 @@ DASHBOARD_HTML = """
                 if (row.pe_security_id) instruments.push({sid: String(row.pe_security_id), type: 'PE', exchange_segment: exchange_segment});
             }
             if (!instruments.length) return;
+            var force = (underlying !== _ocLastUnderlying);
+            _ocLastUnderlying = underlying;
             fetch('/api/option_chain/subscribe_ltp', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({instruments: instruments, underlying: underlying})
+                body: JSON.stringify({instruments: instruments, underlying: underlying, force: force})
             }).catch(function(){});
             _ocLtpSubscribed = true;
         }
@@ -3775,13 +3778,14 @@ def api_oc_subscribe_ltp():
 
     new_sids = {str(i["sid"]) for i in instruments_req if i.get("sid")}
 
-    # Restart feed if there are new SIDs, OR if the feed hasn't been started in
-    # the last 60s (handles page refresh / feed drop after browser reload).
+    # Restart feed when: new SIDs appear, underlying changed (force=True),
+    # or feed hasn't been started in >60s (page refresh / feed drop).
     # Never shrink the subscribed set — warm cache persists across ATM shifts.
     global _oc_last_feed_start
+    force = data.get("force", False)
     feed_stale = (time.time() - _oc_last_feed_start) > 60
     truly_new = new_sids - _oc_ltp_subscribed
-    if not truly_new and not feed_stale:
+    if not truly_new and not force and not feed_stale:
         return jsonify({"status": "unchanged"})
 
     _oc_last_feed_start = time.time()
