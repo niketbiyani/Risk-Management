@@ -1260,12 +1260,14 @@ DASHBOARD_HTML = """
                         var ltp = data.ltp;
                         if (barSec !== _liveBarTime) {
                             _liveBarTime = barSec; _liveBarOpen = ltp;
-                            _liveBarHigh = ltp;    _liveBarLow  = ltp;
+                            _liveBarHigh = ltp;    _liveBarLow  = ltp; _liveBarVol = 0;
                         } else {
                             if (ltp > _liveBarHigh) _liveBarHigh = ltp;
                             if (ltp < _liveBarLow)  _liveBarLow  = ltp;
                         }
+                        _liveBarVol++;
                         try { _lwSeries.update({time: barSec, open: _liveBarOpen, high: _liveBarHigh, low: _liveBarLow, close: ltp}); } catch(e) {}
+                        try { if (_lwVolSeries) _lwVolSeries.update({time: barSec, value: _liveBarVol, color: ltp >= _liveBarOpen ? '#1a3a2a' : '#3a1a1a'}); } catch(e) {}
                     }
                 }
                 if (_spreadBuyLeg && String(_spreadBuyLeg.securityId) === String(data.sid)) {
@@ -2752,7 +2754,7 @@ DASHBOARD_HTML = """
                         for (var ci = 0; ci < chain.length; ci++) {
                             var row = chain[ci];
                             var ltp = 0;
-                            if (String(row.ce_security_id) === String(_spreadSellLeg.securityId)) ltp = row.ce_ltp;
+                            if (String(row.ce_security_id) === String(_spreadSellLeg.securityId)) ltp = parseFloat(row.ce_ltp) || 0;
                             else if (String(row.pe_security_id) === String(_spreadSellLeg.securityId)) ltp = row.pe_ltp;
                             if (ltp > 0) {
                                 _spreadSellLeg.ltp = ltp;
@@ -2762,12 +2764,14 @@ DASHBOARD_HTML = """
                                 var barSec = nowSec - (nowSec % 60);
                                 if (barSec !== _liveBarTime) {
                                     _liveBarTime = barSec; _liveBarOpen = ltp;
-                                    _liveBarHigh = ltp;    _liveBarLow  = ltp;
+                                    _liveBarHigh = ltp;    _liveBarLow  = ltp; _liveBarVol = 0;
                                 } else {
                                     if (ltp > _liveBarHigh) _liveBarHigh = ltp;
                                     if (ltp < _liveBarLow)  _liveBarLow  = ltp;
                                 }
+                                _liveBarVol++;
                                 try { _lwSeries.update({time: barSec, open: _liveBarOpen, high: _liveBarHigh, low: _liveBarLow, close: ltp}); } catch(e) {}
+                                try { if (_lwVolSeries) _lwVolSeries.update({time: barSec, value: _liveBarVol, color: ltp >= _liveBarOpen ? '#1a3a2a' : '#3a1a1a'}); } catch(e) {}
                                 break;
                             }
                         }
@@ -3243,13 +3247,15 @@ DASHBOARD_HTML = """
         }
 
         // ── Snapshot Chart (TradingView Lightweight Charts) ──────────────
-        var _lwChart  = null;
-        var _lwSeries = null;
+        var _lwChart     = null;
+        var _lwSeries    = null;
+        var _lwVolSeries = null;
         var _lwCurrentSecurity = null;
         var _liveBarTime = 0;
         var _liveBarOpen = 0;
         var _liveBarHigh = 0;
         var _liveBarLow  = Infinity;
+        var _liveBarVol  = 0;
 
         function initLightweightChart() {
             var container = document.getElementById('dom-chart-canvas');
@@ -3259,6 +3265,7 @@ DASHBOARD_HTML = """
                 return;
             }
             container.innerHTML = '';
+            _lwVolSeries = null;
             _lwChart = LightweightCharts.createChart(container, {
                 width:  container.clientWidth || 600,
                 height: 480,
@@ -3272,6 +3279,15 @@ DASHBOARD_HTML = """
                 upColor:'#3fb950', downColor:'#f85149',
                 borderUpColor:'#3fb950', borderDownColor:'#f85149',
                 wickUpColor:'#3fb950', wickDownColor:'#f85149',
+                priceScaleId: 'right',
+            });
+            _lwVolSeries = _lwChart.addHistogramSeries({
+                color: '#30363d',
+                priceFormat: { type: 'volume' },
+                priceScaleId: 'vol',
+            });
+            _lwChart.priceScale('vol').applyOptions({
+                scaleMargins: { top: 0.80, bottom: 0 },
             });
         }
 
@@ -3281,7 +3297,7 @@ DASHBOARD_HTML = """
         function loadChart(securityId, exchangeSegment) {
             _lwCurrentSecurity = securityId;
             _lwExchangeSegment = exchangeSegment || 'NSE_FNO';
-            _liveBarTime = 0; _liveBarOpen = 0; _liveBarHigh = 0; _liveBarLow = Infinity;
+            _liveBarTime = 0; _liveBarOpen = 0; _liveBarHigh = 0; _liveBarLow = Infinity; _liveBarVol = 0;
             if (!_lwChart) initLightweightChart();
             if (!_lwChart) return;
             _refreshChart();
@@ -3299,6 +3315,12 @@ DASHBOARD_HTML = """
                     if (!container || !_lwSeries) return;
                     if (d.candles && d.candles.length > 0) {
                         _lwSeries.setData(d.candles);
+                        if (_lwVolSeries) {
+                            _lwVolSeries.setData(d.candles.map(function(c) {
+                                return { time: c.time, value: c.volume || 0,
+                                         color: c.close >= c.open ? '#1a3a2a' : '#3a1a1a' };
+                            }));
+                        }
                         _lwChart.timeScale().scrollToRealTime();
                     }
                 })
@@ -4660,10 +4682,11 @@ def api_chart(security_id):
             if "data" in data and isinstance(data["data"], dict):
                 data = data["data"]
             timestamps = data.get("timestamp", data.get("start_Time", []))
-            opens  = data.get("open",  [])
-            highs  = data.get("high",  [])
-            lows   = data.get("low",   [])
-            closes = data.get("close", [])
+            opens   = data.get("open",   [])
+            highs   = data.get("high",   [])
+            lows    = data.get("low",    [])
+            closes  = data.get("close",  [])
+            volumes = data.get("volume", [])
             result = []
             for i, ts in enumerate(timestamps):
                 # Parse IST string as-if-UTC so chart displays correct IST times
@@ -4674,12 +4697,13 @@ def api_chart(security_id):
                         unix_ts = int(ts)
                     except (ValueError, TypeError):
                         continue
-                o  = opens[i]  if i < len(opens)  else 0
-                h  = highs[i]  if i < len(highs)  else 0
-                lo = lows[i]   if i < len(lows)   else 0
-                c  = closes[i] if i < len(closes) else 0
+                o  = opens[i]   if i < len(opens)   else 0
+                h  = highs[i]   if i < len(highs)   else 0
+                lo = lows[i]    if i < len(lows)     else 0
+                c  = closes[i]  if i < len(closes)   else 0
+                v  = volumes[i] if i < len(volumes)  else 0
                 if o > 0 and h > 0 and lo > 0 and c > 0:
-                    result.append({"time": unix_ts, "open": o, "high": h, "low": lo, "close": c})
+                    result.append({"time": unix_ts, "open": o, "high": h, "low": lo, "close": c, "volume": v})
             return result
 
         today     = _date.today()
