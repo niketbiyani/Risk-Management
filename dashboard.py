@@ -662,10 +662,7 @@ DASHBOARD_HTML = """
                     </div>
 
                     <!-- Chart Canvas (hidden by default, shown on Chart tab) -->
-                    <div style="display:none;" id="dom-chart-wrap">
-                        <div id="dom-chart-rvol-label" style="font-size:11px;color:#8b949e;padding:2px 4px;min-height:16px;"></div>
-                        <div id="dom-chart-canvas" style="height:480px;width:100%;"></div>
-                    </div>
+                    <div id="dom-chart-canvas" style="display:none;height:480px;width:100%;"></div>
 
                     <!-- Depth Chart -->
                     <div id="dom-chart" style="overflow-y:auto;">
@@ -1263,14 +1260,12 @@ DASHBOARD_HTML = """
                         var ltp = data.ltp;
                         if (barSec !== _liveBarTime) {
                             _liveBarTime = barSec; _liveBarOpen = ltp;
-                            _liveBarHigh = ltp;    _liveBarLow  = ltp; _liveBarVol = 0;
+                            _liveBarHigh = ltp;    _liveBarLow  = ltp;
                         } else {
                             if (ltp > _liveBarHigh) _liveBarHigh = ltp;
                             if (ltp < _liveBarLow)  _liveBarLow  = ltp;
                         }
-                        _liveBarVol++;
                         try { _lwSeries.update({time: barSec, open: _liveBarOpen, high: _liveBarHigh, low: _liveBarLow, close: ltp}); } catch(e) {}
-                        try { if (_lwVolSeries) _lwVolSeries.update({time: barSec, value: _liveBarVol, color: ltp >= _liveBarOpen ? '#1a3a2a' : '#3a1a1a'}); } catch(e) {}
                     }
                 }
                 if (_spreadBuyLeg && String(_spreadBuyLeg.securityId) === String(data.sid)) {
@@ -2767,14 +2762,12 @@ DASHBOARD_HTML = """
                                 var barSec = nowSec - (nowSec % 60);
                                 if (barSec !== _liveBarTime) {
                                     _liveBarTime = barSec; _liveBarOpen = ltp;
-                                    _liveBarHigh = ltp;    _liveBarLow  = ltp; _liveBarVol = 0;
+                                    _liveBarHigh = ltp;    _liveBarLow  = ltp;
                                 } else {
                                     if (ltp > _liveBarHigh) _liveBarHigh = ltp;
                                     if (ltp < _liveBarLow)  _liveBarLow  = ltp;
                                 }
-                                _liveBarVol++;
                                 try { _lwSeries.update({time: barSec, open: _liveBarOpen, high: _liveBarHigh, low: _liveBarLow, close: ltp}); } catch(e) {}
-                                try { if (_lwVolSeries) _lwVolSeries.update({time: barSec, value: _liveBarVol, color: ltp >= _liveBarOpen ? '#1a3a2a' : '#3a1a1a'}); } catch(e) {}
                                 break;
                             }
                         }
@@ -3250,15 +3243,13 @@ DASHBOARD_HTML = """
         }
 
         // ── Snapshot Chart (TradingView Lightweight Charts) ──────────────
-        var _lwChart     = null;
-        var _lwSeries    = null;
-        var _lwVolSeries = null;
+        var _lwChart  = null;
+        var _lwSeries = null;
         var _lwCurrentSecurity = null;
         var _liveBarTime = 0;
         var _liveBarOpen = 0;
         var _liveBarHigh = 0;
         var _liveBarLow  = Infinity;
-        var _liveBarVol  = 0;
 
         function initLightweightChart() {
             var container = document.getElementById('dom-chart-canvas');
@@ -3268,7 +3259,6 @@ DASHBOARD_HTML = """
                 return;
             }
             container.innerHTML = '';
-            _lwVolSeries = null;
             _lwChart = LightweightCharts.createChart(container, {
                 width:  container.clientWidth || 600,
                 height: 480,
@@ -3282,54 +3272,16 @@ DASHBOARD_HTML = """
                 upColor:'#3fb950', downColor:'#f85149',
                 borderUpColor:'#3fb950', borderDownColor:'#f85149',
                 wickUpColor:'#3fb950', wickDownColor:'#f85149',
-                priceScaleId: 'right',
-            });
-            _lwVolSeries = _lwChart.addHistogramSeries({
-                color: '#30363d',
-                priceFormat: { type: 'volume' },
-                priceScaleId: 'vol',
-            });
-            _lwChart.priceScale('vol').applyOptions({
-                scaleMargins: { top: 0.80, bottom: 0 },
-            });
-            // Show RVOL on crosshair hover
-            _lwChart.subscribeCrosshairMove(function(param) {
-                var label = document.getElementById('dom-chart-rvol-label');
-                if (!label) return;
-                if (!param || !param.time) { label.textContent = ''; return; }
-                var c = _lwCandleMap[param.time];
-                if (!c) { label.textContent = ''; return; }
-                var rv = c.rvol;
-                if (rv === null || rv === undefined) {
-                    label.textContent = 'Vol: ' + (c.volume || 0).toLocaleString();
-                } else {
-                    var color = rv >= 2 ? '#f0883e' : rv >= 1 ? '#8b949e' : '#484f58';
-                    label.innerHTML = 'Vol: ' + (c.volume || 0).toLocaleString() +
-                        ' <span style="color:' + color + ';font-weight:700;">RVOL ' + rv.toFixed(1) + 'x</span>';
-                }
             });
         }
 
         var _lwRefreshTimer = null;
         var _lwExchangeSegment = 'NSE_FNO';
-        var _lwCandleMap = {};  // time → rvol, for crosshair label
-
-        function _rvolColor(rvol, isUp) {
-            // No RVOL data (prev-day candles or early session) — dim grey
-            if (rvol === null || rvol === undefined) return isUp ? '#1a3a2a' : '#3a1a1a';
-            // Colour intensity scales with RVOL:
-            // <0.5× very dim | 0.5-1× dim | 1-2× normal | 2-3× bright | >3× max bright
-            if (rvol >= 3.0) return isUp ? '#00ff88' : '#ff4444';
-            if (rvol >= 2.0) return isUp ? '#3fb950' : '#f85149';
-            if (rvol >= 1.0) return isUp ? '#1e6a30' : '#7a1a1a';
-            if (rvol >= 0.5) return isUp ? '#163a20' : '#4a1010';
-            return isUp ? '#0d2117' : '#2a0a0a';
-        }
 
         function loadChart(securityId, exchangeSegment) {
             _lwCurrentSecurity = securityId;
             _lwExchangeSegment = exchangeSegment || 'NSE_FNO';
-            _liveBarTime = 0; _liveBarOpen = 0; _liveBarHigh = 0; _liveBarLow = Infinity; _liveBarVol = 0;
+            _liveBarTime = 0; _liveBarOpen = 0; _liveBarHigh = 0; _liveBarLow = Infinity;
             if (!_lwChart) initLightweightChart();
             if (!_lwChart) return;
             _refreshChart();
@@ -3346,15 +3298,7 @@ DASHBOARD_HTML = """
                 .then(function(d) {
                     if (!container || !_lwSeries) return;
                     if (d.candles && d.candles.length > 0) {
-                        _lwCandleMap = {};
-                        d.candles.forEach(function(c){ _lwCandleMap[c.time] = c; });
                         _lwSeries.setData(d.candles);
-                        if (_lwVolSeries) {
-                            _lwVolSeries.setData(d.candles.map(function(c) {
-                                return { time: c.time, value: c.volume || 0,
-                                         color: _rvolColor(c.rvol, c.close >= c.open) };
-                            }));
-                        }
                         _lwChart.timeScale().scrollToRealTime();
                     }
                 })
@@ -3363,19 +3307,18 @@ DASHBOARD_HTML = """
 
         function switchDomTab(tab) {
             var depthDiv = document.getElementById('dom-chart');
-            var chartWrap = document.getElementById('dom-chart-wrap');
-            var chartDiv  = document.getElementById('dom-chart-canvas');
-            var depthBtn  = document.getElementById('dom-tab-depth');
-            var chartBtn  = document.getElementById('dom-tab-chart');
+            var chartDiv = document.getElementById('dom-chart-canvas');
+            var depthBtn = document.getElementById('dom-tab-depth');
+            var chartBtn = document.getElementById('dom-tab-chart');
             if (tab === 'chart') {
-                depthDiv.style.display  = 'none';
-                chartWrap.style.display = 'block';
+                depthDiv.style.display = 'none';
+                chartDiv.style.display = 'block';
                 depthBtn.style.fontWeight = '400'; depthBtn.style.borderBottomColor = 'transparent'; depthBtn.style.color = '#8b949e';
                 chartBtn.style.fontWeight = '700'; chartBtn.style.borderBottomColor = '#3fb950';    chartBtn.style.color = '#3fb950';
                 if (_lwChart) _lwChart.applyOptions({width: chartDiv.clientWidth || 600, height: 480});
             } else {
-                depthDiv.style.display  = 'block';
-                chartWrap.style.display = 'none';
+                depthDiv.style.display = 'block';
+                chartDiv.style.display = 'none';
                 depthBtn.style.fontWeight = '700'; depthBtn.style.borderBottomColor = '#3fb950';    depthBtn.style.color = '#3fb950';
                 chartBtn.style.fontWeight = '400'; chartBtn.style.borderBottomColor = 'transparent'; chartBtn.style.color = '#8b949e';
             }
@@ -4717,11 +4660,10 @@ def api_chart(security_id):
             if "data" in data and isinstance(data["data"], dict):
                 data = data["data"]
             timestamps = data.get("timestamp", data.get("start_Time", []))
-            opens   = data.get("open",   [])
-            highs   = data.get("high",   [])
-            lows    = data.get("low",    [])
-            closes  = data.get("close",  [])
-            volumes = data.get("volume", [])
+            opens  = data.get("open",  [])
+            highs  = data.get("high",  [])
+            lows   = data.get("low",   [])
+            closes = data.get("close", [])
             result = []
             for i, ts in enumerate(timestamps):
                 # Parse IST string as-if-UTC so chart displays correct IST times
@@ -4732,13 +4674,12 @@ def api_chart(security_id):
                         unix_ts = int(ts)
                     except (ValueError, TypeError):
                         continue
-                o  = opens[i]   if i < len(opens)   else 0
-                h  = highs[i]   if i < len(highs)   else 0
-                lo = lows[i]    if i < len(lows)     else 0
-                c  = closes[i]  if i < len(closes)   else 0
-                v  = volumes[i] if i < len(volumes)  else 0
+                o  = opens[i]  if i < len(opens)  else 0
+                h  = highs[i]  if i < len(highs)  else 0
+                lo = lows[i]   if i < len(lows)   else 0
+                c  = closes[i] if i < len(closes) else 0
                 if o > 0 and h > 0 and lo > 0 and c > 0:
-                    result.append({"time": unix_ts, "open": o, "high": h, "low": lo, "close": c, "volume": v})
+                    result.append({"time": unix_ts, "open": o, "high": h, "low": lo, "close": c})
             return result
 
         today     = _date.today()
@@ -4754,20 +4695,6 @@ def api_chart(security_id):
 
         prev_candles  = _parse_candles(prev_raw)
         today_candles = _parse_candles(today_raw)
-
-        # Compute intraday RVOL for today's candles:
-        # rvol = thisBarVol / avg(all previous bars today)
-        # Requires at least 5 bars of history before showing a value.
-        MIN_BARS = 5
-        cumvol = 0
-        for i, c in enumerate(today_candles):
-            if i < MIN_BARS:
-                c["rvol"] = None
-            else:
-                avg = cumvol / i  # avg of bars 0..i-1
-                c["rvol"] = round(c["volume"] / avg, 2) if avg > 0 else None
-            cumvol += c["volume"]
-
         candles = prev_candles + today_candles
 
         logger.info("Chart %s: %d prev-day + %d today candles", security_id,
