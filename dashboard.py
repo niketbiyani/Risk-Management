@@ -2184,6 +2184,14 @@ DASHBOARD_HTML = """
 
         function _placeExitOrder(sid, exSeg, prodType, qty, direction, orderType, price) {
             var txn = direction > 0 ? 'SELL' : 'BUY';
+            // Cancel any live exchange SL order for this position before exiting manually,
+            // otherwise it can fire a spurious BUY after the position is flat.
+            fetch('/api/order/cancel_sl/' + encodeURIComponent(sid), { method: 'POST' })
+                .catch(function(){})  // fire-and-forget, don't block the exit
+                .finally(function() { _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price); });
+            return;
+        }
+        function _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price) {
             fetch('/api/order/place', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -4321,6 +4329,27 @@ def api_calculate_size():
 
 
 # ── Spread Orders ──────────────────────────────────────────────────
+
+@app.route("/api/order/cancel_sl/<security_id>", methods=["POST"])
+def api_cancel_sl(security_id):
+    """Cancel the exchange-level SL order for a position before manual exit."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "Monitor not initialized"}), 500
+    sl_config = _monitor.trade_mgr._sl_tp_orders.get(str(security_id))
+    if not sl_config:
+        return jsonify({"status": "ok", "message": "no sl registered"})
+    order_id = sl_config.exchange_sl_order_id
+    if not order_id:
+        return jsonify({"status": "ok", "message": "no exchange sl order id"})
+    try:
+        _monitor.api.cancel_order(order_id)
+        sl_config.exchange_sl_order_id = None
+        logger.info("Cancelled exchange SL order %s for security %s", order_id, security_id)
+        return jsonify({"status": "ok", "cancelled": order_id})
+    except Exception as e:
+        logger.warning("Failed to cancel SL order %s: %s", order_id, e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @app.route("/api/order/place_spread", methods=["POST"])
 def api_place_spread():

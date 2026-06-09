@@ -124,6 +124,7 @@ class StopLossTarget:
     trailing_sl_points: float = 0.0
     trailing_sl_trigger: float = 0.0  # Move SL after this profit
     current_sl_price: Optional[float] = None  # Actual current SL (may differ if trailing)
+    exchange_sl_order_id: Optional[str] = None  # Dhan order ID for exchange STOP_LOSS_MARKET
     is_active: bool = True
 
 
@@ -334,7 +335,7 @@ class TradeManager:
 
     def set_stop_loss(self, security_id: str, sl_price: float,
                       trailing: bool = False, trail_points: float = 0,
-                      trail_trigger: float = 0):
+                      trail_trigger: float = 0, exchange_sl_order_id: str = ""):
         """Set or update stop loss for a position."""
         key = security_id
         if key in self._sl_tp_orders:
@@ -343,6 +344,8 @@ class TradeManager:
             self._sl_tp_orders[key].trailing_sl = trailing
             self._sl_tp_orders[key].trailing_sl_points = trail_points
             self._sl_tp_orders[key].trailing_sl_trigger = trail_trigger
+            if exchange_sl_order_id:
+                self._sl_tp_orders[key].exchange_sl_order_id = exchange_sl_order_id
         else:
             self._sl_tp_orders[key] = StopLossTarget(
                 position_security_id=security_id,
@@ -351,8 +354,10 @@ class TradeManager:
                 trailing_sl=trailing,
                 trailing_sl_points=trail_points,
                 trailing_sl_trigger=trail_trigger,
+                exchange_sl_order_id=exchange_sl_order_id or None,
             )
-        logger.info("SL set for %s: ₹%.2f (trailing=%s)", security_id, sl_price, trailing)
+        logger.info("SL set for %s: ₹%.2f (trailing=%s, exchange_order=%s)",
+                    security_id, sl_price, trailing, exchange_sl_order_id or "none")
 
     def set_take_profit(self, security_id: str, tp_price: float):
         """Set or update take profit for a position."""

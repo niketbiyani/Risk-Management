@@ -563,6 +563,7 @@ class PositionMonitor:
                         price=0,
                         trigger_price=sell_sl,
                     )
+                    sl_order_id = ""
                     if isinstance(sl_result, dict) and sl_result.get("status") == "failure":
                         logger.warning("Spread %s: exchange SL order failed: %s — falling back to monitored SL only",
                                        spread_id, sl_result.get("remarks", sl_result))
@@ -571,11 +572,13 @@ class PositionMonitor:
                         logger.info("Spread %s: exchange SL placed @ trigger %.2f (order: %s)",
                                     spread_id, sell_sl, sl_order_id)
                 except Exception as sl_err:
+                    sl_order_id = ""
                     logger.warning("Spread %s: exchange SL placement failed: %s — monitored SL still active",
                                    spread_id, sl_err)
                 self.trade_mgr.set_stop_loss(
                     security_id=spread_action["sell_security_id"],
                     sl_price=sell_sl,
+                    exchange_sl_order_id=sl_order_id,
                 )
                 logger.info("Spread %s: monitored SL set at %.2f for sell leg", spread_id, sell_sl)
 
