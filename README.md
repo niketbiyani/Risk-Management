@@ -53,7 +53,7 @@ Journal: `http://YOUR_VPS_IP:5555/journal`
 - Full chain rendered with CE/PE LTP, OI, IV, strike
 - Each row has **[S]** and **[B]** pill buttons for one-click spread leg selection
 - **Real-time LTP** for ATM±10 strikes via single DepthWebSocket (<50ms latency) — updates cells in-place without re-rendering
-- REST poll every 2s for OI/IV/full chain (server-side 2s cache prevents Dhan rate-limit)
+- REST poll every 2s for **OI and IV data only** (LTP no longer comes from REST)
 - ATM centering with **hysteresis** (±30pts) to prevent flickering at strike boundaries
 - **SENSEX**: two-pass `ticker_data` fetch (Dhan limit ~9 IDs/call) — pass 1 samples every 10th strike to find ATM area, pass 2 fetches ATM±8 precisely. Spot derived from nearest SENSEX FUTIDX LTP (background thread every 3s)
 - Feed auto-restarts after page refresh (60s stale check) and after underlying switch (force flag)

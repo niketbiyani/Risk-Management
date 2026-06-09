@@ -37,7 +37,7 @@ A single-VPS trade management platform for **Nifty/SENSEX options scalping** on 
 ### Option Chain
 
 - Supports **NIFTY** (NSE_FNO, IDX_I) and **SENSEX** (BSE, BSE_FNO) — BANKNIFTY was removed
-- REST poll every **2 seconds** (server-side 2s cache to prevent Dhan rate-limit) — for OI/IV and full chain data
+- REST poll every **2 seconds** for OI/IV and full chain structure — LTP no longer comes from REST (moved to DepthWebSocket)
 - **Real-time LTP for ATM±10 strikes** via DepthWebSocket (<50ms) — updates cells in-place without re-rendering table
 - ATM hysteresis: `abs(spot - prev_atm_strike) > strike_interval * 0.6` — prevents flickering at strike boundaries
 - `_ocRenderedKey` JS variable tracks chain structure (expiry + strikes); determines in-place update vs full DOM rebuild
