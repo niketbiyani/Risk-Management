@@ -630,22 +630,78 @@ class DepthWebSocket:
         self._connected = False
         self._disconnect_reason = ""
         self._security_id = None
+        self._depth_exchange_segment = "NSE_FNO"
         self._lock = threading.Lock()
         self._bids = []  # [{price, quantity, orders}, ...] up to 20
         self._asks = []
         # Connection diagnostics
         self._connect_attempts = 0
         self._last_error = ""
+        # Multi-instrument LTP tracking (OC strikes share this connection)
+        self._ltp_instruments: list = []  # [(exchange_seg_str, sid_str), ...]
+        self._ltp_sids: set = set()
+        self._ltp_callback = None
         self._ever_connected = False
 
     @property
     def security_id(self):
         return self._security_id
 
+    def set_ltp_instruments(self, instruments: list, callback):
+        """Set OC instruments for LTP-only ticks. Shares this WS connection.
+
+        instruments: list of (exchange_segment_str, security_id_str)
+        callback: called with {"security_id": sid, "LTP": "price"} on each bid tick
+        """
+        self._ltp_instruments = [(str(seg), str(sid)) for seg, sid in instruments]
+        self._ltp_sids = {str(sid) for _, sid in instruments}
+        self._ltp_callback = callback
+        if self._connected and self._ws:
+            self._send_subscribe(self._ws)
+            logger.info("Depth WS: LTP instruments updated (%d strikes)", len(instruments))
+        elif not self._running:
+            # No depth instrument yet — start a headless LTP-only connection
+            self._running = True
+            self._connected = False
+            self._thread = threading.Thread(
+                target=self._run, args=(None, None), daemon=True, name="DepthWS-LTP"
+            )
+            self._thread.start()
+
+    def _send_subscribe(self, ws):
+        """Send (re)subscribe payload with all instruments — depth + LTP."""
+        instrs = []
+        if self._security_id:
+            instrs.append({"ExchangeSegment": self._depth_exchange_segment,
+                           "SecurityId": self._security_id})
+        for seg, sid in self._ltp_instruments:
+            if sid != self._security_id:
+                instrs.append({"ExchangeSegment": seg, "SecurityId": sid})
+        if not instrs:
+            return
+        payload = json.dumps({
+            "RequestCode": 23,
+            "InstrumentCount": len(instrs),
+            "InstrumentList": instrs,
+        })
+        try:
+            ws.send(payload)
+        except Exception as e:
+            logger.error("Depth WS: _send_subscribe failed: %s", e)
+
     def subscribe(self, security_id: str, exchange_segment: str = "NSE_FNO"):
         """Connect and subscribe to 20-level depth for one instrument."""
-        self.stop()
         self._security_id = str(security_id)
+        self._depth_exchange_segment = exchange_segment
+        if self._connected and self._ws:
+            # Already connected — just add the new depth instrument
+            self._send_subscribe(self._ws)
+            with self._lock:
+                self._bids = []
+                self._asks = []
+            logger.info("Depth WS: switched depth instrument to %s (%s)", security_id, exchange_segment)
+            return
+        self.stop()
         self._running = True
         self._connected = False
         self._disconnect_reason = ""
@@ -663,7 +719,7 @@ class DepthWebSocket:
         self._thread.start()
         logger.info("Depth WS: subscribing to %s (%s)", security_id, exchange_segment)
 
-    def _run(self, security_id: str, exchange_segment: str):
+    def _run(self, security_id, exchange_segment):
         """WebSocket connection loop with auto-reconnect."""
         token_encoded = urllib.parse.quote(self._token, safe="")
         client_encoded = urllib.parse.quote(self._client_id, safe="")
@@ -673,10 +729,9 @@ class DepthWebSocket:
             f"&clientId={client_encoded}"
             f"&authType=2"
         )
-        # SSL context for environments where default certs may not work
         ssl_context = ssl.create_default_context()
-        logger.info("Depth WS: connecting to %s (security=%s, segment=%s)",
-                     self.WS_URL, security_id, exchange_segment)
+        logger.info("Depth WS: connecting (depth=%s, ltp_count=%d)",
+                    security_id, len(self._ltp_instruments))
         while self._running:
             self._connect_attempts += 1
             logger.info("Depth WS: attempt #%d for %s (%s)",
@@ -703,23 +758,13 @@ class DepthWebSocket:
                             self._connect_attempts)
                 time.sleep(2)
 
-    def _on_open(self, ws, security_id: str, exchange_segment: str):
+    def _on_open(self, ws, security_id, exchange_segment):
         """Send subscription JSON on connect."""
-        payload = json.dumps({
-            "RequestCode": 23,
-            "InstrumentCount": 1,
-            "InstrumentList": [
-                {
-                    "ExchangeSegment": exchange_segment,
-                    "SecurityId": security_id,
-                }
-            ],
-        })
-        ws.send(payload)
         self._connected = True
         self._ever_connected = True
-        logger.info("Depth WS: connected, sent subscription for %s (%s)",
-                     security_id, exchange_segment)
+        self._send_subscribe(ws)
+        logger.info("Depth WS: connected, subscribed depth=%s ltp_instruments=%d",
+                    security_id, len(self._ltp_instruments))
 
     def _on_message(self, ws, message):
         """Parse binary depth packets."""
@@ -772,14 +817,24 @@ class DepthWebSocket:
                     break
 
             if feed_code not in (self.FEED_BID, self.FEED_ASK):
-                # Unknown feed code, skip using msg_len
                 offset += packet_size
                 continue
 
-            # Skip packets for other instruments (Dhan can send stray data)
-            if self._security_id and str(pkt_security_id) != self._security_id:
-                logger.debug("Depth WS: ignoring packet for security_id=%s (subscribed=%s)",
-                             pkt_security_id, self._security_id)
+            sid_str = str(pkt_security_id)
+
+            # LTP-only instrument (OC strike) — extract best bid and call back
+            if sid_str in self._ltp_sids:
+                if feed_code == self.FEED_BID:
+                    body = data[offset + self.HEADER_SIZE:offset + packet_size]
+                    if len(body) >= 8:
+                        price = struct.unpack_from("<d", body, 0)[0]
+                        if price > 0 and self._ltp_callback:
+                            self._ltp_callback({"security_id": sid_str, "LTP": f"{price:.2f}"})
+                offset += packet_size
+                continue
+
+            # Skip packets for other instruments not in depth or ltp sets
+            if self._security_id and sid_str != self._security_id:
                 offset += packet_size
                 continue
 

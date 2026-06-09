@@ -35,9 +35,15 @@ _depth_subscribe_gen = 0  # Incremented on each new subscription to reset no-dat
 
 
 def set_monitor(monitor):
-    global _monitor
+    global _monitor, _depth_ws
     _monitor = monitor
     _start_bse_spot_updater()
+    # Create depth WS now so OC LTP subscribe works even before DOM is opened
+    if _depth_ws is None:
+        from dhan_api import DepthWebSocket
+        token = monitor.api._context.get_access_token()
+        client_id = monitor.api._context.get_client_id()
+        _depth_ws = DepthWebSocket(token, client_id)
 
 
 def set_instrument_cache(cache):
@@ -3809,24 +3815,21 @@ def api_oc_subscribe_ltp():
                     fut_inst = inst
         if fut_inst:
             bse_futures_sid = str(fut_inst.security_id)
-            instruments.append((8, bse_futures_sid, 15))  # BSE_FNO=8
+            instruments.append(("BSE_FNO", bse_futures_sid))
             new_sids.add(bse_futures_sid)
             _oc_ltp_subscribed.add(bse_futures_sid)
             _bse_futures_sids.add(bse_futures_sid)
 
-    # Store as extra instruments so position-change refreshes don't drop them
-    _monitor._extra_instruments = instruments
-
-    # Merge with existing position instruments so SL/TP feed stays intact
-    pos_instruments = _monitor._subscribed_instruments or []
-    pos_sids = {(i[0], i[1]) for i in pos_instruments}
-    merged = list(pos_instruments)
-    for inst in instruments:
-        if (inst[0], inst[1]) not in pos_sids:
-            merged.append(inst)
-
-    _monitor.api.start_ltp_feed_async(merged, _monitor._on_market_tick)
-    return jsonify({"status": "ok", "count": len(merged), "bse_futures_sid": bse_futures_sid})
+    # Route OC LTP through the existing DepthWebSocket (same connection as DOM).
+    # This avoids Dhan's concurrent-connection limit (error 805).
+    # Position instruments for SL/TP monitoring remain on their own feed (monitor.py).
+    ltp_instruments = [(seg_key, str(i["sid"])) for i in instruments_req if i.get("sid")
+                       for seg_key in [i.get("exchange_segment", "NSE_FNO")]]
+    if bse_futures_sid:
+        ltp_instruments.append(("BSE_FNO", bse_futures_sid))
+    if _depth_ws is not None:
+        _depth_ws.set_ltp_instruments(ltp_instruments, _monitor._on_market_tick)
+    return jsonify({"status": "ok", "count": len(ltp_instruments), "bse_futures_sid": bse_futures_sid})
 
 
 @app.route("/api/option_chain/data")
