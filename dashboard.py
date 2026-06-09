@@ -2190,12 +2190,12 @@ DASHBOARD_HTML = """
             if (isFullExit) {
                 fetch('/api/order/cancel_sl/' + encodeURIComponent(sid), { method: 'POST' })
                     .catch(function(){})
-                    .finally(function() { _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price); });
+                    .finally(function() { _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price, fullQty); });
             } else {
-                _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price);
+                _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price, fullQty);
             }
         }
-        function _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price) {
+        function _doPlaceExitOrder(sid, exSeg, prodType, qty, txn, orderType, price, fullQty) {
             fetch('/api/order/place', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -2213,6 +2213,15 @@ DASHBOARD_HTML = """
                     playAlert('order');
                     showToast(txn + ' ' + qty + ' @ ' + (orderType === 'LIMIT' ? '\\u20B9' + price.toFixed(2) + ' LMT' : 'MKT') + ' sent', 'success');
                     hideExitForm(sid);
+                    // Partial exit: replace exchange SL with correct remaining quantity
+                    if (fullQty && qty < fullQty) {
+                        var remaining = fullQty - qty;
+                        fetch('/api/order/replace_sl/' + encodeURIComponent(sid), {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ remaining_qty: remaining })
+                        }).catch(function(){});
+                    }
                     // Capture exit screenshot for journal if this is a tracked sell leg
                     var exitPx = orderType === 'LIMIT' ? price : 0;
                     closeJournalEntry(String(sid), exitPx, 0, null);
@@ -4338,24 +4347,77 @@ def api_calculate_size():
 
 # ── Spread Orders ──────────────────────────────────────────────────
 
-@app.route("/api/order/cancel_sl/<security_id>", methods=["POST"])
-def api_cancel_sl(security_id):
-    """Cancel the exchange-level SL order for a position before manual exit."""
-    if not _monitor:
-        return jsonify({"status": "error", "message": "Monitor not initialized"}), 500
+def _cancel_exchange_sl(security_id: str) -> str:
+    """Cancel the stored exchange SL order. Returns cancelled order_id or ''."""
     sl_config = _monitor.trade_mgr._sl_tp_orders.get(str(security_id))
     if not sl_config:
-        return jsonify({"status": "ok", "message": "no sl registered"})
+        return ""
     order_id = sl_config.exchange_sl_order_id
     if not order_id:
-        return jsonify({"status": "ok", "message": "no exchange sl order id"})
+        return ""
     try:
         _monitor.api.cancel_order(order_id)
         sl_config.exchange_sl_order_id = None
         logger.info("Cancelled exchange SL order %s for security %s", order_id, security_id)
-        return jsonify({"status": "ok", "cancelled": order_id})
+        return order_id
     except Exception as e:
         logger.warning("Failed to cancel SL order %s: %s", order_id, e)
+        return ""
+
+
+@app.route("/api/order/cancel_sl/<security_id>", methods=["POST"])
+def api_cancel_sl(security_id):
+    """Cancel the exchange-level SL order for a position before full manual exit."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "Monitor not initialized"}), 500
+    cancelled = _cancel_exchange_sl(security_id)
+    return jsonify({"status": "ok", "cancelled": cancelled})
+
+
+@app.route("/api/order/replace_sl/<security_id>", methods=["POST"])
+def api_replace_sl(security_id):
+    """After a partial exit, replace the exchange SL with the correct remaining quantity."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "Monitor not initialized"}), 500
+    data = request.json or {}
+    remaining_qty = int(data.get("remaining_qty", 0))
+    if remaining_qty <= 0:
+        return jsonify({"status": "error", "message": "invalid remaining_qty"}), 400
+
+    sl_config = _monitor.trade_mgr._sl_tp_orders.get(str(security_id))
+    if not sl_config or not sl_config.stop_loss_price:
+        return jsonify({"status": "ok", "message": "no sl registered"})
+
+    # Cancel old SL order
+    _cancel_exchange_sl(security_id)
+
+    # Place new SL order for remaining quantity
+    # Need exchange_segment — look it up from position cache
+    pos = _monitor.trade_mgr._position_cache.get(str(security_id), {})
+    exchange_segment = pos.get("exchangeSegment", "NSE_FNO")
+    product_type = pos.get("productType", "MARGIN")
+    try:
+        sl_result = _monitor.api.place_order(
+            security_id=str(security_id),
+            exchange_segment=exchange_segment,
+            transaction_type="BUY",
+            quantity=remaining_qty,
+            order_type="STOP_LOSS_MARKET",
+            product_type=product_type,
+            price=0,
+            trigger_price=sl_config.stop_loss_price,
+        )
+        new_order_id = ""
+        if isinstance(sl_result, dict) and sl_result.get("status") != "failure":
+            new_order_id = str(sl_result.get("orderId", sl_result.get("data", {}).get("orderId", "")))
+            sl_config.exchange_sl_order_id = new_order_id or None
+            logger.info("Replaced exchange SL for %s: qty=%d trigger=%.2f order=%s",
+                        security_id, remaining_qty, sl_config.stop_loss_price, new_order_id)
+        else:
+            logger.warning("Replace SL failed for %s: %s", security_id, sl_result)
+        return jsonify({"status": "ok", "new_order_id": new_order_id})
+    except Exception as e:
+        logger.warning("Replace SL exception for %s: %s", security_id, e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
