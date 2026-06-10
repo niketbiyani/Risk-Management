@@ -3756,41 +3756,30 @@ _oc_atm_cache: dict = {}    # (underlying, expiry) -> (atm_strike, atm_idx) with
 
 
 def _start_bse_spot_updater():
-    """Background thread: polls BSE India public API every 3s for live SENSEX spot price.
-    No Dhan futures involved — uses https://api.bseindia.com/BseIndiaAPI/api/getSensexData/w"""
+    """Background thread: polls Yahoo Finance every 5s for live SENSEX spot price.
+    Completely independent of Dhan API and the DepthWebSocket."""
     import time as _time
     import requests as _requests
 
-    _SENSEX_URL = "https://api.bseindia.com/BseIndiaAPI/api/getSensexData/w"
-    _HEADERS = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.bseindia.com/",
-    }
+    _URL = "https://query1.finance.yahoo.com/v8/finance/chart/%5EBSESN?interval=1m&range=1d"
+    _HEADERS = {"User-Agent": "Mozilla/5.0"}
 
     def _run():
         global _bse_last_spot
         consecutive_errors = 0
         while True:
             try:
-                resp = _requests.get(_SENSEX_URL, headers=_HEADERS, timeout=4)
+                resp = _requests.get(_URL, headers=_HEADERS, timeout=5)
                 if resp.status_code == 200:
-                    data = resp.json()
-                    # Response: {"IndexValue": "74123.45", ...} or list with similar fields
-                    val = None
-                    if isinstance(data, dict):
-                        val = data.get("IndexValue") or data.get("CurrValue") or data.get("close")
-                    elif isinstance(data, list) and data:
-                        val = data[0].get("IndexValue") or data[0].get("CurrValue")
-                    if val:
-                        spot = float(str(val).replace(",", ""))
-                        if spot > 0:
-                            _bse_last_spot = spot
-                            consecutive_errors = 0
+                    price = (resp.json()["chart"]["result"][0]["meta"]["regularMarketPrice"])
+                    if price and float(price) > 0:
+                        _bse_last_spot = float(price)
+                        consecutive_errors = 0
             except Exception as e:
                 consecutive_errors += 1
                 if consecutive_errors <= 3:
                     logger.warning("BSE spot fetch error: %s", e)
-            _time.sleep(3)
+            _time.sleep(5)
 
     t = threading.Thread(target=_run, daemon=True, name="BseSpotUpdater")
     t.start()
