@@ -3750,76 +3750,92 @@ def api_option_chain_expiries():
 
 _oc_data_cache: dict = {}  # (underlying, expiry) -> (timestamp, response_dict)
 _OC_CACHE_TTL = 1.0  # seconds — match frontend refresh rate
-_bse_last_spot: float = 0.0  # last valid SENSEX spot (updated by WS tick / fallback REST)
-_bse_last_spot_ws_time: float = 0.0  # timestamp of last WS update to _bse_last_spot
+_bse_last_spot: float = 0.0  # last valid SENSEX spot (seeded at startup, updated by DepthWebSocket ticks)
 _nse_last_spot: dict = {}   # underlying -> last valid NSE spot (survives API failures)
 _oc_atm_cache: dict = {}    # (underlying, expiry) -> (atm_strike, atm_idx) with hysteresis
 
 
 def _start_bse_spot_updater():
-    """Background thread: seeds _bse_last_spot at startup then refreshes every 30s as a fallback.
-    Real-time updates come from DepthWebSocket ticks in _on_market_tick. The slow REST poll
-    is a safety net for when the WS hasn't ticked recently."""
+    """Background thread: seeds _bse_last_spot at startup, then subscribes the nearest SENSEX
+    futures contract to the DepthWebSocket so real-time ticks update the spot automatically.
+    No periodic REST polling — that caused stale-price overwrites."""
     import time as _time
-    def _fetch_bse_spot():
-        """Return latest SENSEX futures LTP via REST, or 0.0 on failure."""
-        global _bse_last_spot
-        try:
-            if not (_monitor and _instrument_cache):
-                return 0.0
-            from datetime import date as _date
-            today_str = str(_date.today())
-            candidates = [
-                inst for inst in _instrument_cache._instruments
-                if (inst.instrument_type == "FUTIDX"
-                    and "SENSEX" in inst.trading_symbol.upper()
-                    and "50" not in inst.trading_symbol.upper()
-                    and inst.expiry_date and inst.expiry_date[:10] >= today_str)
-            ]
-            if not candidates:
-                logger.warning("BSE spot updater: no SENSEX FUTIDX found in instrument cache")
-                return 0.0
-            nearest_expiry = min(c.expiry_date[:10] for c in candidates)
-            same_expiry = [c for c in candidates if c.expiry_date[:10] == nearest_expiry]
-            fut_inst = min(same_expiry, key=lambda c: int(c.security_id))
-            ltp_res = _monitor.api.get_ltp({"BSE_FNO": [int(fut_inst.security_id)]})
-            if isinstance(ltp_res, dict):
-                d = ltp_res.get("data", ltp_res)
-                if isinstance(d, dict) and "data" in d:
-                    d = d["data"]
-                for seg_data in (d.values() if isinstance(d, dict) else []):
-                    if isinstance(seg_data, dict):
-                        for val in seg_data.values():
-                            ltp_val = val.get("last_price", 0) if isinstance(val, dict) else val
-                            if ltp_val and float(ltp_val) > 0:
-                                return float(ltp_val)
-        except Exception as e:
-            logger.error("BSE spot REST fetch error: %s", e)
-        return 0.0
+
+    def _find_nearest_sensex_futures():
+        """Return (security_id_str, trading_symbol) of nearest SENSEX FUTIDX, or (None, None)."""
+        if not _instrument_cache:
+            return None, None
+        from datetime import date as _date
+        today_str = str(_date.today())
+        candidates = [
+            inst for inst in _instrument_cache._instruments
+            if (inst.instrument_type == "FUTIDX"
+                and "SENSEX" in inst.trading_symbol.upper()
+                and "50" not in inst.trading_symbol.upper()
+                and inst.expiry_date and inst.expiry_date[:10] >= today_str)
+        ]
+        if not candidates:
+            return None, None
+        nearest_expiry = min(c.expiry_date[:10] for c in candidates)
+        same_expiry = [c for c in candidates if c.expiry_date[:10] == nearest_expiry]
+        fut_inst = min(same_expiry, key=lambda c: int(c.security_id))
+        return str(fut_inst.security_id), fut_inst.trading_symbol
 
     def _run():
-        global _bse_last_spot, _bse_last_spot_ws_time
-        # Seed at startup — retry a few times if service is still initialising
-        for attempt in range(5):
-            val = _fetch_bse_spot()
-            if val > 0:
-                _bse_last_spot = val
-                logger.info("BSE spot seeded: %.2f", val)
+        global _bse_last_spot, _bse_futures_sids
+        # Wait for monitor to be ready
+        for _ in range(10):
+            if _monitor and _instrument_cache:
                 break
+            _time.sleep(1)
+
+        sid, sym = _find_nearest_sensex_futures()
+        if not sid:
+            logger.warning("BSE spot updater: no SENSEX FUTIDX found")
+            return
+
+        # Seed initial value via REST
+        for attempt in range(5):
+            try:
+                ltp_res = _monitor.api.get_ltp({"BSE_FNO": [int(sid)]})
+                if isinstance(ltp_res, dict):
+                    d = ltp_res.get("data", ltp_res)
+                    if isinstance(d, dict) and "data" in d:
+                        d = d["data"]
+                    for seg_data in (d.values() if isinstance(d, dict) else []):
+                        if isinstance(seg_data, dict):
+                            for val in seg_data.values():
+                                ltp_val = val.get("last_price", 0) if isinstance(val, dict) else val
+                                if ltp_val and float(ltp_val) > 0:
+                                    _bse_last_spot = float(ltp_val)
+                                    logger.info("BSE spot seeded: %.2f (from %s sid=%s)", _bse_last_spot, sym, sid)
+                                    break
+                if _bse_last_spot > 0:
+                    break
+            except Exception as e:
+                logger.error("BSE spot seed attempt %d error: %s", attempt + 1, e)
             _time.sleep(3)
 
-        # Slow safety-net loop: refresh via REST every 30s only when WS hasn't ticked recently
-        while True:
-            _time.sleep(30)
-            try:
-                ws_age = _time.time() - _bse_last_spot_ws_time
-                if ws_age > 25:  # WS hasn't updated in 25s — use REST
-                    val = _fetch_bse_spot()
-                    if val > 0:
-                        _bse_last_spot = val
-                        logger.debug("BSE spot REST fallback: %.2f (WS age %.0fs)", val, ws_age)
-            except Exception:
-                pass
+        # Subscribe futures to DepthWebSocket for real-time spot updates.
+        # Retry until _depth_ws is available (it's created in set_monitor, may need a moment).
+        for _ in range(20):
+            _time.sleep(1)
+            if _depth_ws is not None:
+                break
+
+        if _depth_ws is None:
+            logger.warning("BSE spot updater: DepthWebSocket not available, spot will not update in real-time")
+            return
+
+        _bse_futures_sids.clear()
+        _bse_futures_sids.add(sid)
+        # Merge futures into existing LTP instrument list so it doesn't displace OC strikes
+        existing = list(_depth_ws._ltp_instruments)
+        existing_sids = {s for _, s in existing}
+        if sid not in existing_sids:
+            existing.append(("BSE_FNO", sid))
+        _depth_ws.set_ltp_instruments(existing, _monitor._on_market_tick)
+        logger.info("BSE spot: subscribed %s (sid=%s) to DepthWebSocket for real-time updates", sym, sid)
 
     t = threading.Thread(target=_run, daemon=True, name="BseSpotUpdater")
     t.start()

@@ -318,7 +318,6 @@ class PositionMonitor:
                 if security_id in _bse_futures_sids:
                     import dashboard as _dash
                     _dash._bse_last_spot = ltp
-                    _dash._bse_last_spot_ws_time = time.time()
                     logger.debug("BSE spot WS update: %.2f (sid=%s)", ltp, security_id)
             except Exception:
                 pass
