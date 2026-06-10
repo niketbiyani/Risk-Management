@@ -3756,16 +3756,18 @@ _oc_atm_cache: dict = {}    # (underlying, expiry) -> (atm_strike, atm_idx) with
 
 
 def _start_bse_spot_updater():
-    """Background thread: fetches nearest SENSEX futures LTP every 3s."""
+    """Background thread: one-shot fetch of SENSEX futures LTP at startup to seed _bse_last_spot.
+    After that, real-time updates come from the DepthWebSocket tick in _on_market_tick.
+    The REST poll is not repeated — it was causing stale overwrites of the live WebSocket price."""
     import time as _time
     def _run():
         global _bse_last_spot
-        while True:
+        # Single attempt to seed the value at startup; retry a few times if needed
+        for attempt in range(5):
             try:
                 if _monitor and _instrument_cache:
                     from datetime import date as _date
                     today_str = str(_date.today())
-                    # Find nearest expiry first, then pick deterministically
                     candidates = [
                         inst for inst in _instrument_cache._instruments
                         if (inst.instrument_type == "FUTIDX"
@@ -3774,15 +3776,10 @@ def _start_bse_spot_updater():
                             and inst.expiry_date and inst.expiry_date[:10] >= today_str)
                     ]
                     if candidates:
-                        logger.info("BSE spot candidates: %s",
-                            [(c.trading_symbol, c.security_id, c.expiry_date[:10]) for c in candidates])
                         nearest_expiry = min(c.expiry_date[:10] for c in candidates)
                         same_expiry = [c for c in candidates if c.expiry_date[:10] == nearest_expiry]
                         fut_inst = min(same_expiry, key=lambda c: int(c.security_id))
-                        logger.info("BSE spot selected: %s sid=%s expiry=%s",
-                            fut_inst.trading_symbol, fut_inst.security_id, fut_inst.expiry_date[:10])
                         ltp_res = _monitor.api.get_ltp({"BSE_FNO": [int(fut_inst.security_id)]})
-                        logger.debug("BSE spot raw response: %s", ltp_res)
                         if isinstance(ltp_res, dict):
                             d = ltp_res.get("data", ltp_res)
                             if isinstance(d, dict) and "data" in d:
@@ -3793,13 +3790,14 @@ def _start_bse_spot_updater():
                                         ltp_val = val.get("last_price", 0) if isinstance(val, dict) else val
                                         if ltp_val and float(ltp_val) > 0:
                                             _bse_last_spot = float(ltp_val)
-                                            logger.info("BSE spot updated: %.2f (from %s)", _bse_last_spot, fut_inst.trading_symbol)
+                                            logger.info("BSE spot seeded: %.2f (from %s)", _bse_last_spot, fut_inst.trading_symbol)
+                                            return  # Done — WebSocket takes over from here
                     else:
                         logger.warning("BSE spot updater: no SENSEX FUTIDX found in instrument cache")
             except Exception as e:
-                logger.error("BSE spot updater error: %s", e)
+                logger.error("BSE spot seed attempt %d error: %s", attempt + 1, e)
             _time.sleep(3)
-    t = threading.Thread(target=_run, daemon=True, name="BseSpotUpdater")
+    t = threading.Thread(target=_run, daemon=True, name="BseSpotSeeder")
     t.start()
 
 # Exchange segment mapping for MarketFeed subscription (NSE_FNO default for options)
