@@ -3862,6 +3862,9 @@ def api_oc_subscribe_ltp():
             instruments.append(("BSE_FNO", bse_futures_sid))
             new_sids.add(bse_futures_sid)
             _oc_ltp_subscribed.add(bse_futures_sid)
+            # Replace — not add — so stale contracts from previous sessions
+            # don't keep writing to _bse_last_spot alongside the current one
+            _bse_futures_sids.clear()
             _bse_futures_sids.add(bse_futures_sid)
 
     # Route OC LTP through the existing DepthWebSocket (same connection as DOM).
