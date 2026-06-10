@@ -3765,15 +3765,20 @@ def _start_bse_spot_updater():
                 if _monitor and _instrument_cache:
                     from datetime import date as _date
                     today_str = str(_date.today())
-                    fut_inst = None
-                    for inst in _instrument_cache._instruments:
+                    # Find nearest expiry first, then pick deterministically
+                    candidates = [
+                        inst for inst in _instrument_cache._instruments
                         if (inst.instrument_type == "FUTIDX"
-                                and "SENSEX" in inst.trading_symbol.upper()
-                                and "50" not in inst.trading_symbol.upper()
-                                and inst.expiry_date and inst.expiry_date[:10] >= today_str):
-                            if fut_inst is None or inst.expiry_date < fut_inst.expiry_date:
-                                fut_inst = inst
-                    if fut_inst:
+                            and "SENSEX" in inst.trading_symbol.upper()
+                            and "50" not in inst.trading_symbol.upper()
+                            and inst.expiry_date and inst.expiry_date[:10] >= today_str)
+                    ]
+                    if candidates:
+                        nearest_expiry = min(c.expiry_date[:10] for c in candidates)
+                        # Among contracts with the same nearest expiry, pick lowest security_id
+                        # — prevents oscillation if multiple series share the same expiry
+                        same_expiry = [c for c in candidates if c.expiry_date[:10] == nearest_expiry]
+                        fut_inst = min(same_expiry, key=lambda c: int(c.security_id))
                         ltp_res = _monitor.api.get_ltp({"BSE_FNO": [int(fut_inst.security_id)]})
                         logger.debug("BSE spot raw response: %s", ltp_res)
                         if isinstance(ltp_res, dict):
