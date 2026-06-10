@@ -3756,64 +3756,40 @@ _oc_atm_cache: dict = {}    # (underlying, expiry) -> (atm_strike, atm_idx) with
 
 
 def _start_bse_spot_updater():
-    """Background thread: seeds _bse_last_spot and _bse_futures_sids at startup via REST.
-    Real-time updates come from DepthWebSocket ticks — api_oc_subscribe_ltp always merges
-    the futures SID into the subscription so it stays live regardless of which chain is open."""
+    """Background thread: polls BSE India public API every 3s for live SENSEX spot price.
+    No Dhan futures involved — uses https://api.bseindia.com/BseIndiaAPI/api/getSensexData/w"""
     import time as _time
+    import requests as _requests
+
+    _SENSEX_URL = "https://api.bseindia.com/BseIndiaAPI/api/getSensexData/w"
+    _HEADERS = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://www.bseindia.com/",
+    }
 
     def _run():
-        global _bse_last_spot, _bse_futures_sids
-        # Wait for monitor and instrument cache to be ready
-        for _ in range(10):
-            if _monitor and _instrument_cache:
-                break
-            _time.sleep(1)
-
-        if not (_monitor and _instrument_cache):
-            logger.warning("BSE spot updater: monitor/cache not ready")
-            return
-
-        from datetime import date as _date
-        today_str = str(_date.today())
-        candidates = [
-            inst for inst in _instrument_cache._instruments
-            if (inst.instrument_type == "FUTIDX"
-                and "SENSEX" in inst.trading_symbol.upper()
-                and "50" not in inst.trading_symbol.upper()
-                and inst.expiry_date and inst.expiry_date[:10] >= today_str)
-        ]
-        if not candidates:
-            logger.warning("BSE spot updater: no SENSEX FUTIDX found in instrument cache")
-            return
-        nearest_expiry = min(c.expiry_date[:10] for c in candidates)
-        same_expiry = [c for c in candidates if c.expiry_date[:10] == nearest_expiry]
-        fut_inst = min(same_expiry, key=lambda c: int(c.security_id))
-        sid = str(fut_inst.security_id)
-
-        # Register SID so _on_market_tick recognises futures ticks immediately.
-        # api_oc_subscribe_ltp will include this SID in the next WS subscription it sends.
-        _bse_futures_sids.clear()
-        _bse_futures_sids.add(sid)
-
-        # Seed initial spot via REST
-        for attempt in range(5):
+        global _bse_last_spot
+        consecutive_errors = 0
+        while True:
             try:
-                ltp_res = _monitor.api.get_ltp({"BSE_FNO": [int(sid)]})
-                if isinstance(ltp_res, dict):
-                    d = ltp_res.get("data", ltp_res)
-                    if isinstance(d, dict) and "data" in d:
-                        d = d["data"]
-                    for seg_data in (d.values() if isinstance(d, dict) else []):
-                        if isinstance(seg_data, dict):
-                            for val in seg_data.values():
-                                ltp_val = val.get("last_price", 0) if isinstance(val, dict) else val
-                                if ltp_val and float(ltp_val) > 0:
-                                    _bse_last_spot = float(ltp_val)
-                                    logger.info("BSE spot seeded: %.2f (from %s sid=%s)",
-                                                _bse_last_spot, fut_inst.trading_symbol, sid)
-                                    return
+                resp = _requests.get(_SENSEX_URL, headers=_HEADERS, timeout=4)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Response: {"IndexValue": "74123.45", ...} or list with similar fields
+                    val = None
+                    if isinstance(data, dict):
+                        val = data.get("IndexValue") or data.get("CurrValue") or data.get("close")
+                    elif isinstance(data, list) and data:
+                        val = data[0].get("IndexValue") or data[0].get("CurrValue")
+                    if val:
+                        spot = float(str(val).replace(",", ""))
+                        if spot > 0:
+                            _bse_last_spot = spot
+                            consecutive_errors = 0
             except Exception as e:
-                logger.error("BSE spot seed attempt %d error: %s", attempt + 1, e)
+                consecutive_errors += 1
+                if consecutive_errors <= 3:
+                    logger.warning("BSE spot fetch error: %s", e)
             _time.sleep(3)
 
     t = threading.Thread(target=_run, daemon=True, name="BseSpotUpdater")
@@ -3859,48 +3835,14 @@ def api_oc_subscribe_ltp():
     _oc_ltp_subscribed = _oc_ltp_subscribed | new_sids
     instruments = list(_oc_ltp_instruments.values())
 
-    # For SENSEX/BANKEX: also subscribe nearest futures for real-time spot
-    underlying = data.get("underlying", "")
-    bse_futures_sid = None
-    if underlying in ("SENSEX", "BANKEX") and _instrument_cache:
-        from datetime import date as _date
-        today_str = str(_date.today())
-        fut_name = "SENSEX" if underlying == "SENSEX" else "BANKEX"
-        candidates = [
-            inst for inst in _instrument_cache._instruments
-            if (inst.instrument_type == "FUTIDX"
-                and fut_name in inst.trading_symbol.upper()
-                and "50" not in inst.trading_symbol.upper()
-                and inst.expiry_date and inst.expiry_date[:10] >= today_str)
-        ]
-        if candidates:
-            nearest_expiry = min(c.expiry_date[:10] for c in candidates)
-            same_expiry = [c for c in candidates if c.expiry_date[:10] == nearest_expiry]
-            fut_inst = min(same_expiry, key=lambda c: int(c.security_id))
-            bse_futures_sid = str(fut_inst.security_id)
-            instruments.append(("BSE_FNO", bse_futures_sid))
-            new_sids.add(bse_futures_sid)
-            _oc_ltp_subscribed.add(bse_futures_sid)
-            # Replace — not add — so stale contracts from previous sessions
-            # don't keep writing to _bse_last_spot alongside the current one
-            _bse_futures_sids.clear()
-            _bse_futures_sids.add(bse_futures_sid)
-
     # Route OC LTP through the existing DepthWebSocket (same connection as DOM).
     # This avoids Dhan's concurrent-connection limit (error 805).
     # Position instruments for SL/TP monitoring remain on their own feed (monitor.py).
     ltp_instruments = [(seg_key, str(i["sid"])) for i in instruments_req if i.get("sid")
                        for seg_key in [i.get("exchange_segment", "NSE_FNO")]]
-    if bse_futures_sid:
-        ltp_instruments.append(("BSE_FNO", bse_futures_sid))
-    # Always keep BSE futures subscribed for spot updates, even when Nifty chain is active.
-    # The seeder populates _bse_futures_sids at startup with the correct contract.
-    for fs in _bse_futures_sids:
-        if not any(s == fs for _, s in ltp_instruments):
-            ltp_instruments.append(("BSE_FNO", fs))
     if _depth_ws is not None:
         _depth_ws.set_ltp_instruments(ltp_instruments, _monitor._on_market_tick)
-    return jsonify({"status": "ok", "count": len(ltp_instruments), "bse_futures_sid": bse_futures_sid})
+    return jsonify({"status": "ok", "count": len(ltp_instruments)})
 
 
 @app.route("/api/option_chain/data")

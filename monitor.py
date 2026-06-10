@@ -310,15 +310,11 @@ class PositionMonitor:
             if not security_id or ltp <= 0:
                 return
 
-            # Push LTP to option chain UI; update BSE spot if this is the futures instrument
+            # Push LTP to option chain UI
             try:
-                from dashboard import emit_oc_ltp, _oc_ltp_subscribed, _bse_futures_sids
+                from dashboard import emit_oc_ltp, _oc_ltp_subscribed
                 if security_id in _oc_ltp_subscribed:
                     emit_oc_ltp(security_id, ltp)
-                if security_id in _bse_futures_sids:
-                    import dashboard as _dash
-                    _dash._bse_last_spot = ltp
-                    logger.debug("BSE spot WS update: %.2f (sid=%s)", ltp, security_id)
             except Exception:
                 pass
 
