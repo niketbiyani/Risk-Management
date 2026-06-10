@@ -3846,16 +3846,18 @@ def api_oc_subscribe_ltp():
     if underlying in ("SENSEX", "BANKEX") and _instrument_cache:
         from datetime import date as _date
         today_str = str(_date.today())
-        fut_inst = None
         fut_name = "SENSEX" if underlying == "SENSEX" else "BANKEX"
-        for inst in _instrument_cache._instruments:
+        candidates = [
+            inst for inst in _instrument_cache._instruments
             if (inst.instrument_type == "FUTIDX"
-                    and fut_name in inst.trading_symbol.upper()
-                    and "50" not in inst.trading_symbol.upper()
-                    and inst.expiry_date and inst.expiry_date[:10] >= today_str):
-                if fut_inst is None or inst.expiry_date < fut_inst.expiry_date:
-                    fut_inst = inst
-        if fut_inst:
+                and fut_name in inst.trading_symbol.upper()
+                and "50" not in inst.trading_symbol.upper()
+                and inst.expiry_date and inst.expiry_date[:10] >= today_str)
+        ]
+        if candidates:
+            nearest_expiry = min(c.expiry_date[:10] for c in candidates)
+            same_expiry = [c for c in candidates if c.expiry_date[:10] == nearest_expiry]
+            fut_inst = min(same_expiry, key=lambda c: int(c.security_id))
             bse_futures_sid = str(fut_inst.security_id)
             instruments.append(("BSE_FNO", bse_futures_sid))
             new_sids.add(bse_futures_sid)
