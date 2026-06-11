@@ -2843,10 +2843,11 @@ DASHBOARD_HTML = """
 
         function spreadSelectLeg(side, secId, strike, ltp, optType) {
             if (!secId) return;
-            var leg = {securityId: secId, strike: strike, ltp: ltp, optType: optType};
             var expiry = document.getElementById('oc-expiry').value;
             var sel    = document.getElementById('oc-underlying');
             var underlying = sel.options[sel.selectedIndex].text;
+            var leg = {securityId: secId, strike: strike, ltp: ltp, optType: optType,
+                       expiry: expiry, underlying: underlying};
             var symbol = underlying + ' ' + strike.toFixed(0) + ' ' + optType + ' ' + expiry;
 
             var bseUnderlyings = ['SENSEX', 'BANKEX'];
@@ -3034,7 +3035,8 @@ DASHBOARD_HTML = """
             var sellPrice = sqbGetSellPrice();
             var sl        = sqbGetSL();
             if (!isMarket && (!sellPrice || sellPrice <= 0)) { showToast('Enter SELL price', 'warning'); return; }
-            if (!sl || sl <= (isMarket ? 0 : sellPrice)) { showToast('Enter SL' + (isMarket ? '' : ' above sell price'), 'warning'); return; }
+            var minSl = isMarket ? (_spreadSellLeg.ltp || 0) : sellPrice;
+            if (!sl || sl <= minSl) { showToast('SL must be above ' + (isMarket ? 'current price ₹' + minSl.toFixed(2) : 'sell price'), 'warning'); return; }
             var sellLabel = isMarket ? 'MARKET' : ('\\u20B9' + sellPrice.toFixed(2) + ' LIMIT');
             var label = 'EXECUTE SPREAD NOW (' + (isMarket ? 'MARKET' : 'LIMIT') + '):\\n'
                 + 'BUY  ' + qty + ' x ' + _spreadBuyLeg.strike.toFixed(0)  + ' ' + _spreadBuyLeg.optType  + ' @ MARKET (hedge first)\\n'
@@ -3071,15 +3073,16 @@ DASHBOARD_HTML = """
                     var qtySnap     = qty;
                     var sellPriceSnap = isMarket ? (sellLegSnap.ltp || 0) : sellPrice;
                     captureNiftyScreenshot(sellPriceSnap, null, function(entryImg) {
+                        var lotSz = _ocLotSize || 25;
                         var entryData = {
                             trade_type:        'spread',
-                            instrument:        sellLegSnap.strike.toFixed(0) + ' ' + sellLegSnap.optType + ' ' + sellLegSnap.expiry,
-                            hedge_instrument:  buyLegSnap.strike.toFixed(0)  + ' ' + buyLegSnap.optType  + ' ' + buyLegSnap.expiry,
+                            instrument:        (sellLegSnap.underlying || '') + ' ' + sellLegSnap.strike.toFixed(0) + ' ' + sellLegSnap.optType + ' ' + (sellLegSnap.expiry || ''),
+                            hedge_instrument:  (buyLegSnap.underlying  || '') + ' ' + buyLegSnap.strike.toFixed(0)  + ' ' + buyLegSnap.optType  + ' ' + (buyLegSnap.expiry  || ''),
                             sell_security_id:  String(sellLegSnap.securityId),
                             sell_entry_price:  sellPriceSnap,
                             buy_entry_price:   buyLegSnap.ltp || 0,
-                            lots:              Math.round(qtySnap / 25) || 1,
-                            lot_size:          25,
+                            lots:              Math.round(qtySnap / lotSz) || 1,
+                            lot_size:          lotSz,
                             entry_screenshot:  entryImg
                         };
                         createJournalEntry(entryData);
