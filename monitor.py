@@ -425,7 +425,6 @@ class PositionMonitor:
             if o.get("orderStatus") == "TRADED"
             and o.get("transactionType") == "SELL"
             and o.get("orderId") not in self._journaled_order_ids
-            and o.get("productType") == "MARGIN"
         ]
 
         for sell_order in filled_sells:

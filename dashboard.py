@@ -4762,15 +4762,6 @@ def api_journal_backfill():
         orders = _monitor.api.get_order_book()
         if not orders:
             return jsonify({"status": "ok", "message": "No orders found", "created": 0})
-        # Log sample to confirm field names
-        sample = orders[0]
-        logger.info("BACKFILL SAMPLE: %s", {k: sample.get(k) for k in
-            ["orderStatus","transactionType","productType","tradingSymbol","orderId","securityId"]})
-        statuses = set(o.get("orderStatus") for o in orders)
-        txns     = set(o.get("transactionType") for o in orders)
-        prods    = set(o.get("productType") for o in orders)
-        logger.info("BACKFILL OVERVIEW: count=%d statuses=%s txns=%s prods=%s",
-                    len(orders), statuses, txns, prods)
         before = len(_monitor._journaled_order_ids)
         _monitor._auto_journal_orders(orders)
         created = len(_monitor._journaled_order_ids) - before
