@@ -189,11 +189,12 @@ class PositionMonitor:
             # Fetch pending orders for dashboard display + auto-journal
             try:
                 orders = self.api.get_order_book()
+                logger.info("ORDER BOOK FETCH: type=%s len=%s", type(orders).__name__, len(orders) if orders else 0)
                 if orders is not None:
                     self._last_orders = orders
                     self._auto_journal_orders(orders)
-            except Exception:
-                pass  # Keep previous orders on failure
+            except Exception as e:
+                logger.error("Order book fetch error: %s", e)
 
             # Evaluate P&L against risk rules
             action = self.risk.evaluate_pnl(realized_pnl, unrealized_pnl)
