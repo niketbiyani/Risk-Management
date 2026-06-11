@@ -403,6 +403,19 @@ class PositionMonitor:
                 if str(o.get("securityId", "")) in existing_sids:
                     self._journaled_order_ids.add(o.get("orderId"))
             self._auto_journal_seeded = True
+            # Log first order to confirm field names
+            if orders:
+                sample = orders[0]
+                logger.info("ORDER SAMPLE: status=%s txn=%s prod=%s sym=%s id=%s",
+                            sample.get("orderStatus"), sample.get("transactionType"),
+                            sample.get("productType"), sample.get("tradingSymbol"),
+                            sample.get("orderId"))
+                # Log all unique statuses and transaction types seen
+                statuses = set(o.get("orderStatus") for o in orders)
+                txns = set(o.get("transactionType") for o in orders)
+                prods = set(o.get("productType") for o in orders)
+                logger.info("ORDER BOOK SUMMARY: count=%d statuses=%s txns=%s prods=%s",
+                            len(orders), statuses, txns, prods)
 
         filled_sells = [
             o for o in orders
