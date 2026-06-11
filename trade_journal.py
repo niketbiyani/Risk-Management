@@ -12,7 +12,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -353,8 +353,7 @@ class TradeJournal:
     def get_entries(self, limit: int = 100, date_str: str = None) -> list:
         if date_str:
             # date_str is "YYYY-MM-DD" in IST; convert to UTC Unix range
-            from datetime import timezone as _tz, timedelta as _td
-            ist = _tz(timedelta(hours=5, minutes=30))
+            ist = timezone(timedelta(hours=5, minutes=30))
             day_start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=ist)
             day_end = day_start + timedelta(days=1)
             cur = self._conn.execute(
