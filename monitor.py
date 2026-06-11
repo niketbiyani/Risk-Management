@@ -189,6 +189,8 @@ class PositionMonitor:
 
             # Evaluate P&L against risk rules
             action = self.risk.evaluate_pnl(realized_pnl, unrealized_pnl)
+            logger.info("PNL TICK: realized=%.2f unrealized=%.2f state_realized=%.2f",
+                        realized_pnl, unrealized_pnl, self.state.realized_pnl)
 
             # Check trade-level SL/TP
             sl_tp_triggers = self.trade_mgr.check_sl_tp_triggers(positions)
