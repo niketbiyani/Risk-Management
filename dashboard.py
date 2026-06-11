@@ -4770,7 +4770,14 @@ def api_journal_backfill():
                 orders = _monitor._normalize_trade_book(trades)
                 source = "trade_book"
         if not orders:
-            return jsonify({"status": "ok", "message": "No orders found in order book or trade book", "created": 0})
+            # Both live APIs empty (after-hours) — use cached orders from last tick
+            cached = getattr(_monitor, "_last_orders", [])
+            if cached:
+                logger.info("Live APIs empty, using cached order snapshot (%d records)", len(cached))
+                orders = cached
+                source = "cached"
+        if not orders:
+            return jsonify({"status": "ok", "message": "No orders found — market may be closed and no cached orders available", "created": 0})
         # Reset in-memory seen set so deleted entries can be re-imported
         _monitor._journaled_order_ids = set()
         if hasattr(_monitor, "_auto_journal_seeded"):

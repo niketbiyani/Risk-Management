@@ -10,7 +10,9 @@ When a lockout is triggered:
 4. State is permanently locked for the day (encrypted, non-reversible)
 """
 
+import json
 import logging
+import os
 import signal
 import sys
 import time
@@ -46,11 +48,15 @@ class PositionMonitor:
         self._running = False
         self._lock = threading.Lock()
         self._last_positions: list[dict] = []
-        self._last_orders: list[dict] = []
         self._last_trade_count = 0
         self._prev_realized_pnl = 0.0
         self._lockout_executed = False
         self._journaled_order_ids: set = set()  # prevent duplicate journal entries
+        self._order_cache_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "order_cache.json"
+        )
+        # Load persisted order cache from previous session if available
+        self._last_orders = self._load_order_cache()
 
         # WebSocket state
         self._market_feed_thread: threading.Thread | None = None
@@ -201,6 +207,8 @@ class PositionMonitor:
                 orders = self.api.get_order_book()
                 if orders is not None:
                     self._last_orders = orders
+                    if orders:
+                        self._persist_order_cache(orders)
                     self._auto_journal_orders(orders)
             except Exception:
                 pass  # Keep previous orders on failure
@@ -402,6 +410,33 @@ class PositionMonitor:
 
         except Exception as e:
             logger.error("Error in order update callback: %s", e)
+
+    def _persist_order_cache(self, orders: list):
+        """Save today's order list to disk so backfill works after service restart."""
+        try:
+            from datetime import date as _date
+            today = str(_date.today())
+            with open(self._order_cache_path, "w") as f:
+                json.dump({"date": today, "orders": orders}, f)
+        except Exception as e:
+            logger.debug("Failed to persist order cache: %s", e)
+
+    def _load_order_cache(self) -> list:
+        """Load persisted order cache if it's from today."""
+        try:
+            from datetime import date as _date
+            if not os.path.exists(self._order_cache_path):
+                return []
+            with open(self._order_cache_path) as f:
+                data = json.load(f)
+            if data.get("date") == str(_date.today()):
+                orders = data.get("orders", [])
+                if orders:
+                    logger.info("Loaded %d orders from today's order cache", len(orders))
+                return orders
+        except Exception as e:
+            logger.debug("Failed to load order cache: %s", e)
+        return []
 
     def _normalize_trade_book(self, trades: list) -> list:
         """Convert trade book records to order-book format for _auto_journal_orders."""
