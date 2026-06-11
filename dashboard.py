@@ -4754,6 +4754,24 @@ def api_journal_entries():
     return jsonify(_monitor.state.journal.get_entries(limit=limit))
 
 
+@app.route("/api/journal/backfill", methods=["POST"])
+def api_journal_backfill():
+    if not _monitor:
+        return jsonify({"status": "error", "message": "monitor not ready"}), 503
+    try:
+        orders = _monitor.api.get_order_book()
+        if not orders:
+            return jsonify({"status": "ok", "message": "No orders found", "created": 0})
+        before = len(_monitor._journaled_order_ids)
+        _monitor._auto_journal_orders(orders)
+        created = len(_monitor._journaled_order_ids) - before
+        logger.info("Manual journal backfill: %d orders scanned, %d entries created", len(orders), created)
+        return jsonify({"status": "ok", "orders_scanned": len(orders), "created": created})
+    except Exception as e:
+        logger.error("Journal backfill error: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/api/journal/open_entry/<security_id>")
 def api_journal_open_entry(security_id):
     """Return the most recent open journal entry for a sell leg security_id."""
@@ -4908,6 +4926,7 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
       <option value="pnl_asc">Worst P&amp;L</option>
     </select>
     <button class="refresh-btn" onclick="loadEntries()">&#x21bb; Refresh</button>
+    <button id="backfill-btn" onclick="runBackfill()" style="background:#1a3a2a;color:#3fb950;border:1px solid #3fb950;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;">&#x2193; Import from Dhan</button>
   </div>
 </div>
 <div class="stats-row" id="stats-row"></div>
@@ -4915,6 +4934,38 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
 <div id="lightbox" onclick="closeLightbox()"><img id="lb-img" src=""></div>
 <script>
 var _entries = [], _filter = 'all';
+
+function runBackfill() {
+  var btn = document.getElementById('backfill-btn');
+  btn.textContent = '⏳ Importing...';
+  btn.disabled = true;
+  fetch('/api/journal/backfill', {method: 'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      if (d.status === 'ok') {
+        btn.textContent = '✓ ' + d.created + ' imported';
+        btn.style.background = '#0d2117';
+        loadEntries();
+        setTimeout(function(){
+          btn.textContent = '↓ Import from Dhan';
+          btn.style.background = '#1a3a2a';
+          btn.disabled = false;
+        }, 3000);
+      } else {
+        btn.textContent = '✕ ' + (d.message || 'Error');
+        btn.style.color = '#f85149';
+        setTimeout(function(){
+          btn.textContent = '↓ Import from Dhan';
+          btn.style.color = '#3fb950';
+          btn.disabled = false;
+        }, 3000);
+      }
+    })
+    .catch(function() {
+      btn.textContent = '✕ Network error';
+      btn.disabled = false;
+    });
+}
 
 function loadEntries() {
   fetch('/api/journal/entries?limit=200')
