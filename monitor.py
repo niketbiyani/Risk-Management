@@ -15,7 +15,7 @@ import signal
 import sys
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, time as dtime
 
 from config import Config
 from dhan_api import DhanAPI
@@ -89,13 +89,19 @@ class PositionMonitor:
 
         self._monitor_loop()
 
+    @staticmethod
+    def _now_ist() -> datetime:
+        """Return current time in IST (UTC+5:30)."""
+        ist = timezone(timedelta(hours=5, minutes=30))
+        return datetime.now(ist).replace(tzinfo=None)
+
     def _monitor_loop(self):
         """Main monitoring loop."""
         while self._running:
             try:
-                now = datetime.now()
+                now = self._now_ist()
 
-                # Only monitor during market hours (with buffer)
+                # Only monitor during market hours (with buffer), times are in IST
                 market_start = now.replace(
                     hour=Config.MARKET_OPEN_HOUR,
                     minute=Config.MARKET_OPEN_MINUTE - 5,
@@ -189,8 +195,6 @@ class PositionMonitor:
 
             # Evaluate P&L against risk rules
             action = self.risk.evaluate_pnl(realized_pnl, unrealized_pnl)
-            logger.info("PNL TICK: realized=%.2f unrealized=%.2f state_realized=%.2f",
-                        realized_pnl, unrealized_pnl, self.state.realized_pnl)
 
             # Check trade-level SL/TP
             sl_tp_triggers = self.trade_mgr.check_sl_tp_triggers(positions)
