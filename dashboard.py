@@ -4750,8 +4750,9 @@ def api_journal_delete_entry(entry_id):
 def api_journal_entries():
     if not _monitor:
         return jsonify([])
-    limit = int(request.args.get("limit", 100))
-    return jsonify(_monitor.state.journal.get_entries(limit=limit))
+    limit = int(request.args.get("limit", 200))
+    date_str = request.args.get("date")  # "YYYY-MM-DD" IST
+    return jsonify(_monitor.state.journal.get_entries(limit=limit, date_str=date_str))
 
 
 @app.route("/api/journal/backfill", methods=["POST"])
@@ -4921,6 +4922,11 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
   <h2>&#x1F4D3; Trade Journal</h2>
   <div style="font-size:12px;color:#484f58;" id="last-updated"></div>
   <div class="filter-row">
+    <input type="date" id="journal-date" onchange="loadEntries()"
+      style="background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;
+             padding:4px 8px;font-size:12px;cursor:pointer;">
+    <button onclick="changeDate(-1)" style="background:#161b22;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px;">&#8249;</button>
+    <button onclick="changeDate(1)"  style="background:#161b22;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px;">&#8250;</button>
     <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
     <button class="filter-btn" onclick="setFilter('open',this)">Open</button>
     <button class="filter-btn" onclick="setFilter('win',this)">Winners</button>
@@ -4973,8 +4979,18 @@ function runBackfill() {
     });
 }
 
+function todayIst() {
+  return new Date().toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'}); // "YYYY-MM-DD"
+}
+function changeDate(delta) {
+  var d = new Date(document.getElementById('journal-date').value + 'T00:00:00');
+  d.setDate(d.getDate() + delta);
+  document.getElementById('journal-date').value = d.toISOString().slice(0,10);
+  loadEntries();
+}
 function loadEntries() {
-  fetch('/api/journal/entries?limit=200')
+  var date = document.getElementById('journal-date').value || todayIst();
+  fetch('/api/journal/entries?date=' + date)
     .then(function(r){return r.json();})
     .then(function(data) {
       _entries = data;
@@ -5034,18 +5050,13 @@ function renderStats(list) {
   var avgW   = wins.length ? wins.reduce(function(s,t){return s+(t.pnl||0);},0)/wins.length : 0;
   var losses = closed.filter(function(t){return (t.pnl||0)<0;});
   var avgL   = losses.length ? losses.reduce(function(s,t){return s+(t.pnl||0);},0)/losses.length : 0;
-  var avgCr  = list.length ? list.reduce(function(s,t){
-    return s + ((t.sell_entry_price||0) - (t.buy_entry_price||0));
-  },0)/list.length : 0;
-
   var wr = closed.length ? Math.round(wins.length/closed.length*100) : 0;
   var pnlClass = total>=0?'green':'red';
 
   document.getElementById('stats-row').innerHTML =
     stat('Total', list.length, 'blue') +
-    stat('Win Rate', closed.length ? wr+'%' : '—', 'green') +
+    stat('Win Rate', closed.length ? wr+'%' : '—', wr>=50?'green':'red') +
     stat('Total P&amp;L', (total>=0?'&#8377;+':'&#8377;')+Math.round(total).toLocaleString('en-IN'), pnlClass) +
-    stat('Avg Credit', '&#8377;'+avgCr.toFixed(1), 'gold') +
     stat('Avg Winner', wins.length?'&#8377;+'+Math.round(avgW):'—','green') +
     stat('Avg Loser',  losses.length?'&#8377;'+Math.round(avgL):'—','red');
 }
@@ -5184,6 +5195,7 @@ function openLightbox(img) {
 function closeLightbox() { document.getElementById('lightbox').classList.remove('show'); }
 document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeLightbox(); });
 
+document.getElementById('journal-date').value = todayIst();
 loadEntries();
 setInterval(loadEntries, 30000);
 </script>

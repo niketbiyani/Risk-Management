@@ -414,13 +414,31 @@ class PositionMonitor:
                     self._journaled_order_ids.add(o.get("orderId"))
             self._auto_journal_seeded = True
 
-        # Index all TRADED orders by security_id for fast lookup
-        # traded_by_sid[sid] = list of orders sorted by orderId (proxy for time)
+        def _order_ts(o: dict) -> float:
+            """Parse Dhan createTime to Unix timestamp (IST string → UTC epoch)."""
+            from datetime import timezone as _tz, timedelta as _td
+            t = o.get("createTime") or o.get("updateTime") or ""
+            if not t:
+                return 0.0
+            try:
+                ist = _tz(_td(hours=5, minutes=30))
+                # Dhan returns "HH:MM:SS" or "YYYY-MM-DD HH:MM:SS"
+                if len(t) <= 8:
+                    from datetime import date as _date
+                    t = str(_date.today()) + " " + t
+                dt = datetime.strptime(t, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ist)
+                return dt.timestamp()
+            except Exception:
+                return 0.0
+
+        # Index all TRADED orders by security_id, sorted by time
         traded_by_sid: dict = {}
         for o in orders:
             if o.get("orderStatus") == "TRADED":
                 sid = str(o.get("securityId", ""))
                 traded_by_sid.setdefault(sid, []).append(o)
+        for sid in traded_by_sid:
+            traded_by_sid[sid].sort(key=_order_ts)
 
         filled_sells = [
             o for o in orders
@@ -428,15 +446,16 @@ class PositionMonitor:
             and o.get("transactionType") == "SELL"
             and o.get("orderId") not in self._journaled_order_ids
         ]
+        filled_sells.sort(key=_order_ts)
 
         for sell_order in filled_sells:
             order_id = sell_order.get("orderId", "")
+            sell_ts = _order_ts(sell_order)
             security_id = str(sell_order.get("securityId", ""))
             symbol = sell_order.get("tradingSymbol", security_id)
             sell_price = float(sell_order.get("price") or sell_order.get("averageTradedPrice") or 0)
             qty = int(sell_order.get("filledQty") or sell_order.get("quantity") or 0)
 
-            # Determine lot size from symbol name
             sym_up = symbol.upper()
             if "NIFTY" in sym_up and "BANK" not in sym_up:
                 lot_size = 75
@@ -448,25 +467,26 @@ class PositionMonitor:
                 lot_size = 25
             lots = max(1, qty // lot_size) if lot_size > 0 else 1
 
-            # Find exit: a BUY on the SAME security_id placed AFTER this sell
+            # Exit: BUY on same security_id placed AFTER this sell (by time)
             exit_order = None
             for o in traded_by_sid.get(security_id, []):
                 if (o.get("transactionType") == "BUY"
-                        and o.get("orderId", "") > order_id):  # orderId encodes sequence
+                        and _order_ts(o) > sell_ts
+                        and o.get("orderId") not in self._journaled_order_ids):
                     exit_order = o
                     break
 
-            # Find hedge: a BUY on a DIFFERENT security_id (spread leg)
-            # Pair heuristic: same exchange segment, same expiry embedded in symbol,
-            # different security_id, not already used as an exit
+            # Hedge: BUY on a different security_id in same exchange segment,
+            # placed within 60s of the sell, not already used
             hedge_order = None
             for sid2, orders2 in traded_by_sid.items():
                 if sid2 == security_id:
                     continue
                 for o in orders2:
                     if (o.get("transactionType") == "BUY"
+                            and o.get("exchangeSegment") == sell_order.get("exchangeSegment")
                             and o.get("orderId") not in self._journaled_order_ids
-                            and o.get("exchangeSegment") == sell_order.get("exchangeSegment")):
+                            and abs(_order_ts(o) - sell_ts) <= 60):
                         hedge_order = o
                         break
                 if hedge_order:
@@ -485,6 +505,7 @@ class PositionMonitor:
                 "buy_entry_price": float(hedge_order.get("price") or hedge_order.get("averageTradedPrice") or 0) if hedge_order else 0,
                 "lots": lots,
                 "lot_size": lot_size,
+                "created_at_ts": sell_ts if sell_ts > 0 else None,
             }
 
             entry_id = self.state.journal.create_entry(entry_data)

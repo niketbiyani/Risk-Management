@@ -282,8 +282,9 @@ class TradeJournal:
 
     def create_entry(self, data: dict) -> str:
         entry_id = str(uuid.uuid4())[:12]
-        now = time.time()
-        entry_time = datetime.now().strftime("%d-%b %H:%M:%S")
+        # Allow caller to pass explicit timestamp (e.g. from Dhan order createTime)
+        now = data.get("created_at_ts") or time.time()
+        entry_time = datetime.utcfromtimestamp(now).strftime("%d-%b %H:%M:%S")
         with self._lock:
             with self._conn:
                 self._conn.execute(
@@ -349,10 +350,21 @@ class TradeJournal:
         )
         return {row[0] for row in cur.fetchall() if row[0]}
 
-    def get_entries(self, limit: int = 100) -> list:
-        cur = self._conn.execute(
-            "SELECT * FROM trade_entries ORDER BY created_at DESC LIMIT ?", (limit,)
-        )
+    def get_entries(self, limit: int = 100, date_str: str = None) -> list:
+        if date_str:
+            # date_str is "YYYY-MM-DD" in IST; convert to UTC Unix range
+            from datetime import timezone as _tz, timedelta as _td
+            ist = _tz(timedelta(hours=5, minutes=30))
+            day_start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=ist)
+            day_end = day_start + timedelta(days=1)
+            cur = self._conn.execute(
+                "SELECT * FROM trade_entries WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC",
+                (day_start.timestamp(), day_end.timestamp()),
+            )
+        else:
+            cur = self._conn.execute(
+                "SELECT * FROM trade_entries ORDER BY created_at DESC LIMIT ?", (limit,)
+            )
         return [dict(r) for r in cur.fetchall()]
 
     def get_entry(self, entry_id: str) -> dict | None:
