@@ -171,6 +171,11 @@ class DhanAPI:
         """Get all orders for the day."""
         try:
             response = self.dhan.get_order_list()
+            logger.info("ORDER BOOK RAW: type=%s keys=%s data_type=%s data_len=%s",
+                        type(response).__name__,
+                        list(response.keys()) if isinstance(response, dict) else "N/A",
+                        type(response.get("data")).__name__ if isinstance(response, dict) else "N/A",
+                        len(response.get("data") or []) if isinstance(response, dict) else "N/A")
             if isinstance(response, dict) and "data" in response:
                 data = response["data"]
                 if isinstance(data, list):
@@ -193,6 +198,11 @@ class DhanAPI:
         """Get all executed trades for the day."""
         try:
             response = self.dhan.get_trade_book()
+            logger.info("TRADE BOOK RAW: type=%s keys=%s data_type=%s data_len=%s",
+                        type(response).__name__,
+                        list(response.keys()) if isinstance(response, dict) else "N/A",
+                        type(response.get("data")).__name__ if isinstance(response, dict) else "N/A",
+                        len(response.get("data") or []) if isinstance(response, dict) else "N/A")
             if isinstance(response, dict) and "data" in response:
                 data = response["data"]
                 if isinstance(data, list):
