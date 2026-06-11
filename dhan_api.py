@@ -212,10 +212,7 @@ class DhanAPI:
             if isinstance(response, dict) and "data" in response:
                 data = response["data"]
                 if isinstance(data, list):
-                    result = [p for p in data if isinstance(p, dict)]
-                    if result:
-                        logger.info("POSITIONS SAMPLE: %s", result[0])
-                    return result
+                    return [p for p in data if isinstance(p, dict)]
                 return []
             return []
         except Exception as e:

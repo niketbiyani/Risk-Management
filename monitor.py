@@ -712,13 +712,26 @@ class PositionMonitor:
             "updateTime": order.get("updateTime", ""),
         }
 
+    def _normalize_positions(self, positions: list) -> list:
+        """Map Dhan position fields to names the dashboard JS expects."""
+        result = []
+        for p in positions:
+            result.append({
+                **p,
+                # JS uses avgPrice; Dhan uses costPrice
+                "avgPrice": p.get("costPrice") or p.get("buyAvg") or 0,
+                # JS uses lastTradedPrice; Dhan positions don't include LTP
+                "lastTradedPrice": p.get("lastTradedPrice") or 0,
+            })
+        return result
+
     def get_status(self) -> dict:
         """Get current monitor status for dashboard."""
         risk_status = self.risk.get_risk_status()
         result = {
             **risk_status,
             "monitor_running": self._running,
-            "positions": self._last_positions or [],
+            "positions": self._normalize_positions(self._last_positions or []),
             "spreads": [],
             "sl_tp_orders": {},
             "pending_spreads": [],
