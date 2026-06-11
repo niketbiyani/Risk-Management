@@ -4762,9 +4762,16 @@ def api_journal_backfill():
         orders = _monitor.api.get_order_book()
         if not orders:
             return jsonify({"status": "ok", "message": "No orders found", "created": 0})
-        before = len(_monitor._journaled_order_ids)
+        # Reset in-memory seen set so deleted entries can be re-imported
+        # The DB seed step in _auto_journal_orders will still prevent true duplicates
+        _monitor._journaled_order_ids = set()
+        if hasattr(_monitor, "_auto_journal_seeded"):
+            del _monitor._auto_journal_seeded
+        before_count = len(_monitor.state.journal.get_entries(limit=1000))
         _monitor._auto_journal_orders(orders)
-        created = len(_monitor._journaled_order_ids) - before
+        after_count = len(_monitor.state.journal.get_entries(limit=1000))
+        created = after_count - before_count
+        logger.info("Manual journal backfill: %d orders, %d new entries", len(orders), created)
         return jsonify({"status": "ok", "orders_scanned": len(orders), "created": created})
     except Exception as e:
         logger.error("Journal backfill error: %s", e)
