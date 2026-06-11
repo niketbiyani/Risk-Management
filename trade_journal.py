@@ -355,6 +355,11 @@ class TradeJournal:
         )
         return [dict(r) for r in cur.fetchall()]
 
+    def delete_entry(self, entry_id: str):
+        with self._lock:
+            self._conn.execute("DELETE FROM trade_entries WHERE id=?", (entry_id,))
+            self._conn.commit()
+
     def close(self):
         """Close the database connection."""
         try:

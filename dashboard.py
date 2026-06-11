@@ -4729,6 +4729,14 @@ def api_journal_update_entry(entry_id):
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/journal/entry/<entry_id>", methods=["DELETE"])
+def api_journal_delete_entry(entry_id):
+    if not _monitor:
+        return jsonify({"status": "error"}), 503
+    _monitor.state.journal.delete_entry(entry_id)
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/journal/entries")
 def api_journal_entries():
     if not _monitor:
@@ -4884,6 +4892,12 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
     <button class="filter-btn" onclick="setFilter('open',this)">Open</button>
     <button class="filter-btn" onclick="setFilter('win',this)">Winners</button>
     <button class="filter-btn" onclick="setFilter('loss',this)">Losers</button>
+    <select id="sort-select" onchange="renderAll()" style="background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;">
+      <option value="newest">Newest first</option>
+      <option value="oldest">Oldest first</option>
+      <option value="pnl_desc">Best P&amp;L</option>
+      <option value="pnl_asc">Worst P&amp;L</option>
+    </select>
     <button class="refresh-btn" onclick="loadEntries()">&#x21bb; Refresh</button>
   </div>
 </div>
@@ -4911,6 +4925,15 @@ function setFilter(f, btn) {
   renderAll();
 }
 
+function fmtIst(utcStr) {
+  if (!utcStr) return '';
+  // Server stores UTC strings like "2026-06-11 05:15:53" — convert to IST (+5:30)
+  var d = new Date(utcStr.replace(' ', 'T') + 'Z');
+  return d.toLocaleString('en-IN', {timeZone:'Asia/Kolkata',
+    day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', second:'2-digit',
+    hour12: false});
+}
+
 function renderAll() {
   var list = _entries.filter(function(t) {
     if (_filter === 'all')  return true;
@@ -4918,6 +4941,13 @@ function renderAll() {
     if (_filter === 'win')  return t.status === 'closed' && (t.pnl||0) >= 0;
     if (_filter === 'loss') return t.status === 'closed' && (t.pnl||0) < 0;
     return true;
+  });
+  var sortBy = document.getElementById('sort-select').value;
+  list.sort(function(a, b) {
+    if (sortBy === 'oldest') return (a.created_at||'').localeCompare(b.created_at||'');
+    if (sortBy === 'pnl_desc') return (b.pnl||0) - (a.pnl||0);
+    if (sortBy === 'pnl_asc')  return (a.pnl||0) - (b.pnl||0);
+    return (b.created_at||'').localeCompare(a.created_at||''); // newest first default
   });
   renderStats(list);
   var el = document.getElementById('journal');
@@ -4974,7 +5004,7 @@ function buildCard(t) {
     ? '<div class="main '+(cardClass==='win'?'green':'red')+'">&#8377;'+parseFloat(t.sell_exit_price).toFixed(2)+'</div><div class="sub">exit</div>'
     : '<div class="main muted">—</div><div class="sub">not exited</div>';
 
-  var timeStr = t.entry_time + (t.exit_time ? ' &#x2192; ' + t.exit_time : '');
+  var timeStr = fmtIst(t.created_at) + (t.exit_time ? ' &#x2192; ' + fmtIst(t.exit_time) : '');
 
   var metaRows = '';
   if (t.trade_type === 'spread') {
@@ -4994,12 +5024,12 @@ function buildCard(t) {
 
   var entryImg = t.entry_screenshot
     ? '<img src="/api/journal/screenshots/'+t.entry_screenshot+'" onclick="openLightbox(this)">'
-      +'<div class="ss-time">'+t.entry_time+'</div>'
+      +'<div class="ss-time">'+fmtIst(t.created_at)+'</div>'
     : '<div class="screenshot-placeholder">No screenshot</div>';
 
   var exitImg = t.exit_screenshot
     ? '<img src="/api/journal/screenshots/'+t.exit_screenshot+'" onclick="openLightbox(this)">'
-      +'<div class="ss-time">'+t.exit_time+'</div>'
+      +'<div class="ss-time">'+fmtIst(t.exit_time)+'</div>'
     : '<div class="screenshot-placeholder">'+(isOpen?'Captured on exit':'No screenshot')+'</div>';
 
   var div = document.createElement('div');
@@ -5028,13 +5058,16 @@ function buildCard(t) {
             '<tr><td>Instrument</td><td><span style="color:#e6edf3">'+t.instrument+'</span></td></tr>' +
             metaRows +
             '<tr><td>Lots / Qty</td><td><span style="color:#e6edf3">'+t.lots+' lots &middot; '+qty(t)+' qty</span></td></tr>' +
-            '<tr><td>Entry time</td><td><span style="color:#e6edf3">'+t.entry_time+'</span></td></tr>' +
-            '<tr><td>Exit time</td><td><span style="color:#e6edf3">'+(t.exit_time||'—')+'</span></td></tr>' +
+            '<tr><td>Entry time</td><td><span style="color:#e6edf3">'+fmtIst(t.created_at)+'</span></td></tr>' +
+            '<tr><td>Exit time</td><td><span style="color:#e6edf3">'+(t.exit_time?fmtIst(t.exit_time):'—')+'</span></td></tr>' +
           '</table>' +
           '<div class="notes-box">' +
             '<div style="font-size:10px;color:#484f58;margin-bottom:3px;text-transform:uppercase;letter-spacing:.5px">Notes</div>' +
             '<textarea placeholder="Add trade notes…" id="notes-'+t.id+'">'+(t.notes||'')+'</textarea>' +
-            '<button class="save-note-btn" onclick="saveNote(\\''+t.id+'\\')">Save</button>' +
+            '<div style="display:flex;gap:8px;margin-top:4px;">' +
+              '<button class="save-note-btn" onclick="saveNote(\\''+t.id+'\\')">Save</button>' +
+              '<button onclick="deleteEntry(\\''+t.id+'\\',\\''+t.instrument+'\\')" style="padding:4px 10px;font-size:11px;background:none;border:1px solid #f85149;color:#f85149;border-radius:4px;cursor:pointer;">Delete</button>' +
+            '</div>' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -5061,6 +5094,18 @@ function saveNote(id) {
     btn.textContent = '&#x2713; Saved'; btn.style.background='#2ea043';
     setTimeout(function(){btn.textContent='Save';btn.style.background='';},1500);
   });
+}
+
+function deleteEntry(id, instrument) {
+  if (!confirm('Delete journal entry for ' + instrument + '?')) return;
+  fetch('/api/journal/entry/' + id, {method: 'DELETE'})
+    .then(function(r){return r.json();})
+    .then(function(d) {
+      if (d.status === 'ok') {
+        _entries = _entries.filter(function(e){return e.id != id;});
+        renderAll();
+      }
+    });
 }
 
 function openLightbox(img) {
