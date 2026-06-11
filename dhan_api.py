@@ -171,11 +171,8 @@ class DhanAPI:
         """Get all orders for the day."""
         try:
             response = self.dhan.get_order_list()
-            logger.info("ORDER BOOK RAW: type=%s keys=%s", type(response).__name__,
-                        list(response.keys()) if isinstance(response, dict) else str(response)[:80])
             if isinstance(response, dict) and "data" in response:
                 data = response["data"]
-                logger.info("ORDER BOOK DATA: type=%s val=%s", type(data).__name__, str(data)[:120])
                 if isinstance(data, list):
                     return [o for o in data if isinstance(o, dict)]
                 return []

@@ -88,6 +88,16 @@ class PositionMonitor:
         self._start_market_feed()
         self._order_update_thread = self.api.start_order_updates_async(self._on_order_update)
 
+        # Backfill journal entries from today's order book (catches trades placed
+        # via Dhan directly, or when monitor was not running)
+        try:
+            orders = self.api.get_order_book()
+            if orders:
+                logger.info("Startup journal backfill: checking %d orders...", len(orders))
+                self._auto_journal_orders(orders)
+        except Exception as e:
+            logger.warning("Startup journal backfill failed: %s", e)
+
         self._monitor_loop()
 
     @staticmethod
@@ -189,12 +199,11 @@ class PositionMonitor:
             # Fetch pending orders for dashboard display + auto-journal
             try:
                 orders = self.api.get_order_book()
-                logger.info("ORDER BOOK FETCH: type=%s len=%s", type(orders).__name__, len(orders) if orders else 0)
                 if orders is not None:
                     self._last_orders = orders
                     self._auto_journal_orders(orders)
-            except Exception as e:
-                logger.error("Order book fetch error: %s", e)
+            except Exception:
+                pass  # Keep previous orders on failure
 
             # Evaluate P&L against risk rules
             action = self.risk.evaluate_pnl(realized_pnl, unrealized_pnl)
@@ -404,18 +413,11 @@ class PositionMonitor:
                 if str(o.get("securityId", "")) in existing_sids:
                     self._journaled_order_ids.add(o.get("orderId"))
             self._auto_journal_seeded = True
-            # Log first order to confirm field names
             if orders:
-                sample = orders[0]
-                logger.info("ORDER SAMPLE: status=%s txn=%s prod=%s sym=%s id=%s",
-                            sample.get("orderStatus"), sample.get("transactionType"),
-                            sample.get("productType"), sample.get("tradingSymbol"),
-                            sample.get("orderId"))
-                # Log all unique statuses and transaction types seen
                 statuses = set(o.get("orderStatus") for o in orders)
                 txns = set(o.get("transactionType") for o in orders)
                 prods = set(o.get("productType") for o in orders)
-                logger.info("ORDER BOOK SUMMARY: count=%d statuses=%s txns=%s prods=%s",
+                logger.info("Journal backfill: %d orders | statuses=%s txns=%s prods=%s",
                             len(orders), statuses, txns, prods)
 
         filled_sells = [
