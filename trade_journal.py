@@ -283,7 +283,8 @@ class TradeJournal:
     def create_entry(self, data: dict) -> str:
         entry_id = str(uuid.uuid4())[:12]
         # Allow caller to pass explicit timestamp (e.g. from Dhan order createTime)
-        now = data.get("created_at_ts") or time.time()
+        ts = data.get("created_at_ts")
+        now = ts if (ts is not None and ts > 0) else time.time()
         entry_time = datetime.utcfromtimestamp(now).strftime("%d-%b %H:%M:%S")
         with self._lock:
             with self._conn:

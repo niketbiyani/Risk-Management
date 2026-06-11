@@ -415,21 +415,29 @@ class PositionMonitor:
             self._auto_journal_seeded = True
 
         def _order_ts(o: dict) -> float:
-            """Parse Dhan createTime to Unix timestamp (IST string → UTC epoch)."""
+            """Parse Dhan createTime to Unix timestamp."""
             from datetime import timezone as _tz, timedelta as _td
-            t = o.get("createTime") or o.get("updateTime") or ""
+            t = o.get("createTime") or o.get("updateTime") or o.get("exchangeTime") or ""
             if not t:
                 return 0.0
             try:
                 ist = _tz(_td(hours=5, minutes=30))
-                # Dhan returns "HH:MM:SS" or "YYYY-MM-DD HH:MM:SS"
-                if len(t) <= 8:
+                if len(t) <= 8:  # "HH:MM:SS" only — prepend today's IST date
                     from datetime import date as _date
-                    t = str(_date.today()) + " " + t
+                    today_ist = datetime.now(_tz(_td(hours=5, minutes=30))).date()
+                    t = str(today_ist) + " " + t
                 dt = datetime.strptime(t, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ist)
                 return dt.timestamp()
-            except Exception:
+            except Exception as e:
+                logger.debug("_order_ts parse error for %r: %s", t, e)
                 return 0.0
+
+        # Log createTime from first order once to confirm format
+        if orders and not getattr(self, "_order_ts_logged", False):
+            s = orders[0]
+            logger.info("ORDER TIME FIELDS: createTime=%r updateTime=%r exchangeTime=%r orderId=%r",
+                        s.get("createTime"), s.get("updateTime"), s.get("exchangeTime"), s.get("orderId"))
+            self._order_ts_logged = True
 
         # Index all TRADED orders by security_id, sorted by time
         traded_by_sid: dict = {}
@@ -467,12 +475,12 @@ class PositionMonitor:
                 lot_size = 25
             lots = max(1, qty // lot_size) if lot_size > 0 else 1
 
-            # Exit: BUY on same security_id placed AFTER this sell (by time)
+            # Exit: BUY on same security_id (any time — closing a short)
             exit_order = None
             for o in traded_by_sid.get(security_id, []):
                 if (o.get("transactionType") == "BUY"
-                        and _order_ts(o) > sell_ts
-                        and o.get("orderId") not in self._journaled_order_ids):
+                        and o.get("orderId") not in self._journaled_order_ids
+                        and o.get("orderId") != order_id):
                     exit_order = o
                     break
 
