@@ -209,14 +209,13 @@ class DhanAPI:
         """Get all open positions for the day."""
         try:
             response = self.dhan.get_positions()
-            logger.info("GET POSITIONS RAW: type=%s keys=%s", type(response).__name__,
-                        list(response.keys()) if isinstance(response, dict) else "N/A")
             if isinstance(response, dict) and "data" in response:
                 data = response["data"]
-                logger.info("GET POSITIONS DATA: type=%s len=%s",
-                            type(data).__name__, len(data) if isinstance(data, list) else "N/A")
                 if isinstance(data, list):
-                    return [p for p in data if isinstance(p, dict)]
+                    result = [p for p in data if isinstance(p, dict)]
+                    if result:
+                        logger.info("POSITIONS SAMPLE: %s", result[0])
+                    return result
                 return []
             return []
         except Exception as e:
