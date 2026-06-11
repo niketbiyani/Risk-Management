@@ -3194,9 +3194,16 @@ DASHBOARD_HTML = """
             .then(function(res) {
                 if (res.entry_id && entryData.sell_security_id) {
                     _journalOpenEntries[entryData.sell_security_id] = res.entry_id;
+                    console.log('Journal entry created:', res.entry_id, entryData.instrument);
+                } else {
+                    console.error('Journal entry failed:', res);
+                    showToast('Journal entry failed: ' + JSON.stringify(res), 'warning');
                 }
             })
-            .catch(function(){});
+            .catch(function(e){
+                console.error('Journal entry network error:', e);
+                showToast('Journal entry network error', 'warning');
+            });
         }
 
         function closeJournalEntry(securityId, sellExitPrice, buyExitPrice, pnl) {
@@ -4709,9 +4716,11 @@ def api_journal_analytics():
 def api_journal_create_entry():
     data = request.json or {}
     if not _monitor:
-        return jsonify({"status": "error"}), 503
+        logger.warning("Journal entry POST: monitor not ready")
+        return jsonify({"status": "error", "message": "monitor not ready"}), 503
     journal = _monitor.state.journal
     entry_id = journal.create_entry(data)
+    logger.info("Journal entry created: %s instrument=%s", entry_id, data.get("instrument"))
     return jsonify({"status": "ok", "entry_id": entry_id})
 
 
