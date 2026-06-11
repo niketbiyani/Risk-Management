@@ -336,6 +336,15 @@ class TradeJournal:
     def get_screenshot_path(self, filename: str) -> str:
         return os.path.join(SCREENSHOTS_DIR, filename)
 
+    def get_today_security_ids(self) -> set:
+        """Return sell_security_ids already journaled today (to avoid duplicates on restart)."""
+        import time as _time
+        today_start = _time.time() - 86400  # last 24h
+        cur = self._conn.execute(
+            "SELECT sell_security_id FROM trade_entries WHERE created_at > ?", (today_start,)
+        )
+        return {row[0] for row in cur.fetchall() if row[0]}
+
     def get_entries(self, limit: int = 100) -> list:
         cur = self._conn.execute(
             "SELECT * FROM trade_entries ORDER BY created_at DESC LIMIT ?", (limit,)

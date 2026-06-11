@@ -50,6 +50,7 @@ class PositionMonitor:
         self._last_trade_count = 0
         self._prev_realized_pnl = 0.0
         self._lockout_executed = False
+        self._journaled_order_ids: set = set()  # prevent duplicate journal entries
 
         # WebSocket state
         self._market_feed_thread: threading.Thread | None = None
@@ -185,11 +186,12 @@ class PositionMonitor:
             # Record P&L snapshot for intraday chart
             self.pnl_tracker.record(realized_pnl, unrealized_pnl)
 
-            # Fetch pending orders for dashboard display
+            # Fetch pending orders for dashboard display + auto-journal
             try:
                 orders = self.api.get_order_book()
                 if orders is not None:
                     self._last_orders = orders
+                    self._auto_journal_orders(orders)
             except Exception:
                 pass  # Keep previous orders on failure
 
@@ -390,6 +392,73 @@ class PositionMonitor:
 
         except Exception as e:
             logger.error("Error in order update callback: %s", e)
+
+    def _auto_journal_orders(self, orders: list):
+        """Auto-create journal entries for all filled SELL option orders not yet journaled.
+        Fires on every tick so it catches trades placed directly on Dhan too."""
+        # Seed on first call: mark orders whose security_id already has a journal entry today
+        if not hasattr(self, "_auto_journal_seeded"):
+            existing_sids = self.state.journal.get_today_security_ids()
+            for o in orders:
+                if str(o.get("securityId", "")) in existing_sids:
+                    self._journaled_order_ids.add(o.get("orderId"))
+            self._auto_journal_seeded = True
+
+        filled_sells = [
+            o for o in orders
+            if o.get("orderStatus") == "TRADED"
+            and o.get("transactionType") == "SELL"
+            and o.get("orderId") not in self._journaled_order_ids
+            and o.get("productType") == "MARGIN"
+        ]
+
+        for sell_order in filled_sells:
+            order_id = sell_order.get("orderId")
+            security_id = str(sell_order.get("securityId", ""))
+            symbol = sell_order.get("tradingSymbol", security_id)
+            price = float(sell_order.get("price") or sell_order.get("averageTradedPrice") or 0)
+            qty = int(sell_order.get("filledQty") or sell_order.get("quantity") or 0)
+
+            # Find matching BUY order (same product type, similar time, option)
+            buy_order = None
+            for o in orders:
+                if (o.get("orderStatus") == "TRADED"
+                        and o.get("transactionType") == "BUY"
+                        and o.get("productType") == "MARGIN"
+                        and o.get("orderId") not in self._journaled_order_ids
+                        and o.get("orderId") != order_id):
+                    buy_order = o
+                    break
+
+            # Determine lot size from position cache
+            lot_size = 1
+            cached = self.trade_mgr._position_cache.get(security_id, {})
+            if not cached:
+                # Try to infer from symbol name
+                if "NIFTY" in symbol.upper():
+                    lot_size = 75
+                elif "SENSEX" in symbol.upper() or "BSE" in symbol.upper():
+                    lot_size = 10
+                else:
+                    lot_size = 25
+            lots = max(1, qty // lot_size) if lot_size > 0 else 1
+
+            entry_data = {
+                "trade_type": "spread" if buy_order else "naked",
+                "instrument": symbol,
+                "hedge_instrument": buy_order.get("tradingSymbol", "") if buy_order else None,
+                "sell_security_id": security_id,
+                "sell_entry_price": price,
+                "buy_entry_price": float(buy_order.get("price") or buy_order.get("averageTradedPrice") or 0) if buy_order else 0,
+                "lots": lots,
+                "lot_size": lot_size,
+            }
+
+            entry_id = self.state.journal.create_entry(entry_data)
+            self._journaled_order_ids.add(order_id)
+            if buy_order:
+                self._journaled_order_ids.add(buy_order.get("orderId"))
+            logger.info("Auto-journal entry created: %s for %s", entry_id, symbol)
 
     def _check_new_trades(self):
         """Check tradebook for newly executed trades and record them."""
