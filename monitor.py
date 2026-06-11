@@ -403,6 +403,36 @@ class PositionMonitor:
         except Exception as e:
             logger.error("Error in order update callback: %s", e)
 
+    def _normalize_trade_book(self, trades: list) -> list:
+        """Convert trade book records to order-book format for _auto_journal_orders."""
+        if trades:
+            sample = trades[0]
+            logger.info("TRADE BOOK SAMPLE FIELDS: %s", list(sample.keys()))
+        result = []
+        seen_ids = set()
+        for t in trades:
+            # Dhan trade book fields differ from order book — map them
+            oid = str(t.get("orderId") or t.get("exchangeOrderId") or t.get("exchangeTradeId") or id(t))
+            if oid in seen_ids:
+                continue
+            seen_ids.add(oid)
+            result.append({
+                "orderId": oid,
+                "orderStatus": "TRADED",
+                "transactionType": t.get("transactionType", ""),
+                "securityId": t.get("securityId", ""),
+                "tradingSymbol": t.get("tradingSymbol", str(t.get("securityId", ""))),
+                "exchangeSegment": t.get("exchangeSegment", ""),
+                "price": t.get("tradedPrice") or t.get("price") or 0,
+                "averageTradedPrice": t.get("tradedPrice") or t.get("averageTradedPrice") or 0,
+                "filledQty": t.get("tradedQuantity") or t.get("quantity") or 0,
+                "quantity": t.get("tradedQuantity") or t.get("quantity") or 0,
+                "createTime": t.get("createTime") or t.get("exchangeTime") or t.get("updateTime") or "",
+                "updateTime": t.get("updateTime") or "",
+                "exchangeTime": t.get("exchangeTime") or "",
+            })
+        return result
+
     def _auto_journal_orders(self, orders: list):
         """Auto-create journal entries for all filled SELL option orders not yet journaled.
         Fires on every tick so it catches trades placed directly on Dhan too."""

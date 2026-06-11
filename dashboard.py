@@ -4761,10 +4761,17 @@ def api_journal_backfill():
         return jsonify({"status": "error", "message": "monitor not ready"}), 503
     try:
         orders = _monitor.api.get_order_book()
+        source = "order_book"
         if not orders:
-            return jsonify({"status": "ok", "message": "No orders found", "created": 0})
+            # Order book is empty after market close — try trade book instead
+            trades = _monitor.api.get_trade_book()
+            if trades:
+                logger.info("Order book empty, falling back to trade book (%d records)", len(trades))
+                orders = _monitor._normalize_trade_book(trades)
+                source = "trade_book"
+        if not orders:
+            return jsonify({"status": "ok", "message": "No orders found in order book or trade book", "created": 0})
         # Reset in-memory seen set so deleted entries can be re-imported
-        # The DB seed step in _auto_journal_orders will still prevent true duplicates
         _monitor._journaled_order_ids = set()
         if hasattr(_monitor, "_auto_journal_seeded"):
             del _monitor._auto_journal_seeded
@@ -4772,8 +4779,8 @@ def api_journal_backfill():
         _monitor._auto_journal_orders(orders)
         after_count = len(_monitor.state.journal.get_entries(limit=1000))
         created = after_count - before_count
-        logger.info("Manual journal backfill: %d orders, %d new entries", len(orders), created)
-        return jsonify({"status": "ok", "orders_scanned": len(orders), "created": created})
+        logger.info("Manual journal backfill (%s): %d records, %d new entries", source, len(orders), created)
+        return jsonify({"status": "ok", "orders_scanned": len(orders), "created": created, "source": source})
     except Exception as e:
         logger.error("Journal backfill error: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
