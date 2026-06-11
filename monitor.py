@@ -140,6 +140,9 @@ class PositionMonitor:
             # Fetch current positions
             positions = self.api.get_positions()
             self._last_positions = positions
+            if positions:
+                logger.info("POSITIONS DEBUG: count=%d first_keys=%s first_sample=%s",
+                            len(positions), list(positions[0].keys())[:10], positions[0])
 
             # Keep position cache fresh for WebSocket SL/TP callback
             self.trade_mgr.update_position_cache(positions)
