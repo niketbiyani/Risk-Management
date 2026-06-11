@@ -238,11 +238,15 @@ class TradeJournal:
         )
         pnl_by_hour = [dict(r) for r in cur.fetchall()]
 
-        # P&L by instrument
+        # P&L by instrument — join with trade_entries to get readable symbol
         cur = self._conn.execute(
-            "SELECT security_id, SUM(pnl) as total_pnl, COUNT(*) as trade_count, "
-            "SUM(CASE WHEN is_winner = 1 THEN 1 ELSE 0 END) as winners "
-            "FROM trades WHERE date >= ? GROUP BY security_id "
+            "SELECT t.security_id, "
+            "COALESCE(e.instrument, t.security_id) as instrument, "
+            "SUM(t.pnl) as total_pnl, COUNT(*) as trade_count, "
+            "SUM(CASE WHEN t.is_winner = 1 THEN 1 ELSE 0 END) as winners "
+            "FROM trades t "
+            "LEFT JOIN trade_entries e ON e.sell_security_id = t.security_id "
+            "WHERE t.date >= ? GROUP BY t.security_id "
             "ORDER BY total_pnl DESC LIMIT 20",
             (date_cutoff,),
         )

@@ -1880,7 +1880,7 @@ DASHBOARD_HTML = """
                         for (var inst = 0; inst < data.pnl_by_instrument.length; inst++) {
                             var ins = data.pnl_by_instrument[inst];
                             var iClass = ins.total_pnl >= 0 ? 'positive' : 'negative';
-                            html += '<tr><td>' + ins.security_id + '</td><td class="' + iClass + '">' + fmt(ins.total_pnl) + '</td><td>' + ins.trade_count + '</td><td>' + ins.winners + '</td></tr>';
+                            html += '<tr><td>' + (ins.instrument || ins.security_id) + '</td><td class="' + iClass + '">' + fmt(ins.total_pnl) + '</td><td>' + ins.trade_count + '</td><td>' + ins.winners + '</td></tr>';
                         }
                         html += '</tbody></table>';
                     }

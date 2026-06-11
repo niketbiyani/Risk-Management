@@ -413,12 +413,14 @@ class PositionMonitor:
                 if str(o.get("securityId", "")) in existing_sids:
                     self._journaled_order_ids.add(o.get("orderId"))
             self._auto_journal_seeded = True
-            if orders:
-                statuses = set(o.get("orderStatus") for o in orders)
-                txns = set(o.get("transactionType") for o in orders)
-                prods = set(o.get("productType") for o in orders)
-                logger.info("Journal backfill: %d orders | statuses=%s txns=%s prods=%s",
-                            len(orders), statuses, txns, prods)
+
+        # Index all TRADED orders by security_id for fast lookup
+        # traded_by_sid[sid] = list of orders sorted by orderId (proxy for time)
+        traded_by_sid: dict = {}
+        for o in orders:
+            if o.get("orderStatus") == "TRADED":
+                sid = str(o.get("securityId", ""))
+                traded_by_sid.setdefault(sid, []).append(o)
 
         filled_sells = [
             o for o in orders
@@ -428,52 +430,80 @@ class PositionMonitor:
         ]
 
         for sell_order in filled_sells:
-            order_id = sell_order.get("orderId")
+            order_id = sell_order.get("orderId", "")
             security_id = str(sell_order.get("securityId", ""))
             symbol = sell_order.get("tradingSymbol", security_id)
-            price = float(sell_order.get("price") or sell_order.get("averageTradedPrice") or 0)
+            sell_price = float(sell_order.get("price") or sell_order.get("averageTradedPrice") or 0)
             qty = int(sell_order.get("filledQty") or sell_order.get("quantity") or 0)
 
-            # Find matching BUY order (same product type, similar time, option)
-            buy_order = None
-            for o in orders:
-                if (o.get("orderStatus") == "TRADED"
-                        and o.get("transactionType") == "BUY"
-                        and o.get("productType") == "MARGIN"
-                        and o.get("orderId") not in self._journaled_order_ids
-                        and o.get("orderId") != order_id):
-                    buy_order = o
-                    break
-
-            # Determine lot size from position cache
-            lot_size = 1
-            cached = self.trade_mgr._position_cache.get(security_id, {})
-            if not cached:
-                # Try to infer from symbol name
-                if "NIFTY" in symbol.upper():
-                    lot_size = 75
-                elif "SENSEX" in symbol.upper() or "BSE" in symbol.upper():
-                    lot_size = 10
-                else:
-                    lot_size = 25
+            # Determine lot size from symbol name
+            sym_up = symbol.upper()
+            if "NIFTY" in sym_up and "BANK" not in sym_up:
+                lot_size = 75
+            elif "SENSEX" in sym_up:
+                lot_size = 10
+            elif "BANKNIFTY" in sym_up:
+                lot_size = 35
+            else:
+                lot_size = 25
             lots = max(1, qty // lot_size) if lot_size > 0 else 1
 
+            # Find exit: a BUY on the SAME security_id placed AFTER this sell
+            exit_order = None
+            for o in traded_by_sid.get(security_id, []):
+                if (o.get("transactionType") == "BUY"
+                        and o.get("orderId", "") > order_id):  # orderId encodes sequence
+                    exit_order = o
+                    break
+
+            # Find hedge: a BUY on a DIFFERENT security_id (spread leg)
+            # Pair heuristic: same exchange segment, same expiry embedded in symbol,
+            # different security_id, not already used as an exit
+            hedge_order = None
+            for sid2, orders2 in traded_by_sid.items():
+                if sid2 == security_id:
+                    continue
+                for o in orders2:
+                    if (o.get("transactionType") == "BUY"
+                            and o.get("orderId") not in self._journaled_order_ids
+                            and o.get("exchangeSegment") == sell_order.get("exchangeSegment")):
+                        hedge_order = o
+                        break
+                if hedge_order:
+                    break
+
+            buy_exit_price = float(exit_order.get("price") or exit_order.get("averageTradedPrice") or 0) if exit_order else 0
+            is_closed = exit_order is not None
+            pnl = round((sell_price - buy_exit_price) * qty, 2) if is_closed else None
+
             entry_data = {
-                "trade_type": "spread" if buy_order else "naked",
+                "trade_type": "spread" if hedge_order else "naked",
                 "instrument": symbol,
-                "hedge_instrument": buy_order.get("tradingSymbol", "") if buy_order else None,
+                "hedge_instrument": hedge_order.get("tradingSymbol") if hedge_order else None,
                 "sell_security_id": security_id,
-                "sell_entry_price": price,
-                "buy_entry_price": float(buy_order.get("price") or buy_order.get("averageTradedPrice") or 0) if buy_order else 0,
+                "sell_entry_price": sell_price,
+                "buy_entry_price": float(hedge_order.get("price") or hedge_order.get("averageTradedPrice") or 0) if hedge_order else 0,
                 "lots": lots,
                 "lot_size": lot_size,
             }
 
             entry_id = self.state.journal.create_entry(entry_data)
+
+            # If we found an exit order, immediately close the entry
+            if is_closed and entry_id:
+                self.state.journal.update_entry_exit(entry_id, {
+                    "sell_exit_price": buy_exit_price,
+                    "pnl": pnl,
+                })
+
             self._journaled_order_ids.add(order_id)
-            if buy_order:
-                self._journaled_order_ids.add(buy_order.get("orderId"))
-            logger.info("Auto-journal entry created: %s for %s", entry_id, symbol)
+            if exit_order:
+                self._journaled_order_ids.add(exit_order.get("orderId"))
+            if hedge_order:
+                self._journaled_order_ids.add(hedge_order.get("orderId"))
+            logger.info("Auto-journal: %s %s%s", symbol,
+                        f"P&L ₹{pnl:.0f}" if pnl is not None else "OPEN",
+                        " [spread]" if hedge_order else "")
 
     def _check_new_trades(self):
         """Check tradebook for newly executed trades and record them."""
