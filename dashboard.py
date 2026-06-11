@@ -4925,10 +4925,12 @@ function setFilter(f, btn) {
   renderAll();
 }
 
-function fmtIst(utcStr) {
-  if (!utcStr) return '';
-  // Server stores UTC strings like "2026-06-11 05:15:53" — convert to IST (+5:30)
-  var d = new Date(utcStr.replace(' ', 'T') + 'Z');
+function fmtIst(val) {
+  if (!val) return '';
+  // created_at is a Unix timestamp (number); entry_time/exit_time are strings
+  var d = (typeof val === 'number') ? new Date(val * 1000)
+        : new Date(String(val).replace(' ', 'T') + 'Z');
+  if (isNaN(d)) return String(val);
   return d.toLocaleString('en-IN', {timeZone:'Asia/Kolkata',
     day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', second:'2-digit',
     hour12: false});
@@ -4944,10 +4946,10 @@ function renderAll() {
   });
   var sortBy = document.getElementById('sort-select').value;
   list.sort(function(a, b) {
-    if (sortBy === 'oldest') return (a.created_at||'').localeCompare(b.created_at||'');
+    if (sortBy === 'oldest')   return (a.created_at||0) - (b.created_at||0);
     if (sortBy === 'pnl_desc') return (b.pnl||0) - (a.pnl||0);
     if (sortBy === 'pnl_asc')  return (a.pnl||0) - (b.pnl||0);
-    return (b.created_at||'').localeCompare(a.created_at||''); // newest first default
+    return (b.created_at||0) - (a.created_at||0); // newest first default
   });
   renderStats(list);
   var el = document.getElementById('journal');
