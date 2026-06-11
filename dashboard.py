@@ -4760,24 +4760,33 @@ def api_journal_backfill():
     if not _monitor:
         return jsonify({"status": "error", "message": "monitor not ready"}), 503
     try:
+        from datetime import date as _date
+        today = str(_date.today())
         orders = _monitor.api.get_order_book()
         source = "order_book"
         if not orders:
-            # Order book is empty after market close — try trade book instead
+            # Try historical trade API (works after market close)
+            hist = _monitor.api.get_trade_history(today, today)
+            if hist:
+                logger.info("Order book empty, falling back to trade history (%d records)", len(hist))
+                orders = _monitor._normalize_trade_book(hist)
+                source = "trade_history"
+        if not orders:
+            # Try same-day trade book
             trades = _monitor.api.get_trade_book()
             if trades:
-                logger.info("Order book empty, falling back to trade book (%d records)", len(trades))
+                logger.info("Falling back to trade book (%d records)", len(trades))
                 orders = _monitor._normalize_trade_book(trades)
                 source = "trade_book"
         if not orders:
-            # Both live APIs empty (after-hours) — use cached orders from last tick
+            # Last resort: cached orders from last tick during market hours
             cached = getattr(_monitor, "_last_orders", [])
             if cached:
-                logger.info("Live APIs empty, using cached order snapshot (%d records)", len(cached))
+                logger.info("Using cached order snapshot (%d records)", len(cached))
                 orders = cached
                 source = "cached"
         if not orders:
-            return jsonify({"status": "ok", "message": "No orders found — market may be closed and no cached orders available", "created": 0})
+            return jsonify({"status": "ok", "message": "No orders found. Try uploading a CSV from Dhan's Order Book → Export.", "created": 0})
         # Reset in-memory seen set so deleted entries can be re-imported
         _monitor._journaled_order_ids = set()
         if hasattr(_monitor, "_auto_journal_seeded"):
@@ -4790,6 +4799,85 @@ def api_journal_backfill():
         return jsonify({"status": "ok", "orders_scanned": len(orders), "created": created, "source": source})
     except Exception as e:
         logger.error("Journal backfill error: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/journal/upload_csv", methods=["POST"])
+def api_journal_upload_csv():
+    """Import trades from a Dhan CSV order/trade export."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "monitor not ready"}), 503
+    try:
+        import csv, io
+        f = request.files.get("file")
+        if not f:
+            return jsonify({"status": "error", "message": "No file uploaded"}), 400
+        content = f.read().decode("utf-8-sig")  # utf-8-sig strips BOM
+        reader = csv.DictReader(io.StringIO(content))
+        rows = list(reader)
+        if not rows:
+            return jsonify({"status": "error", "message": "CSV is empty"}), 400
+        logger.info("CSV UPLOAD fields: %s", list(rows[0].keys()))
+
+        # Normalise CSV rows to order-book format
+        def _parse_csv_row(r):
+            # Dhan CSV columns vary by export type; try common variants
+            def g(*keys):
+                for k in keys:
+                    v = r.get(k, "").strip()
+                    if v:
+                        return v
+                return ""
+            status = g("Order Status", "Status", "order_status")
+            txn    = g("Transaction Type", "Txn Type", "transaction_type", "Side", "side")
+            sid    = g("Security Id", "security_id", "Scrip Code", "SecurityId")
+            symbol = g("Trading Symbol", "Symbol", "Scrip", "trading_symbol") or sid
+            seg    = g("Exchange Segment", "Exchange", "exchange_segment")
+            price  = g("Average Traded Price", "Price", "Traded Price", "average_traded_price") or "0"
+            qty    = g("Filled Qty", "Quantity", "Traded Qty", "filled_qty", "Qty") or "0"
+            oid    = g("Order Id", "Order ID", "order_id", "orderId") or (symbol + "_" + qty)
+            ctime  = g("Create Time", "Order Time", "Time", "create_time", "Date Time")
+            # Normalise status: Dhan CSV may say "TRADED", "COMPLETE", "Traded"
+            if status.upper() in ("TRADED", "COMPLETE", "COMPLETED", "FILLED"):
+                status = "TRADED"
+            # Normalise txn
+            txn_up = txn.upper()
+            if txn_up in ("S", "SELL", "SHORT"):
+                txn = "SELL"
+            elif txn_up in ("B", "BUY", "LONG"):
+                txn = "BUY"
+            return {
+                "orderId": oid,
+                "orderStatus": status,
+                "transactionType": txn,
+                "securityId": sid,
+                "tradingSymbol": symbol,
+                "exchangeSegment": seg,
+                "price": float(price) if price else 0,
+                "averageTradedPrice": float(price) if price else 0,
+                "filledQty": int(float(qty)) if qty else 0,
+                "quantity": int(float(qty)) if qty else 0,
+                "createTime": ctime,
+                "updateTime": ctime,
+                "exchangeTime": ctime,
+            }
+
+        orders = [_parse_csv_row(r) for r in rows]
+        orders = [o for o in orders if o["orderStatus"] == "TRADED"]
+        if not orders:
+            return jsonify({"status": "ok", "message": "No TRADED orders found in CSV", "created": 0})
+
+        _monitor._journaled_order_ids = set()
+        if hasattr(_monitor, "_auto_journal_seeded"):
+            del _monitor._auto_journal_seeded
+        before_count = len(_monitor.state.journal.get_entries(limit=1000))
+        _monitor._auto_journal_orders(orders)
+        after_count = len(_monitor.state.journal.get_entries(limit=1000))
+        created = after_count - before_count
+        logger.info("CSV journal import: %d rows, %d traded, %d new entries", len(rows), len(orders), created)
+        return jsonify({"status": "ok", "rows_scanned": len(orders), "created": created, "source": "csv"})
+    except Exception as e:
+        logger.error("CSV upload error: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -4953,6 +5041,11 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
     </select>
     <button class="refresh-btn" onclick="loadEntries()">&#x21bb; Refresh</button>
     <button id="backfill-btn" onclick="runBackfill()" style="background:#1a3a2a;color:#3fb950;border:1px solid #3fb950;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;">&#x2193; Import from Dhan</button>
+    <label style="background:#1a2a3a;color:#58a6ff;border:1px solid #58a6ff;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;" title="Export CSV from Dhan Order Book, then upload here">
+      &#x2B06; Upload CSV
+      <input type="file" id="csv-upload" accept=".csv" onchange="uploadCsv(this)" style="display:none;">
+    </label>
+    <span id="csv-status" style="font-size:11px;color:#8b949e;"></span>
   </div>
 </div>
 <div class="stats-row" id="stats-row"></div>
@@ -4990,6 +5083,33 @@ function runBackfill() {
     .catch(function() {
       btn.textContent = '✕ Network error';
       btn.disabled = false;
+    });
+}
+
+function uploadCsv(input) {
+  var file = input.files[0];
+  if (!file) return;
+  var status = document.getElementById('csv-status');
+  status.textContent = '⏳ Uploading...';
+  var fd = new FormData();
+  fd.append('file', file);
+  fetch('/api/journal/upload_csv', {method: 'POST', body: fd})
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      if (d.status === 'ok') {
+        status.style.color = '#3fb950';
+        status.textContent = '✓ ' + d.created + ' entries imported from CSV (' + d.rows_scanned + ' trades scanned)';
+        loadEntries();
+      } else {
+        status.style.color = '#f85149';
+        status.textContent = '✕ ' + (d.message || 'Error');
+      }
+      input.value = '';
+    })
+    .catch(function() {
+      status.style.color = '#f85149';
+      status.textContent = '✕ Network error';
+      input.value = '';
     });
 }
 

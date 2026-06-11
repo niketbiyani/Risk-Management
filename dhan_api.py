@@ -194,6 +194,25 @@ class DhanAPI:
             logger.error("Failed to get order %s: %s", order_id, e)
             return {}
 
+    def get_trade_history(self, from_date: str, to_date: str) -> list[dict]:
+        """Get historical trades for a date range (works after market close)."""
+        try:
+            response = self.dhan.get_trade_history(from_date, to_date, 0)
+            logger.info("TRADE HISTORY RAW: type=%s keys=%s data_type=%s data_len=%s",
+                        type(response).__name__,
+                        list(response.keys()) if isinstance(response, dict) else "N/A",
+                        type(response.get("data")).__name__ if isinstance(response, dict) else "N/A",
+                        len(response.get("data") or []) if isinstance(response, dict) else "N/A")
+            if isinstance(response, dict) and "data" in response:
+                data = response["data"]
+                if isinstance(data, list):
+                    return [t for t in data if isinstance(t, dict)]
+                return []
+            return []
+        except Exception as e:
+            logger.error("Failed to get trade history: %s", e)
+            return []
+
     def get_trade_book(self) -> list[dict]:
         """Get all executed trades for the day."""
         try:
