@@ -4663,6 +4663,18 @@ def api_journal_analytics():
         return jsonify({})
 
 
+@app.route("/api/analyser/dates")
+def api_analyser_dates():
+    """Proxy /api/dates from trade-analyser."""
+    try:
+        import urllib.request as _ur
+        with _ur.urlopen(f"{ANALYSER_URL}/api/dates", timeout=5) as r:
+            return jsonify(json.loads(r.read().decode()))
+    except Exception as e:
+        logger.warning("analyser /api/dates failed: %s", e)
+        return jsonify([])
+
+
 @app.route("/api/analytics/day_trades")
 def api_analytics_day_trades():
     """Return individual trades for a given date from trade-analyser."""
@@ -5095,19 +5107,66 @@ window.onload = function() {
     loadAll();
 };
 
+function fetchWithTimeout(url, ms) {
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, ms) : null;
+    var opts = ctrl ? {signal: ctrl.signal} : {};
+    return fetch(url, opts).finally(function(){ if(timer) clearTimeout(timer); });
+}
+
 function loadAll() {
-    // Fetch up to 365 days of daily summaries
-    fetch('/api/journal/daily_summaries?days=365')
-        .then(function(r){return r.json();})
-        .then(function(data) {
-            _byDate = {};
-            for (var i = 0; i < data.length; i++) {
-                _byDate[data[i].date] = data[i];
+    var statsEl = document.getElementById('overall-stats');
+    // Step 1: get list of dates that have data from trade-analyser directly
+    fetchWithTimeout('/api/analyser/dates', 5000)
+        .then(function(r){ return r.json(); })
+        .then(function(dates) {
+            if (!dates || dates.length === 0) {
+                statsEl.innerHTML = '<div class="stat-card" style="grid-column:1/-1"><div class="stat-label" style="font-size:13px;padding:8px;">No trading data found in trade-analyser.</div></div>';
+                renderCalendar();
+                return;
             }
-            renderOverallStats(data);
+            // Step 2: fetch each date's trades in parallel (Promise.all)
+            var promises = dates.map(function(d) {
+                return fetchWithTimeout('/api/analytics/day_trades?date='+d, 5000)
+                    .then(function(r){ return r.json(); })
+                    .then(function(trades){ return {date: d, trades: trades}; })
+                    .catch(function(){ return {date: d, trades: []}; });
+            });
+            return Promise.all(promises);
+        })
+        .then(function(results) {
+            if (!results) return;
+            _byDate = {};
+            var allSummaries = [];
+            for (var i = 0; i < results.length; i++) {
+                var date = results[i].date;
+                var trades = results[i].trades || [];
+                if (trades.length === 0) continue;
+                var pnls = trades.map(function(t){ return t.pnl || 0; });
+                var winners = pnls.filter(function(p){ return p >= 0; });
+                var losers  = pnls.filter(function(p){ return p < 0; });
+                var s = {
+                    date: date,
+                    total_trades: trades.length,
+                    winners: winners.length,
+                    losers: losers.length,
+                    total_pnl: pnls.reduce(function(a,b){return a+b;},0),
+                    gross_profit: winners.reduce(function(a,b){return a+b;},0),
+                    gross_loss: losers.reduce(function(a,b){return a+b;},0),
+                    win_rate: trades.length > 0 ? winners.length/trades.length*100 : 0,
+                    avg_win: winners.length > 0 ? winners.reduce(function(a,b){return a+b;},0)/winners.length : 0,
+                    avg_loss: losers.length > 0 ? losers.reduce(function(a,b){return a+b;},0)/losers.length : 0,
+                };
+                _byDate[date] = s;
+                allSummaries.push(s);
+            }
+            renderOverallStats(allSummaries);
             renderCalendar();
         })
-        .catch(function(){ renderCalendar(); });
+        .catch(function(e) {
+            statsEl.innerHTML = '<div class="stat-card" style="grid-column:1/-1"><div class="stat-label" style="font-size:13px;padding:8px;color:#f85149;">Failed to load analytics: ' + e + '</div></div>';
+            renderCalendar();
+        });
 }
 
 // ── Overall stats ───────────────────────────────────────────────────
@@ -5236,15 +5295,10 @@ function selectDay(date) {
     }
     document.getElementById('day-detail-stats').innerHTML = sh;
 
-    // Load individual trades for this day
+    // Fetch trade list from analyser
     document.getElementById('day-detail-trades').innerHTML =
         '<div class="spinner">Loading trades...</div>';
-    fetch('/api/journal/daily_summaries?days=1&date='+date)
-        .then(function(r){return r.json();})
-        .catch(function(){return [];});
-
-    // Fetch trade list from analyser
-    fetch('/api/analytics/day_trades?date='+date)
+    fetchWithTimeout('/api/analytics/day_trades?date='+date, 5000)
         .then(function(r){return r.json();})
         .then(function(trades){renderDayTrades(trades);})
         .catch(function(){
