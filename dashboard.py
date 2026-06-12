@@ -4761,6 +4761,33 @@ def api_journal_delete_entry(entry_id):
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/journal/clear_date", methods=["POST"])
+def api_journal_clear_date():
+    """Delete all journal entries for a given IST date."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "monitor not ready"}), 503
+    try:
+        date_str = request.json.get("date") if request.json else None
+        if not date_str:
+            from datetime import timezone, timedelta
+            ist = timezone(timedelta(hours=5, minutes=30))
+            date_str = datetime.now(ist).strftime("%Y-%m-%d")
+        entries = _monitor.state.journal.get_entries(limit=2000, date_str=date_str)
+        count = 0
+        for e in entries:
+            _monitor.state.journal.delete_entry(e["id"])
+            count += 1
+        # Reset journaling state so fresh import works
+        _monitor._journaled_order_ids = set()
+        if hasattr(_monitor, "_auto_journal_seeded"):
+            del _monitor._auto_journal_seeded
+        logger.info("Cleared %d journal entries for %s", count, date_str)
+        return jsonify({"status": "ok", "deleted": count, "date": date_str})
+    except Exception as e:
+        logger.error("Clear date error: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/api/journal/entries")
 def api_journal_entries():
     if not _monitor:
@@ -5086,6 +5113,7 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
       <option value="pnl_asc">Worst P&amp;L</option>
     </select>
     <button class="refresh-btn" onclick="loadEntries()">&#x21bb; Refresh</button>
+    <button onclick="clearToday()" style="background:#2d1117;color:#f85149;border:1px solid #f85149;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;" title="Delete all entries for the currently viewed date">&#x1F5D1; Clear date</button>
     <button id="backfill-btn" onclick="runBackfill()" style="background:#1a3a2a;color:#3fb950;border:1px solid #3fb950;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;">&#x2193; Import from Dhan</button>
     <label style="background:#1a2a3a;color:#58a6ff;border:1px solid #58a6ff;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;" title="Export CSV from Dhan Order Book, then upload here">
       &#x2B06; Upload CSV
@@ -5129,6 +5157,21 @@ function runBackfill() {
     .catch(function() {
       btn.textContent = '✕ Network error';
       btn.disabled = false;
+    });
+}
+
+function clearToday() {
+  var d = document.getElementById('date-input') ? document.getElementById('date-input').value : null;
+  var label = d || 'today';
+  if (!confirm('Delete ALL journal entries for ' + label + '? This cannot be undone.')) return;
+  fetch('/api/journal/clear_date', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({date: d})
+  }).then(function(r){ return r.json(); })
+    .then(function(d) {
+      if (d.status === 'ok') { loadEntries(); }
+      else { alert('Error: ' + (d.message || 'unknown')); }
     });
 }
 
