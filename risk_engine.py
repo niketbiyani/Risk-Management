@@ -159,16 +159,19 @@ class RiskEngine:
                     f"fell below floor ₹{floor:,.0f}")
                 return "lockout_profit_lock"
 
-        # ── Check trailing drawdown (based on total P&L) ──────────────
+        # ── Check trailing drawdown (HWM based on realized P&L only) ────
+        # HWM uses realized P&L only — unrealized fluctuates every tick
+        # and would cause HWM to ratchet up on paper gains, making the
+        # drawdown display jump around. Drawdown is measured as how far
+        # total (realized + unrealized) has fallen from the realized HWM.
         if Config.TRAILING_DRAWDOWN_ENABLED:
             hwm = self.state.high_water_mark
-            # Update HWM based on total P&L (realized + unrealized)
-            if total_pnl > hwm:
-                hwm = total_pnl
+            if realized_pnl > hwm:
+                hwm = realized_pnl
 
             # Only track drawdown once HWM has been established above threshold
             if hwm >= Config.PROFIT_LOCK_THRESHOLD:
-                drawdown = hwm - total_pnl
+                drawdown = max(0, hwm - total_pnl)
                 drawdown_limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100)
                 self.state.update_trailing_drawdown(True, hwm, drawdown)
 
@@ -177,7 +180,7 @@ class RiskEngine:
                         f"Trailing drawdown limit hit: drew down ₹{drawdown:,.0f} "
                         f"from HWM ₹{hwm:,.0f} (limit: {Config.TRAILING_DRAWDOWN_PERCENTAGE}%)")
                     return "lockout_trailing_drawdown"
-            elif total_pnl > 0:
+            elif realized_pnl > 0:
                 # Below threshold but track progress
                 drawdown = max(0, hwm - total_pnl)
                 self.state.update_trailing_drawdown(False, hwm, drawdown)
@@ -214,7 +217,7 @@ class RiskEngine:
         return RiskDecision(True)
 
     def _check_trailing_drawdown(self) -> RiskDecision:
-        """Check trailing drawdown from HWM (based on total P&L)."""
+        """Check trailing drawdown: HWM is realized P&L, drawdown measures vs total."""
         if not Config.TRAILING_DRAWDOWN_ENABLED:
             return RiskDecision(True)
         if not self.state.get("trailing_drawdown_active"):
@@ -225,7 +228,7 @@ class RiskEngine:
             return RiskDecision(True)
 
         total = self.state.total_pnl
-        drawdown = hwm - total
+        drawdown = max(0, hwm - total)
         limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100)
         if drawdown >= limit:
             self.state.activate_lockout(

@@ -217,12 +217,14 @@ class StateManager:
         self._state["unrealized_pnl"] = unrealized
         self._state["total_pnl"] = realized + unrealized
 
-        # Update peak/HWM (both track total P&L = realized + unrealized)
+        # peak_pnl tracks total (realized + unrealized) for display
         total = realized + unrealized
         if total > self._state["peak_pnl"]:
             self._state["peak_pnl"] = total
-        if total > self._state["high_water_mark"]:
-            self._state["high_water_mark"] = total
+        # HWM uses realized only — unrealized fluctuates every tick and would
+        # cause the drawdown display to jump; risk_engine also enforces this
+        if realized > self._state["high_water_mark"]:
+            self._state["high_water_mark"] = realized
 
         self._save()
 
