@@ -4817,7 +4817,9 @@ def api_journal_backfill():
             if orders:
                 source = "order_book"
         if not orders:
-            hist = _monitor.api.get_trade_history(today, today)
+            # Trade history uses DD-MM-YYYY format
+            today_dmy = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%m-%Y")
+            hist = _monitor.api.get_trade_history(today_dmy, today_dmy)
             if hist:
                 orders = _monitor._normalize_trade_book(hist)
                 source = "trade_history"

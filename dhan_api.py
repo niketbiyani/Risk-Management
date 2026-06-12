@@ -195,7 +195,7 @@ class DhanAPI:
             return {}
 
     def get_trade_history(self, from_date: str, to_date: str) -> list[dict]:
-        """Get historical trades for a date range (works after market close)."""
+        """Get historical trades for a date range. Dates must be DD-MM-YYYY format."""
         try:
             response = self.dhan.get_trade_history(from_date, to_date, 0)
             logger.info("TRADE HISTORY RAW: type=%s keys=%s data_type=%s data_len=%s",
