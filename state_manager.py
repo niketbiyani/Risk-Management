@@ -9,7 +9,7 @@ import hashlib
 import logging
 import os
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, timezone
 from typing import Any, Optional
 
 from cryptography.fernet import Fernet
@@ -55,6 +55,12 @@ class StateManager:
         logger.info("Generated new state encryption key")
         return key
 
+    @staticmethod
+    def _today_ist() -> str:
+        """Return today's date string in IST (market timezone)."""
+        ist = timezone(timedelta(hours=5, minutes=30))
+        return datetime.now(ist).strftime("%Y-%m-%d")
+
     def _load_or_reset(self):
         """Load existing state or create fresh state for today."""
         if os.path.exists(self._state_file):
@@ -64,9 +70,11 @@ class StateManager:
                 decrypted = self._fernet.decrypt(encrypted)
                 self._state = json.loads(decrypted.decode())
 
-                # Check if state is for today
-                if self._state.get("date") != str(date.today()):
-                    logger.info("State is from previous day, resetting")
+                # Check if state is for today (IST date)
+                today_ist = self._today_ist()
+                if self._state.get("date") != today_ist:
+                    logger.info("State is from %s, today is %s (IST) — resetting",
+                                self._state.get("date"), today_ist)
                     self._reset_state()
                 else:
                     logger.info("Loaded existing state for today")
@@ -80,7 +88,7 @@ class StateManager:
     def _reset_state(self):
         """Create a fresh state for today."""
         self._state = {
-            "date": str(date.today()),
+            "date": self._today_ist(),
             "created_at": time.time(),
 
             # P&L Tracking
@@ -125,7 +133,7 @@ class StateManager:
             "version": 1,
         }
         self._save()
-        logger.info("State reset for %s", date.today())
+        logger.info("State reset for %s (IST)", self._today_ist())
 
     def _save(self):
         """Encrypt and save state to disk."""

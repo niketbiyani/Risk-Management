@@ -3626,6 +3626,21 @@ def index():
     return resp
 
 
+@app.route("/api/admin/unlock", methods=["POST"])
+def api_admin_unlock():
+    """Force-reset the daily state for a new trading day. Use when state is stale from prior day."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "monitor not ready"}), 503
+    try:
+        _monitor.state._reset_state()
+        _monitor._lockout_executed = False
+        logger.warning("MANUAL UNLOCK: daily state force-reset via admin endpoint")
+        return jsonify({"status": "ok", "message": "State reset. Platform unlocked for today."})
+    except Exception as e:
+        logger.error("Admin unlock failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/api/status")
 def api_status():
     if _monitor:
