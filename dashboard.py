@@ -5251,7 +5251,7 @@ function renderCalendar() {
         var todayClass = isToday ? ' today-cell' : '';
         var hasClass = hasPnl ? ' has-data' : '';
         html += '<div class="cal-cell'+pnlClass+selectedClass+todayClass+hasClass+'"' +
-                (hasPnl ? ' onclick="selectDay(\''+ds+'\')"' : '') + '>';
+                (hasPnl ? ' onclick="selectDay(this.dataset.d)" data-d="'+ds+'"' : '') + '>';
         html += '<div class="cal-day-num">' + day + (isToday ? ' &#x2022;' : '') + '</div>';
         if (hasPnl) {
             var pnl = summary.total_pnl;
