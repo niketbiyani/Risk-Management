@@ -4832,35 +4832,47 @@ def api_journal_upload_csv():
         rows = list(reader)
         if not rows:
             return jsonify({"status": "error", "message": "CSV is empty"}), 400
-        logger.info("CSV UPLOAD fields: %s", list(rows[0].keys()))
+        all_keys = list(rows[0].keys())
+        logger.info("CSV UPLOAD fields: %s", all_keys)
+        logger.info("CSV UPLOAD first row: %s", dict(rows[0]))
 
         # Normalise CSV rows to order-book format
         def _parse_csv_row(r):
-            # Dhan CSV columns vary by export type; try common variants
+            # Case-insensitive key lookup + strip whitespace from keys
+            r_norm = {k.strip(): v.strip() for k, v in r.items()}
+            r_lower = {k.lower(): v for k, v in r_norm.items()}
             def g(*keys):
                 for k in keys:
-                    v = r.get(k, "").strip()
+                    v = r_norm.get(k, "") or r_lower.get(k.lower(), "")
                     if v:
                         return v
                 return ""
-            status = g("Order Status", "Status", "order_status")
-            txn    = g("Transaction Type", "Txn Type", "transaction_type", "Side", "side")
-            sid    = g("Security Id", "security_id", "Scrip Code", "SecurityId")
-            symbol = g("Trading Symbol", "Symbol", "Scrip", "trading_symbol") or sid
-            seg    = g("Exchange Segment", "Exchange", "exchange_segment")
-            price  = g("Average Traded Price", "Price", "Traded Price", "average_traded_price") or "0"
-            qty    = g("Filled Qty", "Quantity", "Traded Qty", "filled_qty", "Qty") or "0"
-            oid    = g("Order Id", "Order ID", "order_id", "orderId") or (symbol + "_" + qty)
-            ctime  = g("Create Time", "Order Time", "Time", "create_time", "Date Time")
-            # Normalise status: Dhan CSV may say "TRADED", "COMPLETE", "Traded"
-            if status.upper() in ("TRADED", "COMPLETE", "COMPLETED", "FILLED"):
+            status = g("Order Status", "Status", "order_status", "orderstatus")
+            txn    = g("Transaction Type", "Txn Type", "transaction_type", "Side", "side", "transactiontype", "Buy/Sell")
+            sid    = g("Security Id", "security_id", "Scrip Code", "SecurityId", "securityid", "security id")
+            symbol = g("Trading Symbol", "Symbol", "Scrip", "trading_symbol", "tradingsymbol", "Instrument") or sid
+            seg    = g("Exchange Segment", "Exchange", "exchange_segment", "exchangesegment")
+            price  = g("Average Traded Price", "Avg. Price", "Traded Price", "average_traded_price", "averagetradedprice", "Price", "price") or "0"
+            qty    = g("Filled Qty", "Quantity", "Traded Qty", "filled_qty", "filledqty", "Qty", "qty", "Traded Quantity") or "0"
+            oid    = g("Order Id", "Order ID", "order_id", "orderId", "orderid") or (symbol + "_" + qty)
+            ctime  = g("Create Time", "Order Time", "Time", "create_time", "createtime", "Date Time", "Order Date Time", "datetime", "Date", "Timestamp")
+            # Normalise status
+            if status.upper().replace(" ", "") in ("TRADED", "COMPLETE", "COMPLETED", "FILLED", "FULLYEXECUTED", "EXECUTED"):
                 status = "TRADED"
             # Normalise txn
-            txn_up = txn.upper()
-            if txn_up in ("S", "SELL", "SHORT"):
+            txn_up = txn.upper().strip()
+            if txn_up in ("S", "SELL", "SHORT", "SELL ORDER"):
                 txn = "SELL"
-            elif txn_up in ("B", "BUY", "LONG"):
+            elif txn_up in ("B", "BUY", "LONG", "BUY ORDER"):
                 txn = "BUY"
+            try:
+                price_f = float(str(price).replace(",", ""))
+            except Exception:
+                price_f = 0.0
+            try:
+                qty_i = int(float(str(qty).replace(",", "")))
+            except Exception:
+                qty_i = 0
             return {
                 "orderId": oid,
                 "orderStatus": status,
@@ -4868,19 +4880,27 @@ def api_journal_upload_csv():
                 "securityId": sid,
                 "tradingSymbol": symbol,
                 "exchangeSegment": seg,
-                "price": float(price) if price else 0,
-                "averageTradedPrice": float(price) if price else 0,
-                "filledQty": int(float(qty)) if qty else 0,
-                "quantity": int(float(qty)) if qty else 0,
+                "price": price_f,
+                "averageTradedPrice": price_f,
+                "filledQty": qty_i,
+                "quantity": qty_i,
                 "createTime": ctime,
                 "updateTime": ctime,
                 "exchangeTime": ctime,
             }
 
-        orders = [_parse_csv_row(r) for r in rows]
-        orders = [o for o in orders if o["orderStatus"] == "TRADED"]
+        all_parsed = [_parse_csv_row(r) for r in rows]
+        orders = [o for o in all_parsed if o["orderStatus"] == "TRADED"]
         if not orders:
-            return jsonify({"status": "ok", "message": "No TRADED orders found in CSV", "created": 0})
+            # Log a sample to help diagnose column mismatch
+            if all_parsed:
+                sample = all_parsed[0]
+                logger.warning("CSV: 0 TRADED found. Sample parsed: status=%r txn=%r symbol=%r sid=%r qty=%r",
+                               sample["orderStatus"], sample["transactionType"],
+                               sample["tradingSymbol"], sample["securityId"], sample["quantity"])
+            return jsonify({"status": "ok",
+                            "message": f"No TRADED orders found in CSV ({len(all_parsed)} rows parsed — check logs for column mismatch)",
+                            "rows_scanned": 0, "created": 0})
 
         _monitor._journaled_order_ids = set()
         if hasattr(_monitor, "_auto_journal_seeded"):
@@ -5112,9 +5132,11 @@ function uploadCsv(input) {
     .then(function(r){ return r.json(); })
     .then(function(d) {
       if (d.status === 'ok') {
-        status.style.color = '#3fb950';
-        status.textContent = '✓ ' + d.created + ' entries imported from CSV (' + d.rows_scanned + ' trades scanned)';
-        loadEntries();
+        status.style.color = d.created > 0 ? '#3fb950' : '#f0883e';
+        status.textContent = d.created > 0
+          ? ('✓ ' + d.created + ' entries imported from CSV (' + (d.rows_scanned||0) + ' trades scanned)')
+          : ('⚠ ' + (d.message || '0 entries imported'));
+        if (d.created > 0) loadEntries();
       } else {
         status.style.color = '#f85149';
         status.textContent = '✕ ' + (d.message || 'Error');
