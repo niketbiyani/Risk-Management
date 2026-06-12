@@ -644,6 +644,9 @@ class PositionMonitor:
         ]
         filled_sells.sort(key=_order_ts)
 
+        # Cache DB security IDs once per call to avoid repeated queries
+        _journaled_sids_db = self.state.journal.get_today_security_ids()
+
         for sell_order in filled_sells:
             order_id = sell_order.get("orderId", "")
             sell_ts = _order_ts(sell_order)
@@ -651,6 +654,11 @@ class PositionMonitor:
             symbol = sell_order.get("tradingSymbol", security_id)
             sell_price = float(sell_order.get("price") or sell_order.get("averageTradedPrice") or 0)
             qty = int(sell_order.get("filledQty") or sell_order.get("quantity") or 0)
+
+            # DB-level dedup: skip if this security already has a journal entry today
+            if security_id in _journaled_sids_db:
+                self._journaled_order_ids.add(order_id)
+                continue
 
             sym_up = symbol.upper()
             if "NIFTY" in sym_up and "BANK" not in sym_up:
