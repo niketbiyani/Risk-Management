@@ -4802,14 +4802,19 @@ def api_journal_backfill():
                 source = "cached"
         if not orders:
             return jsonify({"status": "ok", "message": "No orders found. Try uploading a CSV from Dhan's Order Book → Export.", "created": 0})
-        # Reset in-memory seen set so deleted entries can be re-imported
-        _monitor._journaled_order_ids = set()
-        if hasattr(_monitor, "_auto_journal_seeded"):
-            del _monitor._auto_journal_seeded
-        before_count = len(_monitor.state.journal.get_entries(limit=1000))
-        _monitor._auto_journal_orders(orders)
-        after_count = len(_monitor.state.journal.get_entries(limit=1000))
-        created = after_count - before_count
+
+        # Trade book / trade history / cached = individual legs → use CSV-style FIFO pairing
+        # Order book = paired orders → use legacy auto-journal
+        if source in ("trade_book", "trade_history", "cached"):
+            created = _monitor._process_csv_trades(orders)
+        else:
+            _monitor._journaled_order_ids = set()
+            if hasattr(_monitor, "_auto_journal_seeded"):
+                del _monitor._auto_journal_seeded
+            before_count = len(_monitor.state.journal.get_entries(limit=1000))
+            _monitor._auto_journal_orders(orders)
+            after_count = len(_monitor.state.journal.get_entries(limit=1000))
+            created = after_count - before_count
         logger.info("Manual journal backfill (%s): %d records, %d new entries", source, len(orders), created)
         return jsonify({"status": "ok", "orders_scanned": len(orders), "created": created, "source": source})
     except Exception as e:
