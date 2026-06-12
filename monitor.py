@@ -469,13 +469,14 @@ class PositionMonitor:
         return result
 
     def _process_csv_trades(self, orders: list):
-        """Process CSV trade book rows into journal entries using sequential FIFO matching.
+        """Process CSV trade book rows into journal entries.
 
-        Rule: process rows in time order.
-        - BUY when a SELL exists for that symbol → closes that short (journal entry CLOSED)
-        - BUY when no SELL queued → hedge/long entry, queued
-        - SELL when a BUY is queued for that symbol → hedge exit, skip (not a new short)
-        - SELL when no BUY queued → new short entry, queued
+        Rule: process rows in time order. Each row pairs with the next
+        opposite-transaction row for the same symbol (FIFO, bidirectional).
+        - SELL followed by BUY same symbol → short trade, P&L = (sell - buy) * qty
+        - BUY followed by SELL same symbol → long/hedge trade, P&L = (sell - buy) * qty
+        All rows are accounted for; nothing is skipped.
+        Remaining unmatched rows at the end → OPEN entries.
         """
         from collections import deque
         from datetime import timezone as _tz, timedelta as _td
@@ -492,10 +493,17 @@ class PositionMonitor:
                     pass
             return 0.0
 
+        def _lot_size(sym):
+            s = sym.upper()
+            if "NIFTY" in s and "BANK" not in s: return 75
+            if "SENSEX" in s or ("BSE" in s and "NIFTY" not in s): return 20
+            if "BANKNIFTY" in s or "BANKEX" in s: return 35
+            return 25
+
         sorted_rows = sorted(orders, key=_ts)
 
-        sell_queues = {}  # symbol -> deque of order dicts (unmatched short entries)
-        buy_queues  = {}  # symbol -> deque of order dicts (unmatched hedge/long entries)
+        # Per-symbol queue: rows waiting for their opposite leg
+        queues = {}  # symbol -> deque of order dicts
         created = 0
 
         for o in sorted_rows:
@@ -504,74 +512,64 @@ class PositionMonitor:
             price = float(o.get("averageTradedPrice") or o.get("price") or 0)
             qty   = int(o.get("filledQty") or o.get("quantity") or 0)
             ts    = _ts(o)
+            ls    = _lot_size(sym)
+            lots  = max(1, qty // ls) if ls > 0 else 1
 
-            sym_up = sym.upper()
-            if "NIFTY" in sym_up and "BANK" not in sym_up:
-                lot_size = 75
-            elif "SENSEX" in sym_up or "BSE" in sym_up:
-                lot_size = 20
-            elif "BANKNIFTY" in sym_up or "BANKEX" in sym_up:
-                lot_size = 35
-            else:
-                lot_size = 25
-            lots = max(1, qty // lot_size) if lot_size > 0 else 1
+            queue = queues.setdefault(sym, deque())
 
-            if txn == "BUY":
-                if sell_queues.get(sym):
-                    # Closes the oldest short → CLOSED journal entry
-                    sell_o = sell_queues[sym].popleft()
-                    sell_price = float(sell_o.get("averageTradedPrice") or sell_o.get("price") or 0)
-                    sell_ts    = _ts(sell_o)
-                    sell_qty   = int(sell_o.get("filledQty") or sell_o.get("quantity") or 0)
-                    pnl = round((sell_price - price) * sell_qty, 2)
-                    entry_id = self.state.journal.create_entry({
-                        "trade_type":        "naked",
-                        "instrument":        sym,
-                        "sell_security_id":  sym,
-                        "sell_entry_price":  sell_price,
-                        "lots":              lots,
-                        "lot_size":          lot_size,
-                        "created_at_ts":     sell_ts if sell_ts > 0 else None,
+            # Check if the head of queue is the opposite transaction type
+            if queue and queue[0].get("transactionType") != txn:
+                paired = queue.popleft()
+                paired_price = float(paired.get("averageTradedPrice") or paired.get("price") or 0)
+                paired_ts    = _ts(paired)
+                paired_qty   = int(paired.get("filledQty") or paired.get("quantity") or 0)
+
+                # Determine which leg was the entry (first in time)
+                if paired.get("transactionType") == "SELL":
+                    sell_price, sell_ts, exit_price = paired_price, paired_ts, price
+                    entry_ts = paired_ts
+                else:  # paired was BUY, current is SELL
+                    sell_price, exit_price, entry_ts = price, paired_price, paired_ts
+
+                pnl = round((sell_price - exit_price) * paired_qty, 2)
+                entry_id = self.state.journal.create_entry({
+                    "trade_type":       "naked",
+                    "instrument":       sym,
+                    "sell_security_id": sym,
+                    "sell_entry_price": sell_price,
+                    "lots":             lots,
+                    "lot_size":         ls,
+                    "created_at_ts":    entry_ts if entry_ts > 0 else None,
+                })
+                if entry_id:
+                    self.state.journal.update_entry_exit(entry_id, {
+                        "sell_exit_price": exit_price,
+                        "pnl": pnl,
                     })
-                    if entry_id:
-                        self.state.journal.update_entry_exit(entry_id, {
-                            "sell_exit_price": price,
-                            "pnl": pnl,
-                        })
-                        created += 1
-                        logger.info("CSV-journal CLOSED: %s @ %.2f → %.2f  P&L ₹%.0f",
-                                    sym, sell_price, price, pnl)
-                else:
-                    # Hedge/long entry — queue it
-                    buy_queues.setdefault(sym, deque()).append(o)
+                    created += 1
+                    logger.info("CSV-journal CLOSED: %s  sell=%.2f buy=%.2f  P&L ₹%.0f",
+                                sym, sell_price, exit_price, pnl)
+            else:
+                # Same direction or empty queue → wait for opposite leg
+                queue.append(o)
 
-            elif txn == "SELL":
-                if buy_queues.get(sym):
-                    # Closing a previous long/hedge — skip, not a new journal entry
-                    buy_queues[sym].popleft()
-                    logger.debug("CSV-journal: skip hedge-exit SELL %s @ %.2f", sym, price)
-                else:
-                    # New short entry — queue it
-                    sell_queues.setdefault(sym, deque()).append(o)
-
-        # Remaining unmatched SELLs = genuinely open positions
-        for sym, queue in sell_queues.items():
-            for sell_o in queue:
-                sell_price = float(sell_o.get("averageTradedPrice") or sell_o.get("price") or 0)
-                sell_ts    = _ts(sell_o)
-                sell_qty   = int(sell_o.get("filledQty") or sell_o.get("quantity") or 0)
-                sym_up = sym.upper()
-                lot_size = 20 if ("SENSEX" in sym_up or "BSE" in sym_up) else \
-                           75 if ("NIFTY" in sym_up and "BANK" not in sym_up) else \
-                           35 if ("BANKNIFTY" in sym_up or "BANKEX" in sym_up) else 25
-                lots = max(1, sell_qty // lot_size) if lot_size > 0 else 1
+        # Remaining unmatched rows = genuinely open positions (only SELLs create journal entries)
+        for sym, queue in queues.items():
+            for o in queue:
+                if o.get("transactionType") != "SELL":
+                    continue  # unmatched BUY with no SELL = long with no exit, skip
+                sell_price = float(o.get("averageTradedPrice") or o.get("price") or 0)
+                sell_ts    = _ts(o)
+                sell_qty   = int(o.get("filledQty") or o.get("quantity") or 0)
+                ls = _lot_size(sym)
+                lots = max(1, sell_qty // ls) if ls > 0 else 1
                 self.state.journal.create_entry({
                     "trade_type":       "naked",
                     "instrument":       sym,
                     "sell_security_id": sym,
                     "sell_entry_price": sell_price,
                     "lots":             lots,
-                    "lot_size":         lot_size,
+                    "lot_size":         ls,
                     "created_at_ts":    sell_ts if sell_ts > 0 else None,
                 })
                 created += 1
