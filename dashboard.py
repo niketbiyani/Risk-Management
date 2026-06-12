@@ -3876,7 +3876,7 @@ def api_option_chain_data():
         return jsonify(cached[1])
     bse_underlyings = {"SENSEX", "BANKEX"}
     expected_exchange = "BSE" if underlying in bse_underlyings else "NSE"
-    default_lot = 10 if underlying in bse_underlyings else 75
+    default_lot = 20 if underlying in bse_underlyings else 75
     try:
         # Build chain from instrument cache
         strikes = {}

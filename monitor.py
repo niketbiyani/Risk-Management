@@ -542,7 +542,7 @@ class PositionMonitor:
             if "NIFTY" in sym_up and "BANK" not in sym_up:
                 lot_size = 75
             elif "SENSEX" in sym_up:
-                lot_size = 10
+                lot_size = 20
             elif "BANKNIFTY" in sym_up:
                 lot_size = 35
             else:
