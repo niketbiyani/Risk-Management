@@ -4707,22 +4707,118 @@ def api_journal_trades():
     return jsonify(_monitor.state.journal.get_trades(day=day, limit=limit))
 
 
+ANALYSER_URL = "http://localhost:5556"
+
+
+def _analyser_trades(days: int = 30) -> list:
+    """Fetch trades from trade-analyser for the last N calendar days."""
+    import urllib.request, json as _json
+    from datetime import timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    trades = []
+    for i in range(days):
+        d = (datetime.now(ist) - timedelta(days=i)).strftime("%Y-%m-%d")
+        try:
+            with urllib.request.urlopen(f"{ANALYSER_URL}/api/trades?date={d}", timeout=2) as r:
+                day_trades = _json.loads(r.read())
+                trades.extend(day_trades)
+        except Exception:
+            pass
+    return trades
+
+
 @app.route("/api/journal/daily_summaries")
 def api_journal_daily_summaries():
-    """Get daily P&L summaries for the last N days."""
-    if not _monitor:
+    """Get daily P&L summaries from trade-analyser."""
+    try:
+        import urllib.request, json as _json
+        days = int(request.args.get("days", 30))
+        trades = _analyser_trades(days)
+        # Group by date
+        from collections import defaultdict
+        by_date = defaultdict(list)
+        for t in trades:
+            by_date[t["date"]].append(t)
+        summaries = []
+        for d, ts in sorted(by_date.items(), reverse=True):
+            pnls = [t["pnl"] for t in ts if t.get("pnl") is not None]
+            winners = [p for p in pnls if p >= 0]
+            losers  = [p for p in pnls if p < 0]
+            summaries.append({
+                "date": d,
+                "total_trades": len(ts),
+                "winners": len(winners),
+                "losers": len(losers),
+                "total_pnl": round(sum(pnls), 2),
+                "gross_profit": round(sum(winners), 2),
+                "gross_loss": round(sum(losers), 2),
+                "win_rate": round(len(winners) / len(ts) * 100, 1) if ts else 0,
+                "avg_win": round(sum(winners) / len(winners), 2) if winners else 0,
+                "avg_loss": round(sum(losers) / len(losers), 2) if losers else 0,
+            })
+        return jsonify(summaries)
+    except Exception as e:
+        logger.warning("daily_summaries from analyser failed: %s", e)
         return jsonify([])
-    days = int(request.args.get("days", 30))
-    return jsonify(_monitor.state.journal.get_daily_summaries(days=days))
 
 
 @app.route("/api/journal/analytics")
 def api_journal_analytics():
-    """Get aggregated analytics."""
-    if not _monitor:
+    """Get aggregated analytics from trade-analyser."""
+    try:
+        days = int(request.args.get("days", 30))
+        trades = _analyser_trades(days)
+        if not trades:
+            return jsonify({"total_days": 0, "total_trades": 0, "overall_pnl": 0,
+                            "win_rate": 0, "avg_win": 0, "avg_loss": 0,
+                            "best_day": None, "worst_day": None,
+                            "profitable_days": 0, "losing_days": 0, "avg_daily_pnl": 0,
+                            "pnl_by_hour": [], "pnl_by_instrument": []})
+        from collections import defaultdict
+        pnls = [t["pnl"] for t in trades if t.get("pnl") is not None]
+        winners = [p for p in pnls if p >= 0]
+        losers  = [p for p in pnls if p < 0]
+        by_date = defaultdict(float)
+        for t in trades:
+            if t.get("pnl") is not None:
+                by_date[t["date"]] += t["pnl"]
+        profitable_days = sum(1 for v in by_date.values() if v >= 0)
+        best_day  = max(by_date.items(), key=lambda x: x[1]) if by_date else (None, 0)
+        worst_day = min(by_date.items(), key=lambda x: x[1]) if by_date else (None, 0)
+        # P&L by hour
+        by_hour = defaultdict(float)
+        for t in trades:
+            if t.get("pnl") is not None and t.get("entry_time"):
+                hr = int(t["entry_time"].split(":")[0])
+                by_hour[hr] += t["pnl"]
+        # P&L by instrument
+        by_inst = defaultdict(lambda: {"total_pnl": 0, "trade_count": 0, "winners": 0})
+        for t in trades:
+            if t.get("pnl") is not None:
+                key = f"{t.get('underlying','?')} {t.get('strike','?')} {t.get('option_type','?')}"
+                by_inst[key]["total_pnl"] += t["pnl"]
+                by_inst[key]["trade_count"] += 1
+                if t["pnl"] >= 0:
+                    by_inst[key]["winners"] += 1
+        return jsonify({
+            "total_days":      len(by_date),
+            "total_trades":    len(trades),
+            "overall_pnl":     round(sum(pnls), 2),
+            "win_rate":        round(len(winners) / len(pnls) * 100, 1) if pnls else 0,
+            "avg_win":         round(sum(winners) / len(winners), 2) if winners else 0,
+            "avg_loss":        round(sum(losers) / len(losers), 2) if losers else 0,
+            "best_day":        {"date": best_day[0],  "pnl": round(best_day[1], 2)},
+            "worst_day":       {"date": worst_day[0], "pnl": round(worst_day[1], 2)},
+            "profitable_days": profitable_days,
+            "losing_days":     len(by_date) - profitable_days,
+            "avg_daily_pnl":   round(sum(pnls) / len(by_date), 2) if by_date else 0,
+            "pnl_by_hour":     [{"hour": h, "total_pnl": round(v, 2)} for h, v in sorted(by_hour.items())],
+            "pnl_by_instrument": [{"instrument": k, **v, "total_pnl": round(v["total_pnl"], 2)}
+                                   for k, v in sorted(by_inst.items(), key=lambda x: x[1]["total_pnl"])],
+        })
+    except Exception as e:
+        logger.warning("analytics from analyser failed: %s", e)
         return jsonify({})
-    days = int(request.args.get("days", 30))
-    return jsonify(_monitor.state.journal.get_analytics(days=days))
 
 
 # ── Journal Entry Endpoints (screenshots + detailed per-trade) ───
