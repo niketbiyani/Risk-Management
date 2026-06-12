@@ -4837,42 +4837,55 @@ def api_journal_upload_csv():
         logger.info("CSV UPLOAD first row: %s", dict(rows[0]))
 
         # Normalise CSV rows to order-book format
-        def _parse_csv_row(r):
-            # Case-insensitive key lookup + strip whitespace from keys
+        # Supports two Dhan CSV formats:
+        #   Trade book: Trade #, Stock Name, Transaction, Product Type, Quantity, Price (₹), Net Amount (₹), Timestamp
+        #   Order book: Order Id, Trading Symbol, Transaction Type, Order Status, Filled Qty, Average Traded Price, ...
+        def _parse_csv_row(r, row_idx):
             r_norm = {k.strip(): v.strip() for k, v in r.items()}
             r_lower = {k.lower(): v for k, v in r_norm.items()}
             def g(*keys):
                 for k in keys:
-                    v = r_norm.get(k, "") or r_lower.get(k.lower(), "")
-                    if v:
-                        return v
+                    v = r_norm.get(k) or r_lower.get(k.lower())
+                    if v and v.strip():
+                        return v.strip()
                 return ""
-            status = g("Order Status", "Status", "order_status", "orderstatus")
-            txn    = g("Transaction Type", "Txn Type", "transaction_type", "Side", "side", "transactiontype", "Buy/Sell")
-            sid    = g("Security Id", "security_id", "Scrip Code", "SecurityId", "securityid", "security id")
-            symbol = g("Trading Symbol", "Symbol", "Scrip", "trading_symbol", "tradingsymbol", "Instrument") or sid
-            seg    = g("Exchange Segment", "Exchange", "exchange_segment", "exchangesegment")
-            price  = g("Average Traded Price", "Avg. Price", "Traded Price", "average_traded_price", "averagetradedprice", "Price", "price") or "0"
-            qty    = g("Filled Qty", "Quantity", "Traded Qty", "filled_qty", "filledqty", "Qty", "qty", "Traded Quantity") or "0"
-            oid    = g("Order Id", "Order ID", "order_id", "orderId", "orderid") or (symbol + "_" + qty)
-            ctime  = g("Create Time", "Order Time", "Time", "create_time", "createtime", "Date Time", "Order Date Time", "datetime", "Date", "Timestamp")
-            # Normalise status
-            if status.upper().replace(" ", "") in ("TRADED", "COMPLETE", "COMPLETED", "FILLED", "FULLYEXECUTED", "EXECUTED"):
+
+            # Trade book format (Dhan trade history export)
+            is_trade_book = "Stock Name" in r_norm or "Trade #" in r_norm
+
+            symbol = g("Stock Name", "Trading Symbol", "Symbol", "Instrument", "tradingsymbol", "Scrip")
+            txn    = g("Transaction", "Transaction Type", "Txn Type", "Buy/Sell", "Side", "transactiontype")
+            price  = g("Price (₹)", "Price", "Average Traded Price", "Avg. Price", "Traded Price", "averagetradedprice") or "0"
+            qty    = g("Quantity", "Filled Qty", "Traded Qty", "Qty", "filledqty", "Traded Quantity") or "0"
+            ctime  = g("Timestamp", "Create Time", "Order Time", "Date Time", "Order Date Time", "Time", "Date")
+            oid    = g("Trade #", "Order Id", "Order ID", "orderid") or (symbol + "_" + str(row_idx))
+            seg    = g("Exchange Segment", "Exchange", "exchangesegment")
+            # Security ID: trade book has no numeric ID — use symbol as key
+            sid    = g("Security Id", "SecurityId", "Scrip Code", "securityid") or symbol
+
+            # In trade book every row IS an executed trade
+            if is_trade_book:
                 status = "TRADED"
-            # Normalise txn
+            else:
+                raw_status = g("Order Status", "Status", "order_status")
+                status = "TRADED" if raw_status.upper().replace(" ", "") in (
+                    "TRADED", "COMPLETE", "COMPLETED", "FILLED", "FULLYEXECUTED", "EXECUTED") else raw_status
+
             txn_up = txn.upper().strip()
             if txn_up in ("S", "SELL", "SHORT", "SELL ORDER"):
                 txn = "SELL"
             elif txn_up in ("B", "BUY", "LONG", "BUY ORDER"):
                 txn = "BUY"
+
             try:
-                price_f = float(str(price).replace(",", ""))
+                price_f = float(str(price).replace(",", "").replace("₹", "").strip())
             except Exception:
                 price_f = 0.0
             try:
                 qty_i = int(float(str(qty).replace(",", "")))
             except Exception:
                 qty_i = 0
+
             return {
                 "orderId": oid,
                 "orderStatus": status,
@@ -4889,17 +4902,16 @@ def api_journal_upload_csv():
                 "exchangeTime": ctime,
             }
 
-        all_parsed = [_parse_csv_row(r) for r in rows]
+        all_parsed = [_parse_csv_row(r, i) for i, r in enumerate(rows)]
         orders = [o for o in all_parsed if o["orderStatus"] == "TRADED"]
         if not orders:
-            # Log a sample to help diagnose column mismatch
             if all_parsed:
                 sample = all_parsed[0]
-                logger.warning("CSV: 0 TRADED found. Sample parsed: status=%r txn=%r symbol=%r sid=%r qty=%r",
+                logger.warning("CSV: 0 TRADED found. Sample: status=%r txn=%r symbol=%r sid=%r qty=%r",
                                sample["orderStatus"], sample["transactionType"],
                                sample["tradingSymbol"], sample["securityId"], sample["quantity"])
             return jsonify({"status": "ok",
-                            "message": f"No TRADED orders found in CSV ({len(all_parsed)} rows parsed — check logs for column mismatch)",
+                            "message": f"No executed trades found in CSV ({len(all_parsed)} rows parsed)",
                             "rows_scanned": 0, "created": 0})
 
         _monitor._journaled_order_ids = set()

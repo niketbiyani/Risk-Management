@@ -480,22 +480,31 @@ class PositionMonitor:
             self._auto_journal_seeded = True
 
         def _order_ts(o: dict) -> float:
-            """Parse Dhan createTime to Unix timestamp."""
+            """Parse Dhan createTime to Unix timestamp (IST)."""
             from datetime import timezone as _tz, timedelta as _td
             t = o.get("createTime") or o.get("updateTime") or o.get("exchangeTime") or ""
             if not t:
                 return 0.0
-            try:
-                ist = _tz(_td(hours=5, minutes=30))
-                if len(t) <= 8:  # "HH:MM:SS" only — prepend today's IST date
-                    from datetime import date as _date
-                    today_ist = datetime.now(_tz(_td(hours=5, minutes=30))).date()
-                    t = str(today_ist) + " " + t
-                dt = datetime.strptime(t, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ist)
-                return dt.timestamp()
-            except Exception as e:
-                logger.debug("_order_ts parse error for %r: %s", t, e)
-                return 0.0
+            t = t.strip()
+            ist = _tz(_td(hours=5, minutes=30))
+            # Try multiple formats
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%d %b %Y %H:%M:%S",
+                        "%d-%b-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S",
+                        "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    dt = datetime.strptime(t, fmt).replace(tzinfo=ist)
+                    return dt.timestamp()
+                except ValueError:
+                    pass
+            if len(t) <= 8:  # "HH:MM:SS" only
+                try:
+                    today_ist = datetime.now(ist).date()
+                    dt = datetime.strptime(str(today_ist) + " " + t, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ist)
+                    return dt.timestamp()
+                except Exception:
+                    pass
+            logger.debug("_order_ts: unrecognised format %r", t)
+            return 0.0
 
         # Log createTime from first order once to confirm format
         if orders and not getattr(self, "_order_ts_logged", False):
@@ -540,26 +549,25 @@ class PositionMonitor:
                 lot_size = 25
             lots = max(1, qty // lot_size) if lot_size > 0 else 1
 
-            # Exit: BUY on same security_id (any time — closing a short)
+            # Exit: first BUY on same security_id AFTER the sell timestamp
             exit_order = None
             for o in traded_by_sid.get(security_id, []):
                 if (o.get("transactionType") == "BUY"
                         and o.get("orderId") not in self._journaled_order_ids
-                        and o.get("orderId") != order_id):
+                        and o.get("orderId") != order_id
+                        and _order_ts(o) >= sell_ts):
                     exit_order = o
                     break
 
-            # Hedge: BUY on a different security_id in same exchange segment,
-            # placed within 60s of the sell, not already used
+            # Hedge: BUY on a different security_id within 5 minutes of sell
             hedge_order = None
             for sid2, orders2 in traded_by_sid.items():
                 if sid2 == security_id:
                     continue
                 for o in orders2:
                     if (o.get("transactionType") == "BUY"
-                            and o.get("exchangeSegment") == sell_order.get("exchangeSegment")
                             and o.get("orderId") not in self._journaled_order_ids
-                            and abs(_order_ts(o) - sell_ts) <= 60):
+                            and abs(_order_ts(o) - sell_ts) <= 300):
                         hedge_order = o
                         break
                 if hedge_order:
