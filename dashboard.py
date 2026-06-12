@@ -10,7 +10,7 @@ import threading
 import time
 from datetime import date, datetime, timezone, timedelta
 
-from flask import Flask, render_template_string, jsonify, request
+from flask import Flask, render_template_string, jsonify, request, redirect
 from flask_socketio import SocketIO
 
 from config import Config
@@ -5024,7 +5024,9 @@ def api_chart_nifty():
 
 @app.route("/journal")
 def journal_page():
-    return _build_journal_page()
+    # Redirect to trade-analyser running on port 5556
+    host = request.host.split(":")[0]
+    return redirect(f"http://{host}:5556", code=302)
 
 
 def _build_journal_page():
