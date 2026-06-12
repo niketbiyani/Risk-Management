@@ -4914,14 +4914,8 @@ def api_journal_upload_csv():
                             "message": f"No executed trades found in CSV ({len(all_parsed)} rows parsed)",
                             "rows_scanned": 0, "created": 0})
 
-        _monitor._journaled_order_ids = set()
-        if hasattr(_monitor, "_auto_journal_seeded"):
-            del _monitor._auto_journal_seeded
-        before_count = len(_monitor.state.journal.get_entries(limit=1000))
-        _monitor._auto_journal_orders(orders)
-        after_count = len(_monitor.state.journal.get_entries(limit=1000))
-        created = after_count - before_count
-        logger.info("CSV journal import: %d rows, %d traded, %d new entries", len(rows), len(orders), created)
+        created = _monitor._process_csv_trades(orders)
+        logger.info("CSV journal import: %d rows processed, %d entries created", len(orders), created)
         return jsonify({"status": "ok", "rows_scanned": len(orders), "created": created, "source": "csv"})
     except Exception as e:
         logger.error("CSV upload error: %s", e)

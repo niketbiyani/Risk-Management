@@ -468,12 +468,128 @@ class PositionMonitor:
             })
         return result
 
+    def _process_csv_trades(self, orders: list):
+        """Process CSV trade book rows into journal entries using sequential FIFO matching.
+
+        Rule: process rows in time order.
+        - BUY when a SELL exists for that symbol → closes that short (journal entry CLOSED)
+        - BUY when no SELL queued → hedge/long entry, queued
+        - SELL when a BUY is queued for that symbol → hedge exit, skip (not a new short)
+        - SELL when no BUY queued → new short entry, queued
+        """
+        from collections import deque
+        from datetime import timezone as _tz, timedelta as _td
+
+        ist = _tz(_td(hours=5, minutes=30))
+
+        def _ts(o):
+            t = (o.get("createTime") or "").strip()
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%d %b %Y %H:%M:%S",
+                        "%d-%b-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S"):
+                try:
+                    return datetime.strptime(t, fmt).replace(tzinfo=ist).timestamp()
+                except ValueError:
+                    pass
+            return 0.0
+
+        sorted_rows = sorted(orders, key=_ts)
+
+        sell_queues = {}  # symbol -> deque of order dicts (unmatched short entries)
+        buy_queues  = {}  # symbol -> deque of order dicts (unmatched hedge/long entries)
+        created = 0
+
+        for o in sorted_rows:
+            sym = o.get("tradingSymbol", "")
+            txn = o.get("transactionType", "")
+            price = float(o.get("averageTradedPrice") or o.get("price") or 0)
+            qty   = int(o.get("filledQty") or o.get("quantity") or 0)
+            ts    = _ts(o)
+
+            sym_up = sym.upper()
+            if "NIFTY" in sym_up and "BANK" not in sym_up:
+                lot_size = 75
+            elif "SENSEX" in sym_up or "BSE" in sym_up:
+                lot_size = 20
+            elif "BANKNIFTY" in sym_up or "BANKEX" in sym_up:
+                lot_size = 35
+            else:
+                lot_size = 25
+            lots = max(1, qty // lot_size) if lot_size > 0 else 1
+
+            if txn == "BUY":
+                if sell_queues.get(sym):
+                    # Closes the oldest short → CLOSED journal entry
+                    sell_o = sell_queues[sym].popleft()
+                    sell_price = float(sell_o.get("averageTradedPrice") or sell_o.get("price") or 0)
+                    sell_ts    = _ts(sell_o)
+                    sell_qty   = int(sell_o.get("filledQty") or sell_o.get("quantity") or 0)
+                    pnl = round((sell_price - price) * sell_qty, 2)
+                    entry_id = self.state.journal.create_entry({
+                        "trade_type":        "naked",
+                        "instrument":        sym,
+                        "sell_security_id":  sym,
+                        "sell_entry_price":  sell_price,
+                        "lots":              lots,
+                        "lot_size":          lot_size,
+                        "created_at_ts":     sell_ts if sell_ts > 0 else None,
+                    })
+                    if entry_id:
+                        self.state.journal.update_entry_exit(entry_id, {
+                            "sell_exit_price": price,
+                            "pnl": pnl,
+                        })
+                        created += 1
+                        logger.info("CSV-journal CLOSED: %s @ %.2f → %.2f  P&L ₹%.0f",
+                                    sym, sell_price, price, pnl)
+                else:
+                    # Hedge/long entry — queue it
+                    buy_queues.setdefault(sym, deque()).append(o)
+
+            elif txn == "SELL":
+                if buy_queues.get(sym):
+                    # Closing a previous long/hedge — skip, not a new journal entry
+                    buy_queues[sym].popleft()
+                    logger.debug("CSV-journal: skip hedge-exit SELL %s @ %.2f", sym, price)
+                else:
+                    # New short entry — queue it
+                    sell_queues.setdefault(sym, deque()).append(o)
+
+        # Remaining unmatched SELLs = genuinely open positions
+        for sym, queue in sell_queues.items():
+            for sell_o in queue:
+                sell_price = float(sell_o.get("averageTradedPrice") or sell_o.get("price") or 0)
+                sell_ts    = _ts(sell_o)
+                sell_qty   = int(sell_o.get("filledQty") or sell_o.get("quantity") or 0)
+                sym_up = sym.upper()
+                lot_size = 20 if ("SENSEX" in sym_up or "BSE" in sym_up) else \
+                           75 if ("NIFTY" in sym_up and "BANK" not in sym_up) else \
+                           35 if ("BANKNIFTY" in sym_up or "BANKEX" in sym_up) else 25
+                lots = max(1, sell_qty // lot_size) if lot_size > 0 else 1
+                self.state.journal.create_entry({
+                    "trade_type":       "naked",
+                    "instrument":       sym,
+                    "sell_security_id": sym,
+                    "sell_entry_price": sell_price,
+                    "lots":             lots,
+                    "lot_size":         lot_size,
+                    "created_at_ts":    sell_ts if sell_ts > 0 else None,
+                })
+                created += 1
+                logger.info("CSV-journal OPEN: %s @ %.2f", sym, sell_price)
+
+        logger.info("CSV import complete: %d journal entries created from %d rows",
+                    created, len(orders))
+        return created
+
     def _auto_journal_orders(self, orders: list):
         """Auto-create journal entries for all filled SELL option orders not yet journaled.
         Fires on every tick so it catches trades placed directly on Dhan too."""
-        # Seed on first call: mark orders whose security_id already has a journal entry today
+        # Seed on first call: mark orders already represented in today's journal
         if not hasattr(self, "_auto_journal_seeded"):
             existing_sids = self.state.journal.get_today_security_ids()
+            # Also include open entries (created by JS execute) so we don't duplicate
+            open_entries = self.state.journal.get_open_entries()
+            existing_sids.update(e.get("sell_security_id", "") for e in open_entries)
             for o in orders:
                 if str(o.get("securityId", "")) in existing_sids:
                     self._journaled_order_ids.add(o.get("orderId"))
