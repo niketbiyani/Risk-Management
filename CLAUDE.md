@@ -8,19 +8,19 @@ This file exists so a new Claude session can pick up exactly where the last one 
 
 A single-VPS trade management platform for **Nifty/SENSEX options scalping** on 15-second charts via Dhan broker. The user trades exclusively **two-legged credit spreads** (bear call, bull put) and occasional naked shorts.
 
-**Primary file:** `dashboard.py` — ~5600 lines, single file containing Flask backend + all inline HTML/CSS/JS.
+**Primary file:** `dashboard.py` — ~5700 lines, single file containing Flask backend + all inline HTML/CSS/JS.
 
 **Key files:**
 | File | Purpose |
 |---|---|
 | `dashboard.py` | Flask app, all HTML/CSS/JS inline, all API routes |
 | `dhan_api.py` | Dhan REST API wrapper + DepthWebSocket (LTP + DOM) + OrderUpdate WebSocket |
-| `monitor.py` | Background position monitor, executes spreads, manages SL/TP, WebSocket callbacks |
+| `monitor.py` | Background position monitor, executes spreads, manages SL/TP, auto-journals orders |
 | `trade_manager.py` | Spread detection, SL/TP logic, exchange SL order tracking, pending spread queue, position cache |
 | `trade_journal.py` | SQLite-backed trade journal — analytics + detailed entries with screenshots |
 | `instrument_cache.py` | Local SQLite cache of all Dhan instruments |
-| `state_manager.py` | Encrypted daily state, risk rules, trade history in memory |
-| `risk_engine.py` | Risk enforcement — max loss, max trades, lockout logic |
+| `state_manager.py` | Encrypted daily state (IST-aware), risk rules, trade history in memory |
+| `risk_engine.py` | Risk enforcement — max loss, profit lock, trailing drawdown, lockout logic |
 | `config.py` | Reads `.env` settings |
 | `main.py` | Entry point |
 
@@ -48,7 +48,7 @@ A single-VPS trade management platform for **Nifty/SENSEX options scalping** on 
 - Feed restart logic:
   - `_oc_last_feed_start` — if >60s since last feed start, restart on any subscribe call (handles page refresh)
   - `force: true` flag sent by JS when underlying changes (NIFTY↔SENSEX)
-  - `_oc_ltp_subscribed` set only grows (never-shrink subscription keeps strikes warm)
+  - `_oc_ltp_subscribed` set only grows (never-shrink keeps strikes warm)
 - **Known issue:** Some SENSEX ATM strikes return 0 from `ticker_data` — user types price manually in quick bar
 
 ### Spread Quick Bar (bottom of option chain panel)
@@ -128,7 +128,78 @@ After a spread fills, a `STOP_LOSS_MARKET` BUY sits live at Dhan as hard protect
 - **WebSocket path (primary):** `_on_order_update` fires instantly on REJECTED status
 - **REST fallback (still in place):** 2.5s sleep + order poll block in `_execute_spread()` — this is also used to gate SL placement (SL only placed after confirmation). Remove the status-checking part once WebSocket confirmed reliable; keep the SL gating
 
-### Trade Journal
+### Risk Engine (risk_engine.py)
+
+All risk checks run in `evaluate_pnl(realized, unrealized)` every monitor cycle:
+
+1. **Daily max loss** — `total_pnl <= -DAILY_MAX_LOSS` → lockout
+2. **Profit lock activation** — `realized_pnl >= PROFIT_LOCK_THRESHOLD` → lock floor at `PROFIT_LOCK_PERCENTAGE`%
+3. **Profit lock floor breach** — `realized_pnl < floor` → lockout
+4. **Trailing drawdown** — `HWM - total_pnl >= HWM * TRAILING_DRAWDOWN_PERCENTAGE / 100` → lockout
+
+**Trailing drawdown design (important):**
+- HWM tracks **realized P&L only** — `realized_pnl > hwm` → advance HWM
+- Drawdown is measured as `max(0, hwm - total_pnl)` — unrealized losses count against you
+- This prevents HWM from ratcheting up on paper gains (which would cause the display to jump and potentially trigger false lockouts when unrealized swings back)
+- Prior to this fix (pre June 2026), HWM used `total_pnl` — caused visible jumping on every tick
+
+### State Management (state_manager.py)
+
+- Fernet-encrypted daily state file: AES-128-CBC + SHA-256 HMAC integrity
+- **IST-aware date:** `_today_ist()` uses explicit UTC+5:30 timezone — state resets at IST midnight, not UTC midnight (VPS is UTC)
+- All `date.today()` replaced with `_today_ist()` in state comparisons
+- Lockout is permanent within the trading day — state cannot be tampered to bypass
+- Emergency override: `POST /api/admin/unlock` resets locked state (for testing only)
+
+### Auto-Journal (monitor.py)
+
+The monitor automatically creates journal entries from live order data, with full deduplication:
+
+- `_auto_journal_orders(orders)` runs on every position poll cycle
+- **Seeding on startup:** existing order IDs from today loaded into `_journaled_order_ids` to skip already-journaled orders
+- **DB-level dedup:** `get_today_security_ids()` checked before creating any entry — prevents duplicates even after restart
+- **In-memory dedup:** `_journaled_order_ids` set grows throughout the session
+- **Second pass:** scans open entries, closes them when matching BUY orders arrive later
+- Lot sizes: NIFTY=75, SENSEX=20, BANKNIFTY=35
+
+**Order data fallback chain** (market close / after hours):
+1. `get_trade_book()` — Dhan execution database, persists after market close
+2. `get_order_book()` — live session only, clears after close
+3. `get_trade_history(from_date, to_date)` — historical, DD-MM-YYYY format required
+4. `order_cache.json` — disk snapshot written during session, reloaded on restart
+
+**Trade book normalization (`_normalize_trade_book`):**
+- Converts `tradedPrice` → `price`, `tradedQuantity` → `filledQty`
+- Handles Dhan trade book field names vs order book field names
+
+**CSV import (`_process_csv_trades`):**
+- Bidirectional FIFO pairing: one queue per symbol
+- Each row pairs with next opposite-transaction row for same symbol
+- Handles BUY-first sequences (hedge placed first) correctly
+- Remaining unpaired SELLs → OPEN entries
+
+### Trade Analyser (port 5556)
+
+A separate app (`niketbiyani/trade-analyser`) handles all trade P&L analysis:
+- `GET /api/trades?date=YYYY-MM-DD` — list of trades with entry/exit prices, P&L, legs
+- `GET /api/dates` — dates for which trade data exists
+- `GET /api/import` — re-imports today's trades from Dhan trade book
+
+**Dashboard integration:**
+- `/journal` route redirects to `http://<host>:5556` (302 redirect)
+- `ANALYSER_URL = "http://localhost:5556"` constant in dashboard.py
+- `_analyser_trades(days)` helper fetches from trade-analyser per day
+- `/api/journal/daily_summaries` and `/api/journal/analytics` compute from trade-analyser data
+
+### CSV Import via Dashboard
+
+Upload a Dhan trade book export CSV at `POST /api/journal/upload_csv`:
+- Multipart file upload
+- Expected columns: `Trade #`, `Stock Name`, `Transaction`, `Product Type`, `Quantity`, `Price (₹)`, `Net Amount (₹)`, `Timestamp`
+- Timestamp format: `11 Jun 2026 12:45:52` → parsed with `%d %b %Y %H:%M:%S`
+- Bidirectional FIFO pairing → correctly handles 32 rows = 16 paired trades
+
+### Trade Journal (dashboard sidebar + screenshots)
 
 Two-part system sharing one SQLite DB (`trade_journal.db`):
 
@@ -136,9 +207,9 @@ Two-part system sharing one SQLite DB (`trade_journal.db`):
 - `trade_journal.py` `TradeJournal` class — `trades`, `daily_summary`, `pnl_snapshots` tables
 - Populated by `risk_engine.py` → `state_manager.record_trade()` when trades complete
 - Dashboard sidebar shows Today / History / Analytics tabs
-- API: `GET /api/journal/trades`, `/api/journal/daily_summaries`, `/api/journal/analytics`
+- Data now proxied from trade-analyser for accuracy
 
-**Part 2 — Detailed entries with screenshots (`/journal`):**
+**Part 2 — Detailed entries with screenshots:**
 - `trade_entries` table — one row per spread/naked trade, tracks entry+exit prices, screenshots, notes
 - Screenshots stored as PNG files in `journal_screenshots/` directory
 - **Entry screenshot:** captured in browser JS at moment of EXECUTE — fetches Nifty 1m candles (`/api/chart/nifty`), renders 150 candles to 900×200 offscreen canvas with gold ENTRY price line, POSTs PNG to server
@@ -146,19 +217,8 @@ Two-part system sharing one SQLite DB (`trade_journal.db`):
   - `sl_tp_triggered` SocketIO event (SL/TP hit)
   - `_placeExitOrder()` success (EXIT MKT / EXIT LMT / partial exit buttons)
 - `_journalOpenEntries` JS map: `sell_security_id → entry_id` — links entry to exit within browser session
-- **Refresh recovery:** `closeJournalEntry()` calls `GET /api/journal/open_entry/<security_id>` when entry_id not in local map — queries most recent open `trade_entries` row for that sell leg. Exit screenshots attach correctly even after browser refresh mid-trade
+- **Refresh recovery:** `closeJournalEntry()` calls `GET /api/journal/open_entry/<security_id>` when entry_id not in local map — queries most recent open `trade_entries` row for that sell leg
 - **Spread detection:** both `_spreadSellLeg` + `_spreadBuyLeg` set → spread; only sell leg (SELL MKT) → naked
-- Journal page at `http://VPS:5555/journal` (opens in new tab via 📓 Journal button)
-- Auto-refreshes every 30s; filter by All/Open/Winners/Losers; expandable cards with screenshots + notes
-
-**API endpoints:**
-- `POST /api/journal/entry` — create entry
-- `PUT /api/journal/entry/<id>` — update exit or notes (`action: 'exit'` or `action: 'notes'`)
-- `GET /api/journal/entries` — list entries
-- `GET /api/journal/open_entry/<security_id>` — find most recent open entry by sell leg security_id
-- `POST /api/journal/screenshot` — receive base64 PNG, save to file, return filename
-- `GET /api/journal/screenshots/<filename>` — serve PNG file
-- `GET /api/chart/nifty` — today's Nifty index 1m candles (security_id=13, NSE_EQ, instrument_type=INDEX)
 
 ### Panels Hidden (code kept, just display:none)
 
@@ -175,12 +235,15 @@ Two-part system sharing one SQLite DB (`trade_journal.db`):
 - `ticker_data` limit: **~9 IDs per call**. More than ~10 returns empty/failure
 - `option_chain` API only works for NSE indices (IDX_I). BSE not supported — use two-pass `ticker_data` instead
 - No Dhan REST endpoint for BSE index (SENSEX) spot price — use nearest SENSEX FUTIDX LTP via background thread
-- `intraday_minute_data` requires `from_date` and `to_date` params (today's date as string "YYYY-MM-DD")
+- `intraday_minute_data` requires `from_date` and `to_date` params as strings "YYYY-MM-DD"
+- `get_trade_history(from_date, to_date)` requires **DD-MM-YYYY** format (not YYYY-MM-DD)
 - DepthWebSocket exchange segment ints: NSE_FNO=1, BSE_FNO=2, NSE_EQ=3, BSE_EQ=4
 - NIFTY index for chart data: security_id=`13`, exchange_segment=`NSE_EQ`, instrument_type=`INDEX`
 - Dhan accepts order submissions synchronously but rejects via RMS ~1-2s later. Always poll order status before treating an order as filled
 - Dhan rate-limits token generation to once per 2 minutes — if service restart-loops, stop, sleep 130s, then start
 - Dhan error 805: "max active WS connections exceeded" — only one DepthWebSocket connection allowed. LTP feed and DOM feed merged into the same connection
+- Order book (`get_order_book`) includes CANCELLED and REJECTED orders (SL orders) — do not use for journal pairing. Use trade book (executed trades only)
+- Order book clears after market close — trade book (`get_trade_book`) persists and should be the primary source
 
 ### dashboard.py Structure
 
@@ -188,8 +251,9 @@ Two-part system sharing one SQLite DB (`trade_journal.db`):
 - CSS is inline in a `<style>` block
 - JS is inline in `<script>` blocks
 - Line numbers shift as you edit — always grep for function names rather than relying on line numbers
-- `_build_journal_page()` returns a plain string (not f-string) for the `/journal` route — avoids `{{`/`}}` escaping issues since there are no Python variables to interpolate
+- `_build_journal_page()` was a plain string (not f-string) to avoid `{{`/`}}` escaping — now replaced by redirect to port 5556
 - Onclick handlers with string args need `\\'` in Python to produce `\'` in JS: `onclick="fn(\\'val\\')"`
+- `/journal` route now does a 302 redirect to `http://<host>:5556`
 
 ### monitor.py — _execute_spread() Flow
 
@@ -230,19 +294,42 @@ class StopLossTarget:
 - `_create_tables()` creates all 4 tables on init (safe to add new tables here — uses `CREATE TABLE IF NOT EXISTS`)
 - `SCREENSHOTS_DIR` = `<project_root>/journal_screenshots/` — created on import
 - `save_screenshot(data_url)` extracts base64, saves as `<uuid>.png`, returns filename
+- `get_today_security_ids()` — returns set of security_ids already journaled today (used for dedup)
+
+### state_manager.py — IST Timezone Fix
+
+VPS runs UTC. Market day is IST. Using `date.today()` would give the wrong date after 18:30 UTC (midnight IST).
+
+```python
+@staticmethod
+def _today_ist() -> str:
+    ist = timezone(timedelta(hours=5, minutes=30))
+    return datetime.now(ist).strftime("%Y-%m-%d")
+```
+
+All state date comparisons and resets use `_today_ist()` instead of `date.today()`.
 
 ### BSE Spot Updater (`dashboard.py`)
 
 `_start_bse_spot_updater()` runs a daemon thread that fetches nearest SENSEX FUTIDX LTP every 3s and stores it in `_bse_last_spot`. The `global _bse_last_spot` declaration **must be inside the `_run()` inner function** (not just inside `_start_bse_spot_updater`) — Python ignores `global` in outer scope for assignments in inner functions.
 
+### Trailing Drawdown HWM Design
+
+HWM = **realized P&L only**. Drawdown = `max(0, hwm - total_pnl)`.
+
+Before this fix: HWM used `total_pnl` (realized + unrealized). Every WebSocket tick that marked an open position to profit would advance the HWM, so when price moved back the drawdown would spike — causing the display to jump and risking false lockouts.
+
+Now: HWM only advances when you close a winning trade. Unrealized gains don't move the HWM; unrealized losses still count in the drawdown calculation.
+
 ---
 
 ## Pending / Next Work
 
-- **Confirm WebSocket tick field names** — check `RAW TICK:` in platform.log with open positions, then remove the debug log line from `monitor._on_market_tick()`
+- **Confirm WebSocket tick field names** — check `RAW TICK:` in platform.log with open positions to confirm field names (`security_id`/`securityId`/`Security Id` and `LTP`/`ltp`/`last_price`), then remove the debug log line from `monitor._on_market_tick()`
 - **Remove REST fallbacks** once WebSocket order rejection confirmed reliable:
   - `check_sl_tp_triggers` call in `_tick()` (monitor.py) — redundant once WebSocket SL/TP confirmed
   - Keep the 2.5s poll in `_execute_spread()` — it gates SL placement, not just rejection detection
+- **Remove diagnostic logs** added for debugging: `ORDER BOOK RAW`, `TRADE BOOK RAW`, `ORDER TIME FIELDS` in monitor.py/dhan_api.py
 - **Journal: naked short entry** — SELL MKT button path not yet wired to `createJournalEntry()` (only spread EXECUTE is wired). Low priority
 - **SENSEX ATM price fallback** — when `ticker_data` returns 0 for ATM strikes, try `intraday_minute_data` last close
 - **Hotkeys** — discussed but not started
@@ -255,7 +342,7 @@ class StopLossTarget:
 - `generate_pe_demo.py` — generates `demo_pe_rejections.html`: ATM PE 1m candle chart with rejection detection markers, 20 EMA (blue), 50 EMA (gold), RSI(14), MACD(12,26,9). Accuracy was 59% at 10-candle horizon — not reliable enough to trade on alone
 - `analyse_rejections.py` — rejection accuracy on Nifty futures (31% — abandoned)
 - `analyse_rejections_pe.py` — rejection accuracy on ATM PE (59% at 10 candles)
-- `journal_demo.html` — standalone demo of journal UI layout (superseded by live `/journal` route)
+- `journal_demo.html` — standalone demo of journal UI layout (superseded by trade-analyser redirect)
 
 ---
 
@@ -275,8 +362,8 @@ tail -f /root/Risk-Management/platform.log
 sudo systemctl status risk-manager
 ```
 
-Dashboard: `http://YOUR_VPS_IP:5555`
-Journal: `http://YOUR_VPS_IP:5555/journal`
+Dashboard: `http://YOUR_VPS_IP:5555`  
+Trade Analyser: `http://YOUR_VPS_IP:5556`
 
 ---
 
