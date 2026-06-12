@@ -4804,27 +4804,26 @@ def api_journal_backfill():
     try:
         from datetime import date as _date
         today = str(_date.today())
-        orders = _monitor.api.get_order_book()
-        source = "order_book"
+        # Trade book = only executed trades (no cancelled/rejected noise)
+        # Prefer it over order book for backfill
+        trades = _monitor.api.get_trade_book()
+        orders = None
+        source = None
+        if trades:
+            orders = _monitor._normalize_trade_book(trades)
+            source = "trade_book"
         if not orders:
-            # Try historical trade API (works after market close)
+            orders = _monitor.api.get_order_book()
+            if orders:
+                source = "order_book"
+        if not orders:
             hist = _monitor.api.get_trade_history(today, today)
             if hist:
-                logger.info("Order book empty, falling back to trade history (%d records)", len(hist))
                 orders = _monitor._normalize_trade_book(hist)
                 source = "trade_history"
         if not orders:
-            # Try same-day trade book
-            trades = _monitor.api.get_trade_book()
-            if trades:
-                logger.info("Falling back to trade book (%d records)", len(trades))
-                orders = _monitor._normalize_trade_book(trades)
-                source = "trade_book"
-        if not orders:
-            # Last resort: cached orders from last tick during market hours
             cached = getattr(_monitor, "_last_orders", [])
             if cached:
-                logger.info("Using cached order snapshot (%d records)", len(cached))
                 orders = cached
                 source = "cached"
         if not orders:
