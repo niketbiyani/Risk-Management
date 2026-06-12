@@ -5114,57 +5114,53 @@ function fetchWithTimeout(url, ms) {
     return fetch(url, opts).finally(function(){ if(timer) clearTimeout(timer); });
 }
 
+function buildSummary(date, trades) {
+    var pnls = trades.map(function(t){ return t.pnl || 0; });
+    var winners = pnls.filter(function(p){ return p >= 0; });
+    var losers  = pnls.filter(function(p){ return p <  0; });
+    return {
+        date: date,
+        total_trades:  trades.length,
+        winners:       winners.length,
+        losers:        losers.length,
+        total_pnl:     pnls.reduce(function(a,b){return a+b;}, 0),
+        gross_profit:  winners.reduce(function(a,b){return a+b;}, 0),
+        gross_loss:    losers.reduce(function(a,b){return a+b;},  0),
+        win_rate:      trades.length ? winners.length/trades.length*100 : 0,
+        avg_win:       winners.length ? winners.reduce(function(a,b){return a+b;},0)/winners.length : 0,
+        avg_loss:      losers.length  ? losers.reduce(function(a,b){return a+b;},0)/losers.length   : 0,
+    };
+}
+
 function loadAll() {
     var statsEl = document.getElementById('overall-stats');
-    // Step 1: get list of dates that have data from trade-analyser directly
+    statsEl.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#8b949e;padding:20px;">Loading...</div>';
+
     fetchWithTimeout('/api/analyser/dates', 5000)
         .then(function(r){ return r.json(); })
         .then(function(dates) {
             if (!dates || dates.length === 0) {
-                statsEl.innerHTML = '<div class="stat-card" style="grid-column:1/-1"><div class="stat-label" style="font-size:13px;padding:8px;">No trading data found in trade-analyser.</div></div>';
+                statsEl.innerHTML = '<div style="grid-column:1/-1;color:#8b949e;padding:20px;text-align:center;">No trading data found.</div>';
                 renderCalendar();
-                return;
+                return Promise.resolve([]);
             }
-            // Step 2: fetch each date's trades in parallel (Promise.all)
             var promises = dates.map(function(d) {
                 return fetchWithTimeout('/api/analytics/day_trades?date='+d, 5000)
                     .then(function(r){ return r.json(); })
-                    .then(function(trades){ return {date: d, trades: trades}; })
-                    .catch(function(){ return {date: d, trades: []}; });
+                    .then(function(trades){ return buildSummary(d, Array.isArray(trades) ? trades : []); })
+                    .catch(function(){ return buildSummary(d, []); });
             });
             return Promise.all(promises);
         })
-        .then(function(results) {
-            if (!results) return;
+        .then(function(summaries) {
+            summaries = (summaries || []).filter(function(s){ return s.total_trades > 0; });
             _byDate = {};
-            var allSummaries = [];
-            for (var i = 0; i < results.length; i++) {
-                var date = results[i].date;
-                var trades = results[i].trades || [];
-                if (trades.length === 0) continue;
-                var pnls = trades.map(function(t){ return t.pnl || 0; });
-                var winners = pnls.filter(function(p){ return p >= 0; });
-                var losers  = pnls.filter(function(p){ return p < 0; });
-                var s = {
-                    date: date,
-                    total_trades: trades.length,
-                    winners: winners.length,
-                    losers: losers.length,
-                    total_pnl: pnls.reduce(function(a,b){return a+b;},0),
-                    gross_profit: winners.reduce(function(a,b){return a+b;},0),
-                    gross_loss: losers.reduce(function(a,b){return a+b;},0),
-                    win_rate: trades.length > 0 ? winners.length/trades.length*100 : 0,
-                    avg_win: winners.length > 0 ? winners.reduce(function(a,b){return a+b;},0)/winners.length : 0,
-                    avg_loss: losers.length > 0 ? losers.reduce(function(a,b){return a+b;},0)/losers.length : 0,
-                };
-                _byDate[date] = s;
-                allSummaries.push(s);
-            }
-            renderOverallStats(allSummaries);
+            summaries.forEach(function(s){ _byDate[s.date] = s; });
+            renderOverallStats(summaries);
             renderCalendar();
         })
         .catch(function(e) {
-            statsEl.innerHTML = '<div class="stat-card" style="grid-column:1/-1"><div class="stat-label" style="font-size:13px;padding:8px;color:#f85149;">Failed to load analytics: ' + e + '</div></div>';
+            statsEl.innerHTML = '<div style="grid-column:1/-1;color:#f85149;padding:20px;text-align:center;">Error: ' + e + '</div>';
             renderCalendar();
         });
 }
@@ -5256,7 +5252,7 @@ function renderCalendar() {
         var hasClass = hasPnl ? ' has-data' : '';
         html += '<div class="cal-cell'+pnlClass+selectedClass+todayClass+hasClass+'"' +
                 (hasPnl ? ' onclick="selectDay(\''+ds+'\')"' : '') + '>';
-        html += '<div class="cal-day-num">' + day + (isToday ? ' •' : '') + '</div>';
+        html += '<div class="cal-day-num">' + day + (isToday ? ' &#x2022;' : '') + '</div>';
         if (hasPnl) {
             var pnl = summary.total_pnl;
             html += '<div class="cal-day-pnl '+(pnl>=0?'positive':'negative')+'">'+fmt(pnl)+'</div>';
