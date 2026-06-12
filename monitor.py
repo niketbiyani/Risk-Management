@@ -607,6 +607,35 @@ class PositionMonitor:
                         f"P&L ₹{pnl:.0f}" if pnl is not None else "OPEN",
                         " [spread]" if hedge_order else "")
 
+        # Second pass: close any OPEN entries whose exit BUY has now arrived
+        try:
+            open_entries = self.state.journal.get_open_entries()
+            for entry in open_entries:
+                sell_sid = entry.get("sell_security_id", "")
+                entry_id = entry.get("id", "")
+                if not sell_sid or not entry_id:
+                    continue
+                sell_price = float(entry.get("sell_entry_price") or 0)
+                # Find first unjourned BUY on same security after entry creation time
+                entry_ts = float(entry.get("created_at") or 0)
+                for o in traded_by_sid.get(sell_sid, []):
+                    if (o.get("transactionType") == "BUY"
+                            and o.get("orderId") not in self._journaled_order_ids
+                            and _order_ts(o) >= entry_ts):
+                        buy_price = float(o.get("price") or o.get("averageTradedPrice") or 0)
+                        qty_exit = int(o.get("filledQty") or o.get("quantity") or 0)
+                        pnl_exit = round((sell_price - buy_price) * qty_exit, 2)
+                        self.state.journal.update_entry_exit(entry_id, {
+                            "sell_exit_price": buy_price,
+                            "pnl": pnl_exit,
+                        })
+                        self._journaled_order_ids.add(o.get("orderId"))
+                        logger.info("Auto-closed journal entry %s (%s): P&L ₹%.0f",
+                                    entry_id, entry.get("instrument", sell_sid), pnl_exit)
+                        break
+        except Exception as e:
+            logger.debug("Auto-close open entries failed: %s", e)
+
     def _check_new_trades(self):
         """Check tradebook for newly executed trades and record them."""
         try:
