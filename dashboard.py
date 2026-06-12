@@ -4543,15 +4543,25 @@ ANALYSER_URL = "http://localhost:5556"
 
 
 def _analyser_trades(days: int = 30) -> list:
-    """Fetch trades from trade-analyser for the last N calendar days."""
+    """Fetch trades from trade-analyser, using /api/dates to avoid iterating empty days."""
     import urllib.request, json as _json
     from datetime import timedelta
     ist = timezone(timedelta(hours=5, minutes=30))
+    cutoff = (datetime.now(ist) - timedelta(days=days)).strftime("%Y-%m-%d")
+    # Get list of dates that actually have data
+    try:
+        with urllib.request.urlopen(f"{ANALYSER_URL}/api/dates", timeout=3) as r:
+            all_dates = _json.loads(r.read())
+        dates = [d for d in all_dates if d >= cutoff]
+    except Exception:
+        # Fallback: iterate last N days (slower)
+        dates = []
+        for i in range(min(days, 60)):
+            dates.append((datetime.now(ist) - timedelta(days=i)).strftime("%Y-%m-%d"))
     trades = []
-    for i in range(days):
-        d = (datetime.now(ist) - timedelta(days=i)).strftime("%Y-%m-%d")
+    for d in dates:
         try:
-            with urllib.request.urlopen(f"{ANALYSER_URL}/api/trades?date={d}", timeout=2) as r:
+            with urllib.request.urlopen(f"{ANALYSER_URL}/api/trades?date={d}", timeout=3) as r:
                 day_trades = _json.loads(r.read())
                 trades.extend(day_trades)
         except Exception:
