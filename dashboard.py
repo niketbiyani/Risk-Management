@@ -411,19 +411,6 @@ DASHBOARD_HTML = """
                 t.style.color = isActive ? '#58a6ff' : '#8b949e';
             });
         }
-        function switchJournalTab(tab) {
-            ['today', 'history', 'analytics'].forEach(function(t) {
-                var el = document.getElementById('jtab-' + t);
-                if (el) el.style.display = t === tab ? '' : 'none';
-            });
-            document.querySelectorAll('.journal-tab').forEach(function(el) {
-                var isActive = el.getAttribute('data-jtab') === tab;
-                el.style.borderBottomColor = isActive ? '#58a6ff' : 'transparent';
-                el.style.color = isActive ? '#58a6ff' : '#8b949e';
-            });
-            if (typeof loadJournalHistory === 'function' && tab === 'history') loadJournalHistory();
-            if (typeof loadJournalAnalytics === 'function' && tab === 'analytics') loadJournalAnalytics();
-        }
     </script>
 </head>
 <body>
@@ -440,6 +427,7 @@ DASHBOARD_HTML = """
                 <input type="range" id="volume-slider" min="0" max="100" value="30" style="-webkit-appearance:none;width:70px;height:4px;background:#30363d;border-radius:2px;outline:none;cursor:pointer;">
             </div>
             <a href="/journal" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Open Trade Journal">&#x1F4D3; Journal</a>
+            <a href="/analytics" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Analytics">&#x1F4CA; Analytics</a>
             <span id="token-status" style="font-size:12px;padding:4px 10px;border-radius:12px;cursor:pointer;border:1px solid #30363d;color:#8b949e;" onclick="refreshToken()" title="Click to refresh token">API: ...</span>
             <span id="status-badge" class="status-badge status-active">ACTIVE</span>
         </div>
@@ -909,42 +897,19 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
-    <!-- Spreads -->
+    <!-- Today's Trades -->
     <div style="padding:0 24px;margin-top:16px;">
         <div class="card">
-            <h3>Detected Spreads</h3>
-            <div id="spreads-container">
-                <div style="color:#484f58;text-align:center;padding:12px;">No spreads detected</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <h3 style="margin:0;">Today's Trades</h3>
+                <a href="/analytics" target="_blank" style="font-size:11px;color:#58a6ff;text-decoration:none;">Full Analytics &#x2197;</a>
             </div>
-        </div>
-    </div>
-
-    <!-- Trade Journal -->
-    <div style="padding:0 24px;margin-top:16px;">
-        <div class="card">
-            <div style="display:flex;gap:0;border-bottom:1px solid #21262d;margin-bottom:16px;">
-                <div class="journal-tab active" data-jtab="today" onclick="switchJournalTab('today')" style="padding:10px 20px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #58a6ff;color:#58a6ff;">Today</div>
-                <div class="journal-tab" data-jtab="history" onclick="switchJournalTab('history')" style="padding:10px 20px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;">History</div>
-                <div class="journal-tab" data-jtab="analytics" onclick="switchJournalTab('analytics')" style="padding:10px 20px;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#8b949e;">Analytics</div>
-            </div>
-            <div id="jtab-today">
-                <table>
-                    <thead><tr><th>Time</th><th>Instrument</th><th>Type</th><th>Qty</th><th>P&L</th></tr></thead>
-                    <tbody id="journal-today-body">
-                        <tr><td colspan="5" style="text-align:center;color:#484f58;">No trades today</td></tr>
-                    </tbody>
-                </table>
-            </div>
-            <div id="jtab-history" style="display:none;">
-                <div id="journal-daily-summary">
-                    <div style="color:#484f58;text-align:center;padding:20px;">Loading...</div>
-                </div>
-            </div>
-            <div id="jtab-analytics" style="display:none;">
-                <div id="journal-analytics">
-                    <div style="color:#484f58;text-align:center;padding:20px;">Loading...</div>
-                </div>
-            </div>
+            <table>
+                <thead><tr><th>Time</th><th>Instrument</th><th>Type</th><th>Qty</th><th>P&L</th></tr></thead>
+                <tbody id="journal-today-body">
+                    <tr><td colspan="5" style="text-align:center;color:#484f58;">No trades today</td></tr>
+                </tbody>
+            </table>
         </div>
     </div>
 
@@ -1391,9 +1356,6 @@ DASHBOARD_HTML = """
             // Recent orders (rejected/executed/cancelled)
             updateRecentOrders(data.recent_orders || []);
 
-            // Spreads
-            updateSpreads(data.spreads || []);
-
             // P&L chart
             updatePnlChart(data.pnl_chart || []);
 
@@ -1554,40 +1516,6 @@ DASHBOARD_HTML = """
                 hideTSLForm(sid);
             }
         });
-
-        function updateSpreads(spreads) {
-            var container = document.getElementById('spreads-container');
-            if (spreads.length === 0) {
-                container.innerHTML = '<div style="color:#484f58;text-align:center;padding:12px;">No spreads detected</div>';
-                return;
-            }
-            var html = '';
-            for (var i = 0; i < spreads.length; i++) {
-                var s = spreads[i];
-                var pnlClass = s.current_pnl >= 0 ? 'positive' : 'negative';
-                html += '<div class="spread-card">';
-                html += '<div class="spread-type">' + s.type.replace(/_/g, ' ') + '</div>';
-                html += '<div style="display:flex;gap:24px;margin-bottom:8px;">';
-                html += '<div><span style="color:#8b949e;">P&L:</span> <span class="' + pnlClass + '">' + fmt(s.current_pnl) + '</span></div>';
-                html += '<div><span style="color:#8b949e;">Max Profit:</span> <span class="positive">' + fmt(s.max_profit) + '</span></div>';
-                html += '<div><span style="color:#8b949e;">Max Loss:</span> <span class="negative">' + fmt(s.max_loss) + '</span></div>';
-                html += '<div><span style="color:#8b949e;">Premium:</span> ' + fmt(s.net_premium) + '</div>';
-                if (s.breakevens && s.breakevens.length > 0) {
-                    html += '<div><span style="color:#8b949e;">BE:</span> ' + s.breakevens.map(function(b){return b.toFixed(0);}).join(', ') + '</div>';
-                }
-                html += '</div>';
-                html += '<table><thead><tr><th>Type</th><th>Strike</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&L</th></tr></thead><tbody>';
-                for (var j = 0; j < s.legs.length; j++) {
-                    var leg = s.legs[j];
-                    var legClass = leg.pnl >= 0 ? 'positive' : 'negative';
-                    html += '<tr><td>' + leg.option_type + '</td><td>' + leg.strike + '</td><td>' + leg.qty + '</td>';
-                    html += '<td>\\u20B9' + leg.entry.toFixed(2) + '</td><td>\\u20B9' + leg.ltp.toFixed(2) + '</td>';
-                    html += '<td class="' + legClass + '">' + fmt(leg.pnl) + '</td></tr>';
-                }
-                html += '</tbody></table></div>';
-            }
-            container.innerHTML = html;
-        }
 
         // ── P&L Chart ────────────────────────────────────────────────
         var pnlChart = null;
@@ -1794,102 +1722,6 @@ DASHBOARD_HTML = """
                 html += '</tr>';
             }
             tbody.innerHTML = html;
-        }
-
-        function loadJournalHistory() {
-            fetch('/api/journal/daily_summaries?days=30')
-                .then(function(r){ return r.json(); })
-                .then(function(data) {
-                    var el = document.getElementById('journal-daily-summary');
-                    if (!data || data.length === 0) {
-                        el.innerHTML = '<div style="color:#484f58;text-align:center;padding:20px;">No historical data yet</div>';
-                        return;
-                    }
-                    var html = '<table><thead><tr><th>Date</th><th>Trades</th><th>Win Rate</th><th>P&L</th><th>Gross Profit</th><th>Gross Loss</th><th>Avg Win</th><th>Avg Loss</th></tr></thead><tbody>';
-                    for (var i = 0; i < data.length; i++) {
-                        var d = data[i];
-                        var pnlClass = d.total_pnl >= 0 ? 'positive' : 'negative';
-                        html += '<tr>';
-                        html += '<td>' + d.date + '</td>';
-                        html += '<td>' + d.total_trades + ' <span style="color:#8b949e;font-size:11px;">(W:' + d.winners + ' L:' + d.losers + ')</span></td>';
-                        html += '<td>' + d.win_rate.toFixed(1) + '%</td>';
-                        html += '<td class="' + pnlClass + '">' + fmt(d.total_pnl) + '</td>';
-                        html += '<td class="positive">' + fmt(d.gross_profit) + '</td>';
-                        html += '<td class="negative">' + fmt(d.gross_loss) + '</td>';
-                        html += '<td>' + fmt(d.avg_win) + '</td>';
-                        html += '<td>' + fmt(d.avg_loss) + '</td>';
-                        html += '</tr>';
-                    }
-                    html += '</tbody></table>';
-                    el.innerHTML = html;
-                })
-                .catch(function(e) {
-                    document.getElementById('journal-daily-summary').innerHTML =
-                        '<div style="color:#f85149;text-align:center;padding:20px;">Failed to load history</div>';
-                });
-        }
-
-        function loadJournalAnalytics() {
-            fetch('/api/journal/analytics?days=30')
-                .then(function(r){ return r.json(); })
-                .then(function(data) {
-                    var el = document.getElementById('journal-analytics');
-                    if (!data || data.total_days === 0) {
-                        el.innerHTML = '<div style="color:#484f58;text-align:center;padding:20px;">No data for analytics yet</div>';
-                        return;
-                    }
-                    var html = '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px;">';
-                    var cards = [
-                        { label: 'Total Days', val: data.total_days },
-                        { label: 'Total Trades', val: data.total_trades },
-                        { label: 'Overall P&L', val: fmt(data.overall_pnl), cls: data.overall_pnl >= 0 ? 'positive' : 'negative' },
-                        { label: 'Win Rate', val: data.win_rate + '%' },
-                        { label: 'Avg Win', val: fmt(data.avg_win), cls: 'positive' },
-                        { label: 'Avg Loss', val: fmt(data.avg_loss), cls: 'negative' },
-                        { label: 'Profitable Days', val: data.profitable_days, cls: 'positive' },
-                        { label: 'Losing Days', val: data.losing_days, cls: 'negative' },
-                        { label: 'Avg Daily P&L', val: fmt(data.avg_daily_pnl), cls: data.avg_daily_pnl >= 0 ? 'positive' : 'negative' },
-                        { label: 'Best Day', val: data.best_day ? fmt(data.best_day.pnl) + ' (' + data.best_day.date + ')' : '-', cls: 'positive' },
-                        { label: 'Worst Day', val: data.worst_day ? fmt(data.worst_day.pnl) + ' (' + data.worst_day.date + ')' : '-', cls: 'negative' },
-                    ];
-                    for (var i = 0; i < cards.length; i++) {
-                        var c = cards[i];
-                        html += '<div style="background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:12px;text-align:center;">';
-                        html += '<div style="font-size:11px;color:#8b949e;text-transform:uppercase;">' + c.label + '</div>';
-                        html += '<div style="font-size:18px;font-weight:700;margin-top:4px;" class="' + (c.cls || '') + '">' + c.val + '</div>';
-                        html += '</div>';
-                    }
-                    html += '</div>';
-
-                    // P&L by hour
-                    if (data.pnl_by_hour && data.pnl_by_hour.length > 0) {
-                        html += '<h4 style="color:#c9d1d9;margin:16px 0 8px;">P&L by Hour</h4>';
-                        html += '<table><thead><tr><th>Hour</th><th>P&L</th><th>Trades</th></tr></thead><tbody>';
-                        for (var h = 0; h < data.pnl_by_hour.length; h++) {
-                            var hr = data.pnl_by_hour[h];
-                            var hClass = hr.total_pnl >= 0 ? 'positive' : 'negative';
-                            html += '<tr><td>' + hr.hour + ':00</td><td class="' + hClass + '">' + fmt(hr.total_pnl) + '</td><td>' + hr.trade_count + '</td></tr>';
-                        }
-                        html += '</tbody></table>';
-                    }
-
-                    // P&L by instrument
-                    if (data.pnl_by_instrument && data.pnl_by_instrument.length > 0) {
-                        html += '<h4 style="color:#c9d1d9;margin:16px 0 8px;">P&L by Instrument</h4>';
-                        html += '<table><thead><tr><th>Security ID</th><th>P&L</th><th>Trades</th><th>Winners</th></tr></thead><tbody>';
-                        for (var inst = 0; inst < data.pnl_by_instrument.length; inst++) {
-                            var ins = data.pnl_by_instrument[inst];
-                            var iClass = ins.total_pnl >= 0 ? 'positive' : 'negative';
-                            html += '<tr><td>' + (ins.instrument || ins.security_id) + '</td><td class="' + iClass + '">' + fmt(ins.total_pnl) + '</td><td>' + ins.trade_count + '</td><td>' + ins.winners + '</td></tr>';
-                        }
-                        html += '</tbody></table>';
-                    }
-                    el.innerHTML = html;
-                })
-                .catch(function(e) {
-                    document.getElementById('journal-analytics').innerHTML =
-                        '<div style="color:#f85149;text-align:center;padding:20px;">Failed to load analytics</div>';
-                });
         }
 
         // switchOrderTab is defined in <head> so tabs work even if this script errors
@@ -4821,6 +4653,23 @@ def api_journal_analytics():
         return jsonify({})
 
 
+@app.route("/api/analytics/day_trades")
+def api_analytics_day_trades():
+    """Return individual trades for a given date from trade-analyser."""
+    date_str = request.args.get("date", "")
+    if not date_str:
+        return jsonify([])
+    try:
+        import urllib.request as _ur
+        url = f"{ANALYSER_URL}/api/trades?date={date_str}"
+        with _ur.urlopen(url, timeout=3) as r:
+            trades = json.loads(r.read().decode())
+        return jsonify(trades if isinstance(trades, list) else [])
+    except Exception as e:
+        logger.warning("day_trades fetch failed for %s: %s", date_str, e)
+        return jsonify([])
+
+
 # ── Journal Entry Endpoints (screenshots + detailed per-trade) ───
 
 @app.route("/api/journal/entry", methods=["POST"])
@@ -5123,6 +4972,305 @@ def journal_page():
     # Redirect to trade-analyser running on port 5556
     host = request.host.split(":")[0]
     return redirect(f"http://{host}:5556", code=302)
+
+
+@app.route("/analytics")
+def analytics_page():
+    return _build_analytics_page()
+
+
+def _build_analytics_page():
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Analytics</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh;}
+.header{background:#161b22;border-bottom:1px solid #21262d;padding:14px 24px;display:flex;align-items:center;gap:16px;}
+.header h1{font-size:16px;font-weight:700;color:#e6edf3;}
+.header a{font-size:12px;color:#8b949e;text-decoration:none;padding:4px 10px;border:1px solid #30363d;border-radius:6px;}
+.header a:hover{color:#e6edf3;}
+.content{padding:24px;max-width:1200px;margin:0 auto;}
+/* Stats cards */
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:28px;}
+.stat-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px 16px;text-align:center;}
+.stat-label{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}
+.stat-val{font-size:20px;font-weight:700;}
+.positive{color:#3fb950;}.negative{color:#f85149;}.neutral{color:#e6edf3;}
+/* Calendar */
+.cal-nav{display:flex;align-items:center;gap:12px;margin-bottom:16px;}
+.cal-nav button{background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:14px;}
+.cal-nav button:hover{background:#21262d;}
+.cal-month-label{font-size:16px;font-weight:600;color:#e6edf3;min-width:140px;text-align:center;}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:28px;}
+.cal-dow{text-align:center;font-size:11px;color:#8b949e;padding:6px 0;font-weight:600;}
+.cal-cell{background:#161b22;border:1px solid #21262d;border-radius:6px;min-height:72px;padding:8px;cursor:default;position:relative;transition:border-color .15s;}
+.cal-cell.has-data{cursor:pointer;}
+.cal-cell.has-data:hover{border-color:#58a6ff;}
+.cal-cell.selected{border-color:#58a6ff;background:#0d2137;}
+.cal-cell.today-cell{border-color:#30363d;}
+.cal-cell.profit{border-left:3px solid #3fb950;}
+.cal-cell.loss{border-left:3px solid #f85149;}
+.cal-cell.empty{background:transparent;border-color:transparent;}
+.cal-day-num{font-size:11px;color:#8b949e;margin-bottom:4px;}
+.cal-day-pnl{font-size:13px;font-weight:700;}
+.cal-day-trades{font-size:10px;color:#8b949e;margin-top:2px;}
+/* Day detail */
+#day-detail{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:20px;margin-bottom:28px;display:none;}
+#day-detail h2{font-size:14px;font-weight:700;margin-bottom:16px;color:#58a6ff;}
+.day-stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:18px;}
+.day-stat{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:10px 12px;text-align:center;}
+.day-stat .lbl{font-size:10px;color:#8b949e;text-transform:uppercase;}
+.day-stat .val{font-size:16px;font-weight:700;margin-top:3px;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+th{color:#8b949e;text-align:left;padding:8px 10px;border-bottom:1px solid #21262d;font-weight:600;font-size:11px;text-transform:uppercase;}
+td{padding:8px 10px;border-bottom:1px solid #161b22;color:#e6edf3;}
+tr:hover td{background:#1c2128;}
+.spinner{text-align:center;padding:40px;color:#8b949e;font-size:13px;}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>&#x1F4CA; Analytics</h1>
+  <a href="/" title="Back to dashboard">&#x2190; Dashboard</a>
+</div>
+<div class="content">
+
+  <!-- Overall stats -->
+  <div id="overall-stats" class="stat-grid">
+    <div class="spinner" style="grid-column:1/-1;">Loading...</div>
+  </div>
+
+  <!-- Calendar nav -->
+  <div class="cal-nav">
+    <button onclick="calPrev()">&#x2039;</button>
+    <span id="cal-month-label" class="cal-month-label"></span>
+    <button onclick="calNext()">&#x203A;</button>
+  </div>
+  <div id="cal-grid" class="cal-grid"></div>
+
+  <!-- Day detail panel -->
+  <div id="day-detail">
+    <h2 id="day-detail-title"></h2>
+    <div id="day-detail-stats" class="day-stat-grid"></div>
+    <div id="day-detail-trades"></div>
+  </div>
+
+</div>
+<script>
+var _byDate = {};       // date string -> summary object
+var _calYear = 0;
+var _calMonth = 0;      // 0-indexed
+var _selectedDate = null;
+var _todayStr = '';
+
+function fmt(v) {
+    if (v == null) return '-';
+    var s = Math.abs(v).toLocaleString('en-IN', {minimumFractionDigits:0, maximumFractionDigits:0});
+    return (v >= 0 ? '+₹' : '-₹') + s;
+}
+function fmtPct(v) { return v == null ? '-' : v.toFixed(1) + '%'; }
+
+// ── Boot ────────────────────────────────────────────────────────────
+window.onload = function() {
+    var now = new Date();
+    _calYear  = now.getFullYear();
+    _calMonth = now.getMonth();
+    // today string in YYYY-MM-DD (local)
+    _todayStr = now.getFullYear() + '-' +
+                String(now.getMonth()+1).padStart(2,'0') + '-' +
+                String(now.getDate()).padStart(2,'0');
+    loadAll();
+};
+
+function loadAll() {
+    // Fetch up to 365 days of daily summaries
+    fetch('/api/journal/daily_summaries?days=365')
+        .then(function(r){return r.json();})
+        .then(function(data) {
+            _byDate = {};
+            for (var i = 0; i < data.length; i++) {
+                _byDate[data[i].date] = data[i];
+            }
+            renderOverallStats(data);
+            renderCalendar();
+        })
+        .catch(function(){ renderCalendar(); });
+}
+
+// ── Overall stats ───────────────────────────────────────────────────
+function renderOverallStats(data) {
+    var el = document.getElementById('overall-stats');
+    if (!data || data.length === 0) {
+        el.innerHTML = '<div class="stat-card"><div class="stat-label">No data yet</div></div>';
+        return;
+    }
+    var totalTrades = 0, totalPnl = 0, winners = 0, losers = 0;
+    var profDays = 0, lossDays = 0, allPnls = [];
+    for (var i = 0; i < data.length; i++) {
+        var d = data[i];
+        totalTrades += d.total_trades || 0;
+        totalPnl    += d.total_pnl || 0;
+        winners     += d.winners || 0;
+        losers      += d.losers || 0;
+        allPnls.push(d.total_pnl);
+        if (d.total_pnl >= 0) profDays++; else lossDays++;
+    }
+    var winRate  = totalTrades > 0 ? (winners / totalTrades * 100) : 0;
+    var dayWinRate = data.length > 0 ? (profDays / data.length * 100) : 0;
+    var avgDaily = data.length > 0 ? totalPnl / data.length : 0;
+    var bestDay  = data.reduce(function(a,b){ return b.total_pnl > a.total_pnl ? b : a; });
+    var worstDay = data.reduce(function(a,b){ return b.total_pnl < a.total_pnl ? b : a; });
+
+    var cards = [
+        {lbl:'Total Days', val: data.length, cls:'neutral'},
+        {lbl:'Total Trades', val: totalTrades, cls:'neutral'},
+        {lbl:'Overall P&L', val: fmt(totalPnl), cls: totalPnl>=0?'positive':'negative'},
+        {lbl:'Trade Win Rate', val: fmtPct(winRate), cls: winRate>=50?'positive':'negative'},
+        {lbl:'Day Win Rate', val: fmtPct(dayWinRate), cls: dayWinRate>=50?'positive':'negative'},
+        {lbl:'Avg Daily P&L', val: fmt(avgDaily), cls: avgDaily>=0?'positive':'negative'},
+        {lbl:'Profitable Days', val: profDays, cls:'positive'},
+        {lbl:'Losing Days', val: lossDays, cls:'negative'},
+        {lbl:'Best Day', val: fmt(bestDay.total_pnl) + '<br><span style="font-size:10px;color:#8b949e;">'+bestDay.date+'</span>', cls:'positive'},
+        {lbl:'Worst Day', val: fmt(worstDay.total_pnl) + '<br><span style="font-size:10px;color:#8b949e;">'+worstDay.date+'</span>', cls:'negative'},
+    ];
+    var html = '';
+    for (var c = 0; c < cards.length; c++) {
+        html += '<div class="stat-card"><div class="stat-label">'+cards[c].lbl+'</div>';
+        html += '<div class="stat-val '+cards[c].cls+'">'+cards[c].val+'</div></div>';
+    }
+    el.innerHTML = html;
+}
+
+// ── Calendar ────────────────────────────────────────────────────────
+var MONTHS = ['January','February','March','April','May','June',
+              'July','August','September','October','November','December'];
+var DAYS   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+function calPrev() {
+    _calMonth--;
+    if (_calMonth < 0) { _calMonth = 11; _calYear--; }
+    renderCalendar();
+}
+function calNext() {
+    _calMonth++;
+    if (_calMonth > 11) { _calMonth = 0; _calYear++; }
+    renderCalendar();
+}
+
+function renderCalendar() {
+    document.getElementById('cal-month-label').textContent = MONTHS[_calMonth] + ' ' + _calYear;
+    var grid = document.getElementById('cal-grid');
+    var html = '';
+    // Day-of-week headers
+    for (var d = 0; d < 7; d++) html += '<div class="cal-dow">'+DAYS[d]+'</div>';
+
+    var first = new Date(_calYear, _calMonth, 1).getDay(); // 0=Sun
+    var daysInMonth = new Date(_calYear, _calMonth+1, 0).getDate();
+
+    // Empty leading cells
+    for (var e = 0; e < first; e++) html += '<div class="cal-cell empty"></div>';
+
+    for (var day = 1; day <= daysInMonth; day++) {
+        var ds = _calYear + '-' +
+                 String(_calMonth+1).padStart(2,'0') + '-' +
+                 String(day).padStart(2,'0');
+        var summary = _byDate[ds];
+        var isToday = ds === _todayStr;
+        var isSelected = ds === _selectedDate;
+        var hasPnl = summary != null;
+        var pnlClass = hasPnl ? (summary.total_pnl >= 0 ? 'profit' : 'loss') : '';
+        var selectedClass = isSelected ? ' selected' : '';
+        var todayClass = isToday ? ' today-cell' : '';
+        var hasClass = hasPnl ? ' has-data' : '';
+        html += '<div class="cal-cell'+pnlClass+selectedClass+todayClass+hasClass+'"' +
+                (hasPnl ? ' onclick="selectDay(\''+ds+'\')"' : '') + '>';
+        html += '<div class="cal-day-num">' + day + (isToday ? ' •' : '') + '</div>';
+        if (hasPnl) {
+            var pnl = summary.total_pnl;
+            html += '<div class="cal-day-pnl '+(pnl>=0?'positive':'negative')+'">'+fmt(pnl)+'</div>';
+            html += '<div class="cal-day-trades">'+summary.total_trades+' trade'+(summary.total_trades!==1?'s':'')+'</div>';
+        }
+        html += '</div>';
+    }
+    grid.innerHTML = html;
+}
+
+// ── Day detail ──────────────────────────────────────────────────────
+function selectDay(date) {
+    _selectedDate = date;
+    renderCalendar();
+    var s = _byDate[date];
+    var detail = document.getElementById('day-detail');
+    detail.style.display = 'block';
+    document.getElementById('day-detail-title').textContent = date;
+
+    // Summary stats
+    var stats = [
+        {lbl:'Total P&L', val: fmt(s.total_pnl), cls: s.total_pnl>=0?'positive':'negative'},
+        {lbl:'Trades', val: s.total_trades, cls:'neutral'},
+        {lbl:'Win Rate', val: fmtPct(s.win_rate), cls: s.win_rate>=50?'positive':'negative'},
+        {lbl:'Winners', val: s.winners, cls:'positive'},
+        {lbl:'Losers', val: s.losers, cls:'negative'},
+        {lbl:'Gross Profit', val: fmt(s.gross_profit), cls:'positive'},
+        {lbl:'Gross Loss', val: fmt(s.gross_loss), cls:'negative'},
+        {lbl:'Avg Win', val: fmt(s.avg_win), cls:'positive'},
+        {lbl:'Avg Loss', val: fmt(s.avg_loss), cls:'negative'},
+    ];
+    var sh = '';
+    for (var i = 0; i < stats.length; i++) {
+        sh += '<div class="day-stat"><div class="lbl">'+stats[i].lbl+'</div>';
+        sh += '<div class="val '+stats[i].cls+'">'+stats[i].val+'</div></div>';
+    }
+    document.getElementById('day-detail-stats').innerHTML = sh;
+
+    // Load individual trades for this day
+    document.getElementById('day-detail-trades').innerHTML =
+        '<div class="spinner">Loading trades...</div>';
+    fetch('/api/journal/daily_summaries?days=1&date='+date)
+        .then(function(r){return r.json();})
+        .catch(function(){return [];});
+
+    // Fetch trade list from analyser
+    fetch('/api/analytics/day_trades?date='+date)
+        .then(function(r){return r.json();})
+        .then(function(trades){renderDayTrades(trades);})
+        .catch(function(){
+            document.getElementById('day-detail-trades').innerHTML =
+                '<div style="color:#f85149;padding:12px;">Could not load trades for this day.</div>';
+        });
+
+    detail.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function renderDayTrades(trades) {
+    var el = document.getElementById('day-detail-trades');
+    if (!trades || trades.length === 0) {
+        el.innerHTML = '<div style="color:#484f58;padding:12px;text-align:center;">No trade detail available.</div>';
+        return;
+    }
+    var html = '<table><thead><tr><th>Time</th><th>Instrument</th><th>Entry</th><th>Exit</th><th>Qty</th><th>P&L</th></tr></thead><tbody>';
+    for (var i = 0; i < trades.length; i++) {
+        var t = trades[i];
+        var pnl = t.pnl != null ? t.pnl : null;
+        var cls = pnl == null ? '' : (pnl >= 0 ? 'positive' : 'negative');
+        html += '<tr>';
+        html += '<td>'+(t.entry_time||t.time||'-')+'</td>';
+        html += '<td>'+(t.symbol||t.underlying||'-')+'</td>';
+        html += '<td>&#8377;'+(t.entry_price!=null?t.entry_price.toFixed(2):'-')+'</td>';
+        html += '<td>&#8377;'+(t.exit_price!=null?t.exit_price.toFixed(2):'-')+'</td>';
+        html += '<td>'+(t.quantity||'-')+'</td>';
+        html += '<td class="'+cls+'">'+(pnl!=null?fmt(pnl):'-')+'</td>';
+        html += '</tr>';
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+}
+</script>
+</body>
+</html>'''
 
 
 def _build_journal_page():
