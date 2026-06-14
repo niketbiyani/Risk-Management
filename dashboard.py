@@ -5377,19 +5377,20 @@ function applySync(chart, series, dp) {
     }
 }
 function syncCrosshairs() {
+    // Use _sRsiOb as RSI sync reference — it spans full time range unlike _sRsi (starts bar 14)
     _cMain.subscribeCrosshairMove(function(p) {
         var dp = getCrossDataPoint(_sCandle, p);
         if (dp && p.time) document.getElementById('s-ltp').textContent = dp.close.toFixed(2);
         applySync(_cMacd, _sMacdBars, dp);
-        applySync(_cRsi,  _sRsi,      dp);
+        applySync(_cRsi,  _sRsiOb,    dp);
     });
     _cMacd.subscribeCrosshairMove(function(p) {
         var dp = getCrossDataPoint(_sMacdBars, p);
         applySync(_cMain, _sCandle, dp);
-        applySync(_cRsi,  _sRsi,    dp);
+        applySync(_cRsi,  _sRsiOb,  dp);
     });
     _cRsi.subscribeCrosshairMove(function(p) {
-        var dp = getCrossDataPoint(_sRsi, p);
+        var dp = getCrossDataPoint(_sRsiOb, p);
         applySync(_cMain, _sCandle,   dp);
         applySync(_cMacd, _sMacdBars, dp);
     });
@@ -5656,17 +5657,16 @@ function doLoad() {
             _sMacdSigBars.setData(times.map(function(t,i){return {time:t,value:md.signal[i]};}));
             _sMacdBars.setData(times.map(function(t,i){return {time:t,value:md.macd[i]};}));
 
-            // RSI — skip null leading values, then OB/OS spans same range
+            // RSI — OB/OS span ALL times so RSI chart's time axis matches main
             var rsiData=calcRsi(closes,14);
             var rsiPts=[];
             for (var i=0;i<times.length;i++) {
                 if (rsiData[i]!==null) rsiPts.push({time:times[i],value:rsiData[i]});
             }
+            // OB/OS use full times array — this aligns RSI chart's logical indices with main
+            _sRsiOb.setData(times.map(function(t){return {time:t,value:70};}));
+            _sRsiOs.setData(times.map(function(t){return {time:t,value:30};}));
             _sRsi.setData(rsiPts);
-            var obPts=rsiPts.map(function(p){return {time:p.time,value:70};});
-            var osPts=rsiPts.map(function(p){return {time:p.time,value:30};});
-            _sRsiOb.setData(obPts);
-            _sRsiOs.setData(osPts);
 
             _cMain.timeScale().fitContent();
             // Sync MACD and RSI to same range
