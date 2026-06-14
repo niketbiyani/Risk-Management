@@ -5300,7 +5300,7 @@ select:focus{border-color:#58a6ff;}
 <script>
 var _tf=1, _spot=0, _refreshTimer=null, _rangeSyncing=false;
 var _cMain=null, _sCandle=null, _sEma20=null, _sEma50=null;
-var _cMacd=null, _sMacdBars=null, _sMacdSigBars=null;
+var _cMacd=null, _sMacdBars=null, _sMacdSigBars=null, _sMacdZero=null;
 var _cRsi=null, _sRsi=null, _sRsiOb=null, _sRsiOs=null;
 
 var BG='#0d1117', GRID='#161b22', BORDER='#21262d', TEXT='#8b949e';
@@ -5344,6 +5344,10 @@ function initCharts() {
     _sMacdSigBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
         {color:'#2962ff', priceLineVisible:false, lastValueVisible:false,
          crosshairMarkerVisible:false});
+    // Zero line anchors MACD chart time axis over full range (like _sRsiOb for RSI)
+    _sMacdZero = _cMacd.addSeries(LightweightCharts.LineSeries,
+        {color:'rgba(100,100,100,0.35)', lineWidth:1, priceLineVisible:false,
+         lastValueVisible:false, crosshairMarkerVisible:false});
 
     // RSI owns the time axis at the bottom
     _cRsi = LightweightCharts.createChart(rsiEl, _base(true));
@@ -5377,22 +5381,22 @@ function applySync(chart, series, dp) {
     }
 }
 function syncCrosshairs() {
-    // Use _sRsiOb as RSI sync reference — it spans full time range unlike _sRsi (starts bar 14)
+    // _sRsiOb and _sMacdZero span full time range — used as anchors (like _sRsi/_sMacdBars start late)
     _cMain.subscribeCrosshairMove(function(p) {
         var dp = getCrossDataPoint(_sCandle, p);
         if (dp && p.time) document.getElementById('s-ltp').textContent = dp.close.toFixed(2);
-        applySync(_cMacd, _sMacdBars, dp);
+        applySync(_cMacd, _sMacdZero, dp);
         applySync(_cRsi,  _sRsiOb,    dp);
     });
     _cMacd.subscribeCrosshairMove(function(p) {
-        var dp = getCrossDataPoint(_sMacdBars, p);
+        var dp = getCrossDataPoint(_sMacdZero, p);
         applySync(_cMain, _sCandle, dp);
         applySync(_cRsi,  _sRsiOb,  dp);
     });
     _cRsi.subscribeCrosshairMove(function(p) {
         var dp = getCrossDataPoint(_sRsiOb, p);
         applySync(_cMain, _sCandle,   dp);
-        applySync(_cMacd, _sMacdBars, dp);
+        applySync(_cMacd, _sMacdZero, dp);
     });
 }
 
@@ -5589,6 +5593,7 @@ function setTf(tf) {
 function calcEma(closes, period) {
     var k=2/(period+1), ema=closes[0], out=[];
     for (var i=0; i<closes.length; i++) {
+        if (i < period-1) { out.push(null); continue; }
         ema = i===0 ? closes[0] : closes[i]*k + ema*(1-k);
         out.push(parseFloat(ema.toFixed(4)));
     }
@@ -5596,10 +5601,24 @@ function calcEma(closes, period) {
 }
 
 function calcMacd(closes, fast, slow, sig) {
-    var ef=calcEma(closes,fast), es=calcEma(closes,slow);
-    var ml=ef.map(function(v,i){return parseFloat((v-es[i]).toFixed(4));});
-    var sl=calcEma(ml,sig);
-    var hi=ml.map(function(v,i){return parseFloat((v-sl[i]).toFixed(4));});
+    // Compute raw EMAs without null warm-up for internal use
+    var k_f=2/(fast+1), k_s=2/(slow+1), k_g=2/(sig+1);
+    var ef=[], es=[];
+    var ema_f=closes[0], ema_s=closes[0];
+    for (var i=0; i<closes.length; i++) {
+        ema_f = i===0 ? closes[0] : closes[i]*k_f + ema_f*(1-k_f);
+        ema_s = i===0 ? closes[0] : closes[i]*k_s + ema_s*(1-k_s);
+        ef.push(ema_f); es.push(ema_s);
+    }
+    var ml=[], sl=[], hi=[], ema_g=ef[0]-es[0];
+    for (var i=0; i<closes.length; i++) {
+        var m = ef[i]-es[i];
+        ema_g = i===0 ? m : m*k_g + ema_g*(1-k_g);
+        // MACD null for first slow-1 bars; Signal null for first slow+sig-2 bars
+        ml.push(i < slow-1 ? null : parseFloat(m.toFixed(4)));
+        sl.push(i < slow+sig-2 ? null : parseFloat(ema_g.toFixed(4)));
+        hi.push((i < slow+sig-2) ? null : parseFloat((m - ema_g).toFixed(4)));
+    }
     return {macd:ml, signal:sl, hist:hi};
 }
 
@@ -5647,15 +5666,26 @@ function doLoad() {
             var closes=candles.map(function(c){return c.close;});
             var times =candles.map(function(c){return c.time;});
 
-            // EMA
+            // EMA — filter null warm-up bars
             var e20=calcEma(closes,20), e50=calcEma(closes,50);
-            _sEma20.setData(times.map(function(t,i){return {time:t,value:e20[i]};}));
-            _sEma50.setData(times.map(function(t,i){return {time:t,value:e50[i]};}));
+            var ema20pts=[], ema50pts=[];
+            for (var i=0;i<times.length;i++) {
+                if (e20[i]!==null) ema20pts.push({time:times[i],value:e20[i]});
+                if (e50[i]!==null) ema50pts.push({time:times[i],value:e50[i]});
+            }
+            _sEma20.setData(ema20pts);
+            _sEma50.setData(ema50pts);
 
-            // MACD — Signal (orange) behind, MACD (blue) on top
+            // MACD — zero line spans full range to anchor time axis; filter null warm-up bars
             var md=calcMacd(closes,12,26,9);
-            _sMacdSigBars.setData(times.map(function(t,i){return {time:t,value:md.signal[i]};}));
-            _sMacdBars.setData(times.map(function(t,i){return {time:t,value:md.macd[i]};}));
+            _sMacdZero.setData(times.map(function(t){return {time:t,value:0};}));
+            var macdPts=[], sigPts=[];
+            for (var i=0;i<times.length;i++) {
+                if (md.macd[i]!==null) macdPts.push({time:times[i],value:md.macd[i]});
+                if (md.signal[i]!==null) sigPts.push({time:times[i],value:md.signal[i]});
+            }
+            _sMacdSigBars.setData(sigPts);
+            _sMacdBars.setData(macdPts);
 
             // RSI — OB/OS span ALL times so RSI chart's time axis matches main
             var rsiData=calcRsi(closes,14);
