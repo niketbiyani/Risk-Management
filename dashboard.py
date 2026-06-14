@@ -5285,7 +5285,7 @@ select:focus{border-color:#58a6ff;}
     <div class="overlay-msg" id="overlay">Select index, expiry &amp; strikes then click Load</div>
   </div>
   <div class="panel" id="panel-macd">
-    <div class="panel-label">MACD (12,26,9) &nbsp;&#x2013;&nbsp; <span style="color:#2962ff;">MACD</span> &nbsp;<span style="color:#ff6d00;">Signal</span></div>
+    <div class="panel-label">MACD (12,26,9) &nbsp;&#x2013;&nbsp; <span style="color:#26a69a;">&#x25A0;</span><span style="color:#4db6ac;">&#x25A0;</span> MACD &nbsp;<span style="color:#ff6d00;">&#x25A0;</span> Signal</div>
     <div id="chart-macd" style="width:100%;height:100%;"></div>
   </div>
   <div class="panel" id="panel-rsi">
@@ -5297,14 +5297,17 @@ select:focus{border-color:#58a6ff;}
 <script>
 var _tf=1, _spot=0, _refreshTimer=null, _rangeSyncing=false;
 var _cMain=null, _sCandle=null, _sEma20=null, _sEma50=null;
-var _cMacd=null, _sMacdHist=null, _sMacdLine=null, _sMacdSig=null;
+var _cMacd=null, _sMacdBars=null, _sMacdSigBars=null;
 var _cRsi=null, _sRsi=null, _sRsiOb=null, _sRsiOs=null;
 
 var BG='#0d1117', GRID='#161b22', BORDER='#21262d', TEXT='#8b949e';
 var GRN='#3fb950', RED='#f85149', BLUE='#3db8f5', AMBER='#f0883e';
-// Classic TradingView MACD colours
-var MACD_LINE='#2962ff', MACD_SIG='#ff6d00';
-var MACD_HIST_UP='#26a69a', MACD_HIST_DN='#ef5350';
+// MACD 4-colour momentum scheme (matches TradingView screenshot)
+var MC0='#26a69a';   // positive, rising
+var MC1='#4db6ac';   // positive, falling
+var MC2='#e57373';   // negative, rising (less negative)
+var MC3='#ef5350';   // negative, falling (more negative)
+var MACD_SIG_C='#ff6d00'; // signal histogram colour
 
 function _base(showTimeAxis) {
     return {
@@ -5332,30 +5335,34 @@ function initCharts() {
         wickUpColor:GRN, wickDownColor:RED,
     });
     _sEma20 = _cMain.addSeries(LightweightCharts.LineSeries,
-        {color:BLUE,  lineWidth:1, priceLineVisible:false, lastValueVisible:false});
+        {color:BLUE,  lineWidth:1, priceLineVisible:false, lastValueVisible:false,
+         crosshairMarkerVisible:false});
     _sEma50 = _cMain.addSeries(LightweightCharts.LineSeries,
-        {color:AMBER, lineWidth:1, priceLineVisible:false, lastValueVisible:false});
+        {color:AMBER, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
+         crosshairMarkerVisible:false});
 
-    // MACD: no time axis
+    // MACD: MACD values as 4-colour histogram, signal as orange histogram
     _cMacd = LightweightCharts.createChart(macdEl, _base(false));
-    _sMacdHist = _cMacd.addSeries(LightweightCharts.HistogramSeries,
-        {color:MACD_HIST_UP, priceLineVisible:false, lastValueVisible:false,
-         scaleMargins:{top:0.1,bottom:0.1}});
-    _sMacdLine = _cMacd.addSeries(LightweightCharts.LineSeries,
-        {color:MACD_LINE, lineWidth:1, priceLineVisible:false, lastValueVisible:false});
-    _sMacdSig  = _cMacd.addSeries(LightweightCharts.LineSeries,
-        {color:MACD_SIG,  lineWidth:1, priceLineVisible:false, lastValueVisible:false});
+    _sMacdSigBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
+        {color:MACD_SIG_C, priceLineVisible:false, lastValueVisible:false,
+         crosshairMarkerVisible:false});
+    _sMacdBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
+        {color:MC0, priceLineVisible:false, lastValueVisible:false,
+         crosshairMarkerVisible:false});
 
-    // RSI: shows time axis at bottom
+    // RSI: shows time axis at bottom — blue, thin, no dots
     _cRsi = LightweightCharts.createChart(rsiEl, _base(true));
     _sRsi   = _cRsi.addSeries(LightweightCharts.LineSeries,
-        {color:'#e3b341', lineWidth:2, priceLineVisible:false, lastValueVisible:true});
+        {color:'#2962ff', lineWidth:1, priceLineVisible:false, lastValueVisible:true,
+         crosshairMarkerVisible:false});
     _sRsiOb = _cRsi.addSeries(LightweightCharts.LineSeries,
         {color:'rgba(248,81,73,0.4)', lineWidth:1, priceLineVisible:false,
-         lastValueVisible:false, lineStyle:LightweightCharts.LineStyle.Dashed});
+         lastValueVisible:false, lineStyle:LightweightCharts.LineStyle.Dashed,
+         crosshairMarkerVisible:false});
     _sRsiOs = _cRsi.addSeries(LightweightCharts.LineSeries,
         {color:'rgba(63,185,80,0.4)', lineWidth:1, priceLineVisible:false,
-         lastValueVisible:false, lineStyle:LightweightCharts.LineStyle.Dashed});
+         lastValueVisible:false, lineStyle:LightweightCharts.LineStyle.Dashed,
+         crosshairMarkerVisible:false});
 
     syncRange();
     syncCrosshairs();
@@ -5386,7 +5393,7 @@ function syncCrosshairs() {
     // When crosshair moves on any chart, mirror it on the other two
     var panels = [
         {c:_cMain, s:_sCandle,   getV:function(d){return d.close;}},
-        {c:_cMacd, s:_sMacdLine, getV:function(d){return d.value;}},
+        {c:_cMacd, s:_sMacdBars,  getV:function(d){return d.value;}},
         {c:_cRsi,  s:_sRsi,      getV:function(d){return d.value;}},
     ];
     panels.forEach(function(src, si) {
@@ -5573,14 +5580,16 @@ function doLoad() {
             _sEma20.setData(times.map(function(t,i){return {time:t,value:e20[i]};}));
             _sEma50.setData(times.map(function(t,i){return {time:t,value:e50[i]};}));
 
-            // MACD
+            // MACD — both as histograms; 4-colour momentum on MACD bars
             var md=calcMacd(closes,12,26,9);
-            _sMacdHist.setData(times.map(function(t,i){
-                return {time:t, value:md.hist[i],
-                        color:md.hist[i]>=0 ? MACD_HIST_UP : MACD_HIST_DN};
+            _sMacdBars.setData(times.map(function(t,i){
+                var v=md.macd[i], prev=i>0?md.macd[i-1]:v;
+                var c = v>=0 ? (v>=prev ? MC0 : MC1) : (v>=prev ? MC2 : MC3);
+                return {time:t, value:v, color:c};
             }));
-            _sMacdLine.setData(times.map(function(t,i){return {time:t,value:md.macd[i]};}));
-            _sMacdSig.setData( times.map(function(t,i){return {time:t,value:md.signal[i]};}));
+            _sMacdSigBars.setData(times.map(function(t,i){
+                return {time:t, value:md.signal[i], color:MACD_SIG_C};
+            }));
 
             // RSI — skip null leading values, then OB/OS spans same range
             var rsiData=calcRsi(closes,14);
