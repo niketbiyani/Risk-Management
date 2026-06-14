@@ -5139,15 +5139,23 @@ def api_straddle_chart():
     def fetch_candles(sec_id):
         try:
             bars = {}
-            for from_d, to_d in [(prev_str, prev_str), (today_str, today_str)]:
+            # Fetch up to 30 trading days back in weekly chunks to stay within Dhan limits
+            end_d = today_d
+            for _ in range(6):  # 6 chunks × ~5 days ≈ 30 trading days
+                chunk_end = end_d
+                chunk_start = end_d - timedelta(days=7)
                 raw = _monitor.api.get_chart_data(
                     security_id=sec_id,
                     exchange_segment=exchange_segment,
                     instrument_type="OPTIDX",
-                    from_date=from_d,
-                    to_date=to_d,
+                    from_date=chunk_start.strftime("%Y-%m-%d"),
+                    to_date=chunk_end.strftime("%Y-%m-%d"),
                 )
-                bars.update(_parse_raw(raw))
+                parsed = _parse_raw(raw)
+                bars.update(parsed)
+                if not parsed:
+                    break  # no more data
+                end_d = chunk_start - timedelta(days=1)
             return bars
         except Exception as e:
             logger.warning("straddle fetch_candles %s: %s", sec_id, e)
@@ -5199,30 +5207,36 @@ def _build_straddle_page():
 <head>
 <meta charset="utf-8">
 <title>Strangle Chart</title>
-<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
-.topbar{background:#161b22;border-bottom:1px solid #21262d;padding:8px 16px;display:flex;align-items:center;gap:14px;flex-shrink:0;flex-wrap:wrap;}
+html,body{height:100%;overflow:hidden;background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+body{display:flex;flex-direction:column;}
+.topbar{background:#161b22;border-bottom:1px solid #21262d;padding:6px 14px;display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;}
 .topbar h1{font-size:13px;font-weight:700;white-space:nowrap;}
 .topbar a{font-size:11px;color:#8b949e;text-decoration:none;padding:3px 8px;border:1px solid #30363d;border-radius:5px;}
-.spot-pill{background:#0d1117;border:1px solid #30363d;border-radius:16px;padding:3px 12px;font-size:12px;font-weight:700;}
-select{background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:4px 8px;border-radius:5px;font-size:12px;outline:none;cursor:pointer;}
+.spot-pill{background:#0d1117;border:1px solid #58a6ff;border-radius:16px;padding:3px 12px;font-size:12px;font-weight:700;color:#58a6ff;}
+select{background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:4px 8px;border-radius:5px;font-size:12px;outline:none;cursor:pointer;}
 select:focus{border-color:#58a6ff;}
-.lbl{font-size:11px;color:#8b949e;}
-.tf-btn{padding:3px 9px;border-radius:4px;border:1px solid #30363d;background:none;color:#8b949e;cursor:pointer;font-size:11px;font-weight:600;}
+.lbl{font-size:10px;color:#8b949e;white-space:nowrap;}
+.tf-btn{padding:3px 8px;border-radius:4px;border:1px solid #30363d;background:none;color:#8b949e;cursor:pointer;font-size:11px;font-weight:600;}
 .tf-btn.active{background:#1f6feb;border-color:#1f6feb;color:#fff;}
 .btn-go{padding:4px 14px;border-radius:5px;border:none;background:#238636;color:#fff;cursor:pointer;font-size:12px;font-weight:700;}
 .btn-go:hover{background:#2ea043;}
-.statbar{background:#0d1117;border-bottom:1px solid #21262d;padding:5px 16px;display:none;gap:20px;align-items:center;font-size:11px;flex-shrink:0;}
-.si{display:flex;gap:5px;align-items:baseline;}
+.statbar{background:#0d1117;border-bottom:1px solid #21262d;padding:4px 14px;display:none;gap:18px;align-items:center;font-size:11px;flex-shrink:0;}
+.si{display:flex;gap:4px;align-items:baseline;}
 .sl{color:#8b949e;}
 .sv{font-weight:700;}
 .pos{color:#3fb950;}.neg{color:#f85149;}.neu{color:#e6edf3;}
-#chart-wrap{flex:1;position:relative;min-height:0;}
-#chart{width:100%;height:100%;}
-.overlay{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#8b949e;font-size:13px;pointer-events:none;text-align:center;}
 #err{color:#f85149;font-size:11px;}
+/* Three-panel chart area */
+#panels{flex:1;display:flex;flex-direction:column;min-height:0;position:relative;}
+.panel{flex-shrink:0;position:relative;}
+.panel-label{position:absolute;top:4px;left:8px;font-size:10px;color:#484f58;pointer-events:none;z-index:2;}
+#panel-main{flex:1;min-height:0;}
+#panel-macd{height:130px;border-top:1px solid #21262d;}
+#panel-rsi{height:110px;border-top:1px solid #21262d;}
+.overlay-msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#8b949e;font-size:13px;pointer-events:none;text-align:center;z-index:5;}
 </style>
 </head>
 <body>
@@ -5230,40 +5244,31 @@ select:focus{border-color:#58a6ff;}
 <div class="topbar">
   <h1>&#x1F4C8; Strangle</h1>
   <a href="/">&#x2190; Dashboard</a>
-
   <span class="lbl">Index</span>
   <select id="sel-ul" onchange="onUlChange()">
     <option value="NIFTY">NIFTY</option>
     <option value="SENSEX">SENSEX</option>
   </select>
-
   <span class="spot-pill" id="spot-display">Spot: --</span>
-
   <span class="lbl">Expiry</span>
-  <select id="sel-exp" onchange="onExpChange()">
-    <option value="">-- --</option>
-  </select>
-
+  <select id="sel-exp" onchange="onExpChange()"><option value="">-- --</option></select>
   <span class="lbl">CE Strike</span>
   <select id="sel-ce"><option value="">--</option></select>
-
   <span class="lbl">PE Strike</span>
   <select id="sel-pe"><option value="">--</option></select>
-
   <div style="display:flex;gap:3px;">
     <button class="tf-btn active" data-tf="1" onclick="setTf(1)">1m</button>
     <button class="tf-btn" data-tf="3" onclick="setTf(3)">3m</button>
     <button class="tf-btn" data-tf="5" onclick="setTf(5)">5m</button>
   </div>
-
-  <button class="btn-go" onclick="loadChart()">&#x25B6; Load</button>
+  <button class="btn-go" onclick="doLoad()">&#x25B6; Load</button>
   <span id="err"></span>
   <span style="margin-left:auto;font-size:10px;color:#484f58;" id="ts"></span>
 </div>
 
 <div class="statbar" id="statbar">
-  <div class="si"><span class="sl">Combined LTP</span><span class="sv neu" id="s-ltp">-</span></div>
-  <div class="si"><span class="sl">Day Open</span><span class="sv neu" id="s-open">-</span></div>
+  <div class="si"><span class="sl">Premium</span><span class="sv neu" id="s-ltp">-</span></div>
+  <div class="si"><span class="sl">Open</span><span class="sv neu" id="s-open">-</span></div>
   <div class="si"><span class="sl">High</span><span class="sv pos" id="s-high">-</span></div>
   <div class="si"><span class="sl">Low</span><span class="sv neg" id="s-low">-</span></div>
   <div class="si"><span class="sl">Chg</span><span class="sv" id="s-chg">-</span></div>
@@ -5271,116 +5276,186 @@ select:focus{border-color:#58a6ff;}
   <div class="si"><span class="sl">PE</span><span class="sv neu" id="s-pe-val">-</span></div>
 </div>
 
-<div id="chart-wrap">
-  <div id="chart"></div>
-  <div class="overlay" id="overlay">Select index, expiry and strikes then click Load</div>
+<div id="panels">
+  <div class="panel" id="panel-main">
+    <div class="panel-label">STRANGLE PREMIUM &nbsp;&#x2013;&nbsp; <span id="lbl-strikes"></span> &nbsp;&#x2013;&nbsp; <span style="color:#3db8f5;">EMA20</span> &nbsp;<span style="color:#f0883e;">EMA50</span></div>
+    <div id="chart-main" style="width:100%;height:100%;"></div>
+    <div class="overlay-msg" id="overlay">Select index, expiry and strikes then click Load</div>
+  </div>
+  <div class="panel" id="panel-macd">
+    <div class="panel-label">MACD (12,26,9)</div>
+    <div id="chart-macd" style="width:100%;height:100%;"></div>
+  </div>
+  <div class="panel" id="panel-rsi">
+    <div class="panel-label">RSI (14)</div>
+    <div id="chart-rsi" style="width:100%;height:100%;"></div>
+  </div>
 </div>
 
 <script>
-var _chart = null, _series = null, _tf = 1, _refreshTimer = null;
-var _spot = 0, _strikes = [], _allExpiries = {};
+// ── State ──────────────────────────────────────────────────────────
+var _tf = 1, _spot = 0, _refreshTimer = null, _syncing = false;
+var _cMain = null, _sCandle = null, _sEma20 = null, _sEma50 = null;
+var _cMacd = null, _sMacdHist = null, _sMacdLine = null, _sMacdSig = null;
+var _cRsi = null, _sRsi = null, _sRsiOb = null, _sRsiOs = null;
 
-window.onload = function() {
-    initChart();
-    onUlChange();
-    window.addEventListener('resize', resizeChart);
-    setInterval(pollSpot, 5000);
-};
+// ── Chart colours ─────────────────────────────────────────────────
+var BG    = '#0d1117';
+var GRID  = '#161b22';
+var BORDER= '#21262d';
+var TEXT  = '#8b949e';
+var GRN   = '#3fb950';
+var RED   = '#f85149';
+var BLUE  = '#3db8f5';
+var AMBER = '#f0883e';
 
-// ── Chart init ──────────────────────────────────────────────────────
-function initChart() {
-    var el = document.getElementById('chart');
-    _chart = LightweightCharts.createChart(el, {
-        width:  el.clientWidth,
-        height: el.clientHeight,
-        layout: {backgroundColor:'#0d1117', textColor:'#8b949e'},
-        grid:   {vertLines:{color:'#161b22'}, horzLines:{color:'#161b22'}},
-        crosshair: {mode: LightweightCharts.CrosshairMode.Normal},
-        rightPriceScale: {borderColor:'#21262d'},
-        timeScale: {borderColor:'#21262d', timeVisible:true, secondsVisible:false},
+function _chartOpts(h, showTime) {
+    return {
+        width:  0,  // set via resize
+        height: h,
+        layout: {background:{type:'Solid',color:BG}, textColor:TEXT},
+        grid:   {vertLines:{color:GRID}, horzLines:{color:GRID}},
+        crosshair: {mode:LightweightCharts.CrosshairMode.Normal},
+        rightPriceScale: {borderColor:BORDER, scaleMargins:{top:0.05,bottom:0.05}},
+        timeScale: {borderColor:BORDER, timeVisible:true, secondsVisible:false,
+                    visible: showTime !== false},
+        handleScroll: true,
+        handleScale:  true,
+    };
+}
+
+// ── Init charts ───────────────────────────────────────────────────
+function initCharts() {
+    var mainEl = document.getElementById('chart-main');
+    var macdEl = document.getElementById('chart-macd');
+    var rsiEl  = document.getElementById('chart-rsi');
+
+    _cMain = LightweightCharts.createChart(mainEl, _chartOpts(mainEl.clientHeight, false));
+    _sCandle = _cMain.addSeries(LightweightCharts.CandlestickSeries, {
+        upColor:GRN, downColor:RED, borderUpColor:GRN, borderDownColor:RED,
+        wickUpColor:GRN, wickDownColor:RED,
     });
-    _series = _chart.addCandlestickSeries({
-        upColor:'#3fb950', downColor:'#f85149',
-        borderUpColor:'#3fb950', borderDownColor:'#f85149',
-        wickUpColor:'#3fb950', wickDownColor:'#f85149',
+    _sEma20 = _cMain.addSeries(LightweightCharts.LineSeries, {
+        color:BLUE, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
     });
-    _chart.subscribeCrosshairMove(function(p) {
+    _sEma50 = _cMain.addSeries(LightweightCharts.LineSeries, {
+        color:AMBER, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
+    });
+
+    _cMacd = LightweightCharts.createChart(macdEl, _chartOpts(130, false));
+    _sMacdHist = _cMacd.addSeries(LightweightCharts.HistogramSeries, {
+        color:GRN, priceLineVisible:false, lastValueVisible:false,
+    });
+    _sMacdLine = _cMacd.addSeries(LightweightCharts.LineSeries, {
+        color:BLUE, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
+    });
+    _sMacdSig  = _cMacd.addSeries(LightweightCharts.LineSeries, {
+        color:RED, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
+    });
+
+    _cRsi = LightweightCharts.createChart(rsiEl, _chartOpts(110, true));
+    _cRsi.applyOptions({rightPriceScale:{scaleMargins:{top:0.05,bottom:0.05}, autoScale:false,
+        mode:LightweightCharts.PriceScaleMode.Normal}});
+    _sRsi   = _cRsi.addSeries(LightweightCharts.LineSeries, {
+        color:'#e3b341', lineWidth:1, priceLineVisible:false, lastValueVisible:true,
+    });
+    _sRsiOb = _cRsi.addSeries(LightweightCharts.LineSeries, {
+        color:'rgba(248,81,73,0.35)', lineWidth:1, priceLineVisible:false, lastValueVisible:false, lineStyle:2,
+    });
+    _sRsiOs = _cRsi.addSeries(LightweightCharts.LineSeries, {
+        color:'rgba(63,185,80,0.35)', lineWidth:1, priceLineVisible:false, lastValueVisible:false, lineStyle:2,
+    });
+
+    syncTimeScales();
+
+    _cMain.subscribeCrosshairMove(function(p) {
         if (!p.time) return;
-        var b = p.seriesData && p.seriesData.get(_series);
+        var b = p.seriesData && p.seriesData.get(_sCandle);
         if (b) document.getElementById('s-ltp').textContent = b.close.toFixed(2);
     });
 }
 
-function resizeChart() {
-    var el = document.getElementById('chart');
-    if (_chart) _chart.resize(el.clientWidth, el.clientHeight);
+// ── Sync scrolling / scaling across all three charts ──────────────
+function syncTimeScales() {
+    [_cMain, _cMacd, _cRsi].forEach(function(src) {
+        src.timeScale().subscribeVisibleLogicalRangeChange(function(r) {
+            if (_syncing || !r) return;
+            _syncing = true;
+            [_cMain, _cMacd, _cRsi].forEach(function(dst) {
+                if (dst !== src) dst.timeScale().setVisibleLogicalRange(r);
+            });
+            _syncing = false;
+        });
+    });
 }
 
-// ── Spot poll ──────────────────────────────────────────────────────
+// ── Resize ────────────────────────────────────────────────────────
+function resizeAll() {
+    var mainEl = document.getElementById('chart-main');
+    var macdEl = document.getElementById('chart-macd');
+    var rsiEl  = document.getElementById('chart-rsi');
+    var w = mainEl.clientWidth;
+    if (_cMain) _cMain.resize(w, mainEl.clientHeight || 200);
+    if (_cMacd) _cMacd.resize(w, 130);
+    if (_cRsi)  _cRsi.resize(w, 110);
+}
+
+// ── Spot poll ────────────────────────────────────────────────────
 function pollSpot() {
     var ul = document.getElementById('sel-ul').value;
     fetch('/api/straddle/spot?underlying='+ul)
         .then(function(r){return r.json();})
         .then(function(d) {
             _spot = d.spot || 0;
-            if (_spot > 0) {
-                document.getElementById('spot-display').textContent = ul + ' ' + Math.round(_spot).toLocaleString('en-IN');
-            }
+            if (_spot > 0)
+                document.getElementById('spot-display').textContent = ul + '\\u00A0' + Math.round(_spot).toLocaleString('en-IN');
         }).catch(function(){});
 }
 
-// ── Controls ────────────────────────────────────────────────────────
+// ── Controls ─────────────────────────────────────────────────────
 function onUlChange() {
     var u = document.getElementById('sel-ul').value;
     var expSel = document.getElementById('sel-exp');
     expSel.innerHTML = '<option value="">Loading...</option>';
     document.getElementById('sel-ce').innerHTML = '<option value="">--</option>';
     document.getElementById('sel-pe').innerHTML = '<option value="">--</option>';
-    _allExpiries = {};
     _spot = 0;
     document.getElementById('spot-display').textContent = 'Spot: --';
-
     Promise.all([
         fetch('/api/straddle/expiries?underlying='+u).then(function(r){return r.json();}),
         fetch('/api/straddle/spot?underlying='+u).then(function(r){return r.json();})
-    ]).then(function(results) {
-        var dates = results[0];
-        var spotData = results[1];
-        _spot = spotData.spot || 0;
-        if (_spot > 0) document.getElementById('spot-display').textContent = u + ' ' + Math.round(_spot).toLocaleString('en-IN');
-
+    ]).then(function(res) {
+        var dates = res[0]; var spotD = res[1];
+        _spot = spotD.spot || 0;
+        if (_spot > 0)
+            document.getElementById('spot-display').textContent = u + '\\u00A0' + Math.round(_spot).toLocaleString('en-IN');
         expSel.innerHTML = '<option value="">-- Expiry --</option>';
-        dates.forEach(function(d) {
-            var o = document.createElement('option');
-            o.value = d; o.textContent = d;
-            expSel.appendChild(o);
+        dates.forEach(function(d){
+            var o=document.createElement('option'); o.value=d; o.textContent=d; expSel.appendChild(o);
         });
         if (dates.length > 0) { expSel.value = dates[0]; onExpChange(); }
     }).catch(function(){ expSel.innerHTML = '<option value="">Error</option>'; });
 }
 
 function onExpChange() {
-    var u  = document.getElementById('sel-ul').value;
-    var ex = document.getElementById('sel-exp').value;
+    var u = document.getElementById('sel-ul').value;
+    var ex= document.getElementById('sel-exp').value;
     if (!ex) return;
     fetch('/api/straddle/strikes?underlying='+u+'&expiry='+ex)
         .then(function(r){return r.json();})
         .then(function(strikes) {
-            _strikes = strikes;
-            populateStrikeDropdown('sel-ce', strikes, 'CE');
-            populateStrikeDropdown('sel-pe', strikes, 'PE');
+            populateStrikes('sel-ce', strikes, 'CE');
+            populateStrikes('sel-pe', strikes, 'PE');
         }).catch(function(){});
 }
 
-function populateStrikeDropdown(selId, strikes, side) {
+function populateStrikes(selId, strikes, side) {
     var sel = document.getElementById(selId);
     sel.innerHTML = '';
-    strikes.forEach(function(s) {
-        var o = document.createElement('option');
-        o.value = s; o.textContent = s.toLocaleString('en-IN');
-        sel.appendChild(o);
+    strikes.forEach(function(s){
+        var o=document.createElement('option'); o.value=s;
+        o.textContent=s.toLocaleString('en-IN'); sel.appendChild(o);
     });
-    // Auto-select: CE = first OTM above spot, PE = first OTM below spot
     if (_spot > 0 && strikes.length > 0) {
         if (side === 'CE') {
             var above = strikes.filter(function(s){return s > _spot;});
@@ -5399,8 +5474,44 @@ function setTf(tf) {
     });
 }
 
-// ── Load chart ─────────────────────────────────────────────────────
-function loadChart() {
+// ── Indicators (computed client-side from close prices) ───────────
+function calcEma(closes, period) {
+    var k = 2/(period+1), ema = closes[0], out = [];
+    for (var i = 0; i < closes.length; i++) {
+        ema = i === 0 ? closes[0] : closes[i]*k + ema*(1-k);
+        out.push(parseFloat(ema.toFixed(4)));
+    }
+    return out;
+}
+
+function calcMacd(closes, fast, slow, sig) {
+    var emaFast = calcEma(closes, fast);
+    var emaSlow = calcEma(closes, slow);
+    var macdLine = emaFast.map(function(v,i){return parseFloat((v - emaSlow[i]).toFixed(4));});
+    // Signal needs enough history
+    var sigLine = calcEma(macdLine, sig);
+    var hist = macdLine.map(function(v,i){return parseFloat((v - sigLine[i]).toFixed(4));});
+    return {macd: macdLine, signal: sigLine, hist: hist};
+}
+
+function calcRsi(closes, period) {
+    var out = [];
+    for (var i = 0; i < closes.length; i++) {
+        if (i < period) { out.push(null); continue; }
+        var gains = 0, losses = 0;
+        for (var j = i - period + 1; j <= i; j++) {
+            var d = closes[j] - closes[j-1];
+            if (d > 0) gains += d; else losses -= d;
+        }
+        var avgG = gains / period, avgL = losses / period;
+        var rsi = avgL === 0 ? 100 : 100 - (100 / (1 + avgG/avgL));
+        out.push(parseFloat(rsi.toFixed(2)));
+    }
+    return out;
+}
+
+// ── Load & render ────────────────────────────────────────────────
+function doLoad() {
     var u    = document.getElementById('sel-ul').value;
     var ex   = document.getElementById('sel-exp').value;
     var ceSt = document.getElementById('sel-ce').value;
@@ -5412,37 +5523,67 @@ function loadChart() {
     if (!ceSt) { errEl.textContent = 'Select CE strike'; return; }
     if (!peSt) { errEl.textContent = 'Select PE strike'; return; }
 
-    document.getElementById('overlay').textContent = 'Loading...';
-    document.getElementById('overlay').style.display = 'block';
-    _series.setData([]);
+    var ov = document.getElementById('overlay');
+    ov.textContent = 'Loading 30 days...';
+    ov.style.display = 'block';
 
     fetch('/api/straddle/chart?underlying='+u+'&expiry='+ex+'&ce_strike='+ceSt+'&pe_strike='+peSt+'&tf='+_tf)
         .then(function(r){return r.json();})
         .then(function(d) {
-            document.getElementById('overlay').style.display = 'none';
+            ov.style.display = 'none';
             if (d.error) { errEl.textContent = d.error; return; }
             var candles = d.candles || [];
-            if (candles.length === 0) { errEl.textContent = 'No candle data returned (market may be closed)'; return; }
-            _series.setData(candles);
-            _chart.timeScale().fitContent();
+            if (candles.length === 0) { errEl.textContent = 'No candle data (market may be closed)'; return; }
+
+            // Render candles
+            _sCandle.setData(candles);
+
+            // EMA overlays
+            var closes = candles.map(function(c){return c.close;});
+            var times  = candles.map(function(c){return c.time;});
+            var ema20  = calcEma(closes, 20);
+            var ema50  = calcEma(closes, 50);
+            _sEma20.setData(times.map(function(t,i){return {time:t, value:ema20[i]};}));
+            _sEma50.setData(times.map(function(t,i){return {time:t, value:ema50[i]};}));
+
+            // MACD
+            var macdData = calcMacd(closes, 12, 26, 9);
+            _sMacdHist.setData(times.map(function(t,i){
+                return {time:t, value:macdData.hist[i],
+                        color: macdData.hist[i] >= 0 ? GRN : RED};
+            }));
+            _sMacdLine.setData(times.map(function(t,i){return {time:t,value:macdData.macd[i]};}));
+            _sMacdSig.setData(times.map(function(t,i){return {time:t,value:macdData.signal[i]};}));
+
+            // RSI
+            var rsiData = calcRsi(closes, 14);
+            _sRsi.setData(times.map(function(t,i){
+                return rsiData[i] !== null ? {time:t, value:rsiData[i]} : null;
+            }).filter(Boolean));
+            var ob = times.map(function(t){return {time:t, value:70};});
+            var os = times.map(function(t){return {time:t, value:30};});
+            _sRsiOb.setData(ob);
+            _sRsiOs.setData(os);
+
+            _cMain.timeScale().fitContent();
+
+            // Stat bar
             updateStats(candles, d.ce_ltp, d.pe_ltp);
             document.getElementById('statbar').style.display = 'flex';
-            var now = new Date();
-            document.getElementById('ts').textContent = 'Updated ' + now.toLocaleTimeString('en-IN');
+            document.getElementById('lbl-strikes').textContent = 'CE '+ceSt+' / PE '+peSt;
+            document.getElementById('ts').textContent = 'Updated '+new Date().toLocaleTimeString('en-IN');
+
             scheduleRefresh(u, ex, ceSt, peSt);
         })
-        .catch(function(e) {
-            document.getElementById('overlay').textContent = 'Error: ' + e;
-        });
+        .catch(function(e){ ov.textContent = 'Error: '+e; });
 }
 
 function updateStats(candles, ceLtp, peLtp) {
-    // Use IST today: UTC+5:30
     var now = new Date();
-    var istMs = now.getTime() + (5*60 + 30)*60*1000;
+    var istMs = now.getTime() + (5*60+30)*60*1000;
     var todayIST = new Date(istMs).toISOString().slice(0,10);
     var today = candles.filter(function(c){
-        return new Date(c.time*1000 + (5*60+30)*60*1000).toISOString().slice(0,10) === todayIST;
+        return new Date(c.time*1000+(5*60+30)*60*1000).toISOString().slice(0,10) === todayIST;
     });
     if (today.length === 0) today = candles;
     var open  = today[0].open;
@@ -5466,10 +5607,19 @@ function scheduleRefresh(u, ex, ceSt, peSt) {
     if (_refreshTimer) clearTimeout(_refreshTimer);
     _refreshTimer = setTimeout(function() {
         var h = new Date().getUTCHours()*60 + new Date().getUTCMinutes() + 330;
-        if (h%1440 >= 555 && h%1440 <= 930) loadChart();
+        if (h%1440 >= 555 && h%1440 <= 930) doLoad();
         else scheduleRefresh(u, ex, ceSt, peSt);
     }, 60000);
 }
+
+// ── Bootstrap ────────────────────────────────────────────────────
+window.onload = function() {
+    initCharts();
+    resizeAll();
+    onUlChange();
+    window.addEventListener('resize', resizeAll);
+    setInterval(pollSpot, 5000);
+};
 </script>
 </body>
 </html>'''
