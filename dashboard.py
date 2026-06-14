@@ -5306,17 +5306,15 @@ var _cRsi=null, _sRsi=null, _sRsiOb=null, _sRsiOs=null;
 var BG='#0d1117', GRID='#161b22', BORDER='#21262d', TEXT='#8b949e';
 var GRN='#3fb950', RED='#f85149', BLUE='#3db8f5', AMBER='#f0883e';
 
-function _base(showTimeLabels) {
+function _base(showTime) {
     return {
         width:0, height:0,
         layout:{background:{type:'Solid',color:BG}, textColor:TEXT},
         grid:{vertLines:{color:GRID}, horzLines:{color:GRID}},
         crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
         rightPriceScale:{borderColor:BORDER, scaleMargins:{top:0.08,bottom:0.08}},
-        // All panels show time axis so crosshair date shows wherever you hover.
-        // Upper panels suppress tick labels to avoid repetition; only RSI shows them.
         timeScale:{borderColor:BORDER, timeVisible:true, secondsVisible:false,
-                   visible:true, tickMarkMaxCharacterLength: showTimeLabels ? 8 : 0},
+                   visible:showTime},
         handleScroll:true, handleScale:true,
     };
 }
@@ -5327,7 +5325,6 @@ function initCharts() {
     var macdEl=document.getElementById('chart-macd');
     var rsiEl =document.getElementById('chart-rsi');
 
-    // Main: no time axis — RSI at bottom owns it
     _cMain = LightweightCharts.createChart(mainEl, _base(false));
     _sCandle = _cMain.addSeries(LightweightCharts.CandlestickSeries, {
         upColor:GRN, downColor:RED, borderUpColor:GRN, borderDownColor:RED,
@@ -5340,7 +5337,6 @@ function initCharts() {
         {color:AMBER, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
          crosshairMarkerVisible:false});
 
-    // MACD orange behind, Signal blue in front (added last = rendered on top)
     _cMacd = LightweightCharts.createChart(macdEl, _base(false));
     _sMacdBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
         {color:'#ff6d00', priceLineVisible:false, lastValueVisible:false,
@@ -5349,7 +5345,7 @@ function initCharts() {
         {color:'#2962ff', priceLineVisible:false, lastValueVisible:false,
          crosshairMarkerVisible:false});
 
-    // RSI: shows time axis at bottom — blue, thin, no dots
+    // RSI owns the time axis at the bottom
     _cRsi = LightweightCharts.createChart(rsiEl, _base(true));
     _sRsi   = _cRsi.addSeries(LightweightCharts.LineSeries,
         {color:'#2962ff', lineWidth:1, priceLineVisible:false, lastValueVisible:true,
@@ -5364,11 +5360,41 @@ function initCharts() {
          crosshairMarkerVisible:false});
 
     syncRange();
+    syncCrosshairs();
+}
 
-    _cMain.subscribeCrosshairMove(function(p) {
-        if (!p.time) return;
-        var b = p.seriesData && p.seriesData.get(_sCandle);
-        if (b) document.getElementById('s-ltp').textContent = b.close.toFixed(2);
+// ── Bidirectional crosshair sync across all 3 panels ─────────────
+// Vertical line moves simultaneously in all panes; date shows on RSI.
+var _xhSyncing = false;
+function syncCrosshairs() {
+    var panels = [
+        {c:_cMain, s:_sCandle,   price:function(d){return d?d.close:null;}},
+        {c:_cMacd, s:_sMacdBars, price:function(d){return d?d.value:null;}},
+        {c:_cRsi,  s:_sRsi,      price:function(d){return d?d.value:50;}},
+    ];
+    panels.forEach(function(src, si) {
+        src.c.subscribeCrosshairMove(function(p) {
+            if (_xhSyncing) return;
+            // Update stat bar from main chart candle
+            if (si===0 && p.time) {
+                var b = p.seriesData && p.seriesData.get(_sCandle);
+                if (b) document.getElementById('s-ltp').textContent = b.close.toFixed(2);
+            }
+            _xhSyncing = true;
+            panels.forEach(function(dst, di) {
+                if (di === si) return;
+                if (!p.time || p.logical == null) {
+                    try { dst.c.clearCrosshairPosition(); } catch(e) {}
+                } else {
+                    try {
+                        var bar = dst.s.dataByIndex(p.logical);
+                        var pv  = dst.price(bar);
+                        if (pv != null) dst.c.setCrosshairPosition(pv, p.time, dst.s);
+                    } catch(e) {}
+                }
+            });
+            _xhSyncing = false;
+        });
     });
 }
 
