@@ -4995,6 +4995,48 @@ def straddle_page():
     return _build_straddle_page()
 
 
+@app.route("/api/straddle/spot")
+def api_straddle_spot():
+    """Return current spot price for the given underlying."""
+    underlying = request.args.get("underlying", "NIFTY").upper()
+    if underlying in ("SENSEX", "BANKEX"):
+        return jsonify({"spot": _bse_last_spot, "underlying": underlying})
+    # NIFTY: find most recent option chain cache entry for this underlying
+    try:
+        spot = 0
+        for key, val in _oc_data_cache.items():
+            if isinstance(key, tuple) and key[0] == underlying:
+                cached_spot = val[1].get("spot", 0) if isinstance(val, tuple) else val.get("spot", 0)
+                if cached_spot > 0:
+                    spot = cached_spot
+                    break
+        return jsonify({"spot": spot, "underlying": underlying})
+    except Exception:
+        return jsonify({"spot": 0})
+
+
+@app.route("/api/straddle/strikes")
+def api_straddle_strikes():
+    """Return sorted list of available strikes for a given underlying + expiry."""
+    underlying = request.args.get("underlying", "NIFTY").upper()
+    expiry     = request.args.get("expiry", "")
+    exchange   = "BSE" if underlying in ("SENSEX", "BANKEX") else "NSE"
+    if not _instrument_cache or not expiry:
+        return jsonify([])
+    strikes = set()
+    for inst in _instrument_cache._instruments:
+        if inst.instrument_type != "OPTIDX":
+            continue
+        if not inst.trading_symbol.upper().startswith(underlying + "-"):
+            continue
+        if not inst.expiry_date or inst.expiry_date[:10] != expiry:
+            continue
+        if getattr(inst, "exchange", "NSE") != exchange:
+            continue
+        strikes.add(inst.strike_price)
+    return jsonify(sorted(strikes))
+
+
 @app.route("/api/straddle/expiries")
 def api_straddle_expiries():
     """Return sorted list of expiry dates for a given underlying."""
@@ -5120,7 +5162,11 @@ def api_straddle_chart():
             i += tf
         merged = resampled
 
-    return jsonify({"candles": merged, "ce_id": ce_id, "pe_id": pe_id})
+    # Last close of each leg for the stat bar
+    last_ce_ltp = ce_bars[common_ts[-1]]["c"] if common_ts else 0
+    last_pe_ltp = pe_bars[common_ts[-1]]["c"] if common_ts else 0
+    return jsonify({"candles": merged, "ce_id": ce_id, "pe_id": pe_id,
+                    "ce_ltp": last_ce_ltp, "pe_ltp": last_pe_ltp})
 
 
 def _build_straddle_page():
@@ -5129,249 +5175,277 @@ def _build_straddle_page():
 <head>
 <meta charset="utf-8">
 <title>Strangle Chart</title>
-<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;height:100vh;display:flex;flex-direction:column;}
-.header{background:#161b22;border-bottom:1px solid #21262d;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;}
-.header h1{font-size:14px;font-weight:700;color:#e6edf3;white-space:nowrap;}
-.header a{font-size:12px;color:#8b949e;text-decoration:none;padding:3px 8px;border:1px solid #30363d;border-radius:5px;white-space:nowrap;}
-select,input[type=number],input[type=text]{background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:5px;font-size:12px;outline:none;}
-select:focus,input:focus{border-color:#58a6ff;}
-.btn{padding:5px 14px;border-radius:5px;border:none;cursor:pointer;font-size:12px;font-weight:600;}
-.btn-primary{background:#238636;color:#fff;}
-.btn-primary:hover{background:#2ea043;}
-.btn-neutral{background:#21262d;color:#e6edf3;border:1px solid #30363d;}
-.btn-neutral:hover{background:#30363d;}
-.tf-btn{padding:4px 10px;border-radius:4px;border:1px solid #30363d;background:none;color:#8b949e;cursor:pointer;font-size:12px;font-weight:600;}
+body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+.topbar{background:#161b22;border-bottom:1px solid #21262d;padding:8px 16px;display:flex;align-items:center;gap:14px;flex-shrink:0;flex-wrap:wrap;}
+.topbar h1{font-size:13px;font-weight:700;white-space:nowrap;}
+.topbar a{font-size:11px;color:#8b949e;text-decoration:none;padding:3px 8px;border:1px solid #30363d;border-radius:5px;}
+.spot-pill{background:#0d1117;border:1px solid #30363d;border-radius:16px;padding:3px 12px;font-size:12px;font-weight:700;}
+select{background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:4px 8px;border-radius:5px;font-size:12px;outline:none;cursor:pointer;}
+select:focus{border-color:#58a6ff;}
+.lbl{font-size:11px;color:#8b949e;}
+.tf-btn{padding:3px 9px;border-radius:4px;border:1px solid #30363d;background:none;color:#8b949e;cursor:pointer;font-size:11px;font-weight:600;}
 .tf-btn.active{background:#1f6feb;border-color:#1f6feb;color:#fff;}
-.controls{background:#161b22;border-bottom:1px solid #21262d;padding:8px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0;}
-.stat-bar{background:#0d1117;border-bottom:1px solid #21262d;padding:6px 20px;display:flex;gap:24px;align-items:center;font-size:12px;flex-shrink:0;}
-.stat-item{display:flex;gap:6px;align-items:baseline;}
-.stat-label{color:#8b949e;font-size:11px;}
-.stat-val{font-weight:700;}
-.positive{color:#3fb950;}.negative{color:#f85149;}.neutral{color:#e6edf3;}
-#chart-container{flex:1;position:relative;min-height:0;}
+.btn-go{padding:4px 14px;border-radius:5px;border:none;background:#238636;color:#fff;cursor:pointer;font-size:12px;font-weight:700;}
+.btn-go:hover{background:#2ea043;}
+.statbar{background:#0d1117;border-bottom:1px solid #21262d;padding:5px 16px;display:none;gap:20px;align-items:center;font-size:11px;flex-shrink:0;}
+.si{display:flex;gap:5px;align-items:baseline;}
+.sl{color:#8b949e;}
+.sv{font-weight:700;}
+.pos{color:#3fb950;}.neg{color:#f85149;}.neu{color:#e6edf3;}
+#chart-wrap{flex:1;position:relative;min-height:0;}
 #chart{width:100%;height:100%;}
-#status-msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#8b949e;font-size:13px;pointer-events:none;}
+.overlay{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#8b949e;font-size:13px;pointer-events:none;text-align:center;}
+#err{color:#f85149;font-size:11px;}
 </style>
 </head>
 <body>
-<div class="header">
-  <h1>&#x1F4C8; Strangle Chart</h1>
-  <a href="/">&#x2190; Dashboard</a>
-  <div style="margin-left:auto;font-size:11px;color:#484f58;" id="last-updated"></div>
-</div>
 
-<div class="controls">
-  <select id="ctrl-underlying" onchange="onUnderlyingChange()">
+<div class="topbar">
+  <h1>&#x1F4C8; Strangle</h1>
+  <a href="/">&#x2190; Dashboard</a>
+
+  <span class="lbl">Index</span>
+  <select id="sel-ul" onchange="onUlChange()">
     <option value="NIFTY">NIFTY</option>
     <option value="SENSEX">SENSEX</option>
   </select>
-  <select id="ctrl-expiry"><option value="">-- Expiry --</option></select>
-  <label style="font-size:11px;color:#8b949e;">CE Strike</label>
-  <input id="ctrl-ce-strike" type="number" placeholder="e.g. 24100" step="50" style="width:100px;">
-  <label style="font-size:11px;color:#8b949e;">PE Strike</label>
-  <input id="ctrl-pe-strike" type="number" placeholder="e.g. 23900" step="50" style="width:100px;">
-  <div style="display:flex;gap:4px;">
+
+  <span class="spot-pill" id="spot-display">Spot: --</span>
+
+  <span class="lbl">Expiry</span>
+  <select id="sel-exp" onchange="onExpChange()">
+    <option value="">-- --</option>
+  </select>
+
+  <span class="lbl">CE Strike</span>
+  <select id="sel-ce"><option value="">--</option></select>
+
+  <span class="lbl">PE Strike</span>
+  <select id="sel-pe"><option value="">--</option></select>
+
+  <div style="display:flex;gap:3px;">
     <button class="tf-btn active" data-tf="1" onclick="setTf(1)">1m</button>
     <button class="tf-btn" data-tf="3" onclick="setTf(3)">3m</button>
     <button class="tf-btn" data-tf="5" onclick="setTf(5)">5m</button>
   </div>
-  <button class="btn btn-primary" onclick="loadChart()">Load</button>
-  <button class="btn btn-neutral" onclick="autoRefresh()">&#x21bb; Refresh</button>
-  <span id="ctrl-error" style="color:#f85149;font-size:11px;"></span>
+
+  <button class="btn-go" onclick="loadChart()">&#x25B6; Load</button>
+  <span id="err"></span>
+  <span style="margin-left:auto;font-size:10px;color:#484f58;" id="ts"></span>
 </div>
 
-<div class="stat-bar" id="stat-bar" style="display:none;">
-  <div class="stat-item"><span class="stat-label">Straddle LTP</span><span class="stat-val neutral" id="s-ltp">-</span></div>
-  <div class="stat-item"><span class="stat-label">Day Open</span><span class="stat-val neutral" id="s-open">-</span></div>
-  <div class="stat-item"><span class="stat-label">Day High</span><span class="stat-val positive" id="s-high">-</span></div>
-  <div class="stat-item"><span class="stat-label">Day Low</span><span class="stat-val negative" id="s-low">-</span></div>
-  <div class="stat-item"><span class="stat-label">Change</span><span class="stat-val" id="s-chg">-</span></div>
-  <div class="stat-item"><span class="stat-label">CE</span><span class="stat-val neutral" id="s-ce">-</span></div>
-  <div class="stat-item"><span class="stat-label">PE</span><span class="stat-val neutral" id="s-pe">-</span></div>
+<div class="statbar" id="statbar">
+  <div class="si"><span class="sl">Combined LTP</span><span class="sv neu" id="s-ltp">-</span></div>
+  <div class="si"><span class="sl">Day Open</span><span class="sv neu" id="s-open">-</span></div>
+  <div class="si"><span class="sl">High</span><span class="sv pos" id="s-high">-</span></div>
+  <div class="si"><span class="sl">Low</span><span class="sv neg" id="s-low">-</span></div>
+  <div class="si"><span class="sl">Chg</span><span class="sv" id="s-chg">-</span></div>
+  <div class="si"><span class="sl">CE</span><span class="sv neu" id="s-ce-val">-</span></div>
+  <div class="si"><span class="sl">PE</span><span class="sv neu" id="s-pe-val">-</span></div>
 </div>
 
-<div id="chart-container">
+<div id="chart-wrap">
   <div id="chart"></div>
-  <div id="status-msg">Select underlying, expiry and strike then click Load</div>
+  <div class="overlay" id="overlay">Select index, expiry and strikes then click Load</div>
 </div>
 
 <script>
-var _chart = null;
-var _series = null;
-var _tf = 1;
-var _candles = [];
-var _ceId = null;
-var _peId = null;
-var _refreshTimer = null;
+var _chart = null, _series = null, _tf = 1, _refreshTimer = null;
+var _spot = 0, _strikes = [], _allExpiries = {};
 
-// ── Init chart ──────────────────────────────────────────────────────
 window.onload = function() {
     initChart();
-    onUnderlyingChange();
-    window.addEventListener('resize', function() {
-        if (_chart) _chart.applyOptions({width: document.getElementById('chart').clientWidth});
-    });
+    onUlChange();
+    window.addEventListener('resize', resizeChart);
+    setInterval(pollSpot, 5000);
 };
 
+// ── Chart init ──────────────────────────────────────────────────────
 function initChart() {
-    var container = document.getElementById('chart');
-    _chart = LightweightCharts.createChart(container, {
-        width:  container.clientWidth,
-        height: container.clientHeight,
-        layout: {
-            background: {color: '#0d1117'},
-            textColor:  '#8b949e',
-        },
-        grid: {
-            vertLines: {color: '#161b22'},
-            horzLines: {color: '#161b22'},
-        },
+    var el = document.getElementById('chart');
+    _chart = LightweightCharts.createChart(el, {
+        width:  el.clientWidth,
+        height: el.clientHeight,
+        layout: {backgroundColor:'#0d1117', textColor:'#8b949e'},
+        grid:   {vertLines:{color:'#161b22'}, horzLines:{color:'#161b22'}},
         crosshair: {mode: LightweightCharts.CrosshairMode.Normal},
-        rightPriceScale: {borderColor: '#21262d'},
-        timeScale: {borderColor: '#21262d', timeVisible: true, secondsVisible: false},
+        rightPriceScale: {borderColor:'#21262d'},
+        timeScale: {borderColor:'#21262d', timeVisible:true, secondsVisible:false},
     });
-
-    _series = _chart.addSeries(LightweightCharts.CandlestickSeries, {
-        upColor:          '#3fb950',
-        downColor:        '#f85149',
-        borderUpColor:    '#3fb950',
-        borderDownColor:  '#f85149',
-        wickUpColor:      '#3fb950',
-        wickDownColor:    '#f85149',
+    _series = _chart.addCandlestickSeries({
+        upColor:'#3fb950', downColor:'#f85149',
+        borderUpColor:'#3fb950', borderDownColor:'#f85149',
+        wickUpColor:'#3fb950', wickDownColor:'#f85149',
     });
-
-    // Crosshair tooltip
-    _chart.subscribeCrosshairMove(function(param) {
-        if (!param.time || !param.seriesData) return;
-        var bar = param.seriesData.get(_series);
-        if (!bar) return;
-        document.getElementById('s-ltp').textContent = bar.close.toFixed(2);
+    _chart.subscribeCrosshairMove(function(p) {
+        if (!p.time) return;
+        var b = p.seriesData && p.seriesData.get(_series);
+        if (b) document.getElementById('s-ltp').textContent = b.close.toFixed(2);
     });
 }
 
-// ── Controls ────────────────────────────────────────────────────────
-function onUnderlyingChange() {
-    var u = document.getElementById('ctrl-underlying').value;
-    var expSel = document.getElementById('ctrl-expiry');
-    expSel.innerHTML = '<option value="">Loading...</option>';
-    fetch('/api/straddle/expiries?underlying='+u)
+function resizeChart() {
+    var el = document.getElementById('chart');
+    if (_chart) _chart.resize(el.clientWidth, el.clientHeight);
+}
+
+// ── Spot poll ──────────────────────────────────────────────────────
+function pollSpot() {
+    var ul = document.getElementById('sel-ul').value;
+    fetch('/api/straddle/spot?underlying='+ul)
         .then(function(r){return r.json();})
-        .then(function(dates) {
-            expSel.innerHTML = '<option value="">-- Expiry --</option>';
-            dates.forEach(function(d) {
-                var opt = document.createElement('option');
-                opt.value = d;
-                opt.textContent = d;
-                expSel.appendChild(opt);
-            });
-            // Default to nearest expiry
-            if (dates.length > 0) expSel.value = dates[0];
-        })
-        .catch(function(){ expSel.innerHTML = '<option value="">Error</option>'; });
+        .then(function(d) {
+            _spot = d.spot || 0;
+            if (_spot > 0) {
+                document.getElementById('spot-display').textContent = ul + ' ' + Math.round(_spot).toLocaleString('en-IN');
+            }
+        }).catch(function(){});
+}
+
+// ── Controls ────────────────────────────────────────────────────────
+function onUlChange() {
+    var u = document.getElementById('sel-ul').value;
+    var expSel = document.getElementById('sel-exp');
+    expSel.innerHTML = '<option value="">Loading...</option>';
+    document.getElementById('sel-ce').innerHTML = '<option value="">--</option>';
+    document.getElementById('sel-pe').innerHTML = '<option value="">--</option>';
+    _allExpiries = {};
+    _spot = 0;
+    document.getElementById('spot-display').textContent = 'Spot: --';
+
+    Promise.all([
+        fetch('/api/straddle/expiries?underlying='+u).then(function(r){return r.json();}),
+        fetch('/api/straddle/spot?underlying='+u).then(function(r){return r.json();})
+    ]).then(function(results) {
+        var dates = results[0];
+        var spotData = results[1];
+        _spot = spotData.spot || 0;
+        if (_spot > 0) document.getElementById('spot-display').textContent = u + ' ' + Math.round(_spot).toLocaleString('en-IN');
+
+        expSel.innerHTML = '<option value="">-- Expiry --</option>';
+        dates.forEach(function(d) {
+            var o = document.createElement('option');
+            o.value = d; o.textContent = d;
+            expSel.appendChild(o);
+        });
+        if (dates.length > 0) { expSel.value = dates[0]; onExpChange(); }
+    }).catch(function(){ expSel.innerHTML = '<option value="">Error</option>'; });
+}
+
+function onExpChange() {
+    var u  = document.getElementById('sel-ul').value;
+    var ex = document.getElementById('sel-exp').value;
+    if (!ex) return;
+    fetch('/api/straddle/strikes?underlying='+u+'&expiry='+ex)
+        .then(function(r){return r.json();})
+        .then(function(strikes) {
+            _strikes = strikes;
+            populateStrikeDropdown('sel-ce', strikes, 'CE');
+            populateStrikeDropdown('sel-pe', strikes, 'PE');
+        }).catch(function(){});
+}
+
+function populateStrikeDropdown(selId, strikes, side) {
+    var sel = document.getElementById(selId);
+    sel.innerHTML = '';
+    strikes.forEach(function(s) {
+        var o = document.createElement('option');
+        o.value = s; o.textContent = s.toLocaleString('en-IN');
+        sel.appendChild(o);
+    });
+    // Auto-select: CE = first OTM above spot, PE = first OTM below spot
+    if (_spot > 0 && strikes.length > 0) {
+        if (side === 'CE') {
+            var above = strikes.filter(function(s){return s > _spot;});
+            sel.value = above.length > 0 ? above[0] : strikes[strikes.length-1];
+        } else {
+            var below = strikes.filter(function(s){return s < _spot;});
+            sel.value = below.length > 0 ? below[below.length-1] : strikes[0];
+        }
+    }
 }
 
 function setTf(tf) {
     _tf = tf;
-    document.querySelectorAll('.tf-btn').forEach(function(b) {
+    document.querySelectorAll('.tf-btn').forEach(function(b){
         b.classList.toggle('active', parseInt(b.dataset.tf) === tf);
     });
-    if (_candles.length > 0) applyTf();
 }
 
-// ── Load ─────────────────────────────────────────────────────────────
+// ── Load chart ─────────────────────────────────────────────────────
 function loadChart() {
-    var u   = document.getElementById('ctrl-underlying').value;
-    var ex  = document.getElementById('ctrl-expiry').value;
-    var ceSt = document.getElementById('ctrl-ce-strike').value;
-    var peSt = document.getElementById('ctrl-pe-strike').value;
-    var errEl = document.getElementById('ctrl-error');
+    var u    = document.getElementById('sel-ul').value;
+    var ex   = document.getElementById('sel-exp').value;
+    var ceSt = document.getElementById('sel-ce').value;
+    var peSt = document.getElementById('sel-pe').value;
+    var errEl = document.getElementById('err');
     errEl.textContent = '';
 
-    if (!ex)   { errEl.textContent = 'Select an expiry'; return; }
-    if (!ceSt) { errEl.textContent = 'Enter CE strike';  return; }
-    if (!peSt) { errEl.textContent = 'Enter PE strike';  return; }
+    if (!ex)   { errEl.textContent = 'Select expiry'; return; }
+    if (!ceSt) { errEl.textContent = 'Select CE strike'; return; }
+    if (!peSt) { errEl.textContent = 'Select PE strike'; return; }
 
-    document.getElementById('status-msg').textContent = 'Loading...';
-    if (_series) _series.setData([]);
+    document.getElementById('overlay').textContent = 'Loading...';
+    document.getElementById('overlay').style.display = 'block';
+    _series.setData([]);
 
     fetch('/api/straddle/chart?underlying='+u+'&expiry='+ex+'&ce_strike='+ceSt+'&pe_strike='+peSt+'&tf='+_tf)
         .then(function(r){return r.json();})
         .then(function(d) {
-            if (d.error) { errEl.textContent = d.error; document.getElementById('status-msg').textContent = d.error; return; }
-            _candles = d.candles || [];
-            _ceId = d.ce_id;
-            _peId = d.pe_id;
-            document.getElementById('status-msg').textContent = '';
-            renderCandles(_candles);
-            updateStats(_candles);
-            document.getElementById('stat-bar').style.display = '';
+            document.getElementById('overlay').style.display = 'none';
+            if (d.error) { errEl.textContent = d.error; return; }
+            var candles = d.candles || [];
+            if (candles.length === 0) { errEl.textContent = 'No candle data returned (market may be closed)'; return; }
+            _series.setData(candles);
+            _chart.timeScale().fitContent();
+            updateStats(candles, d.ce_ltp, d.pe_ltp);
+            document.getElementById('statbar').style.display = 'flex';
             var now = new Date();
-            document.getElementById('last-updated').textContent =
-                'Updated ' + now.getHours() + ':' + String(now.getMinutes()).padStart(2,'0') + ':' + String(now.getSeconds()).padStart(2,'0');
-            scheduleRefresh();
+            document.getElementById('ts').textContent = 'Updated ' + now.toLocaleTimeString('en-IN');
+            scheduleRefresh(u, ex, ceSt, peSt);
         })
         .catch(function(e) {
-            errEl.textContent = 'Fetch error: ' + e;
-            document.getElementById('status-msg').textContent = 'Error loading data';
+            document.getElementById('overlay').textContent = 'Error: ' + e;
         });
 }
 
-function applyTf() {
-    // Re-resample raw 1m candles client-side for tf switching without refetch
-    // (server already returns correct tf; re-fetch when tf changes)
-    loadChart();
-}
-
-function renderCandles(candles) {
-    if (!_series || candles.length === 0) return;
-    _series.setData(candles);
-    _chart.timeScale().fitContent();
-}
-
-function updateStats(candles) {
-    if (!candles || candles.length === 0) return;
-    var todayStr = new Date().toISOString().slice(0,10);
-    // find first bar of today
-    var todayBars = candles.filter(function(c) {
-        return new Date(c.time * 1000).toISOString().slice(0,10) === todayStr;
+function updateStats(candles, ceLtp, peLtp) {
+    // Use IST today: UTC+5:30
+    var now = new Date();
+    var istMs = now.getTime() + (5*60 + 30)*60*1000;
+    var todayIST = new Date(istMs).toISOString().slice(0,10);
+    var today = candles.filter(function(c){
+        return new Date(c.time*1000 + (5*60+30)*60*1000).toISOString().slice(0,10) === todayIST;
     });
-    if (todayBars.length === 0) todayBars = candles;
-    var dayOpen  = todayBars[0].open;
-    var dayHigh  = Math.max.apply(null, todayBars.map(function(c){return c.high;}));
-    var dayLow   = Math.min.apply(null, todayBars.map(function(c){return c.low;}));
-    var lastClose= todayBars[todayBars.length-1].close;
-    var chg      = lastClose - dayOpen;
-    var chgPct   = dayOpen > 0 ? (chg/dayOpen*100) : 0;
-
-    document.getElementById('s-ltp').textContent  = lastClose.toFixed(2);
-    document.getElementById('s-open').textContent = dayOpen.toFixed(2);
-    document.getElementById('s-high').textContent = dayHigh.toFixed(2);
-    document.getElementById('s-low').textContent  = dayLow.toFixed(2);
+    if (today.length === 0) today = candles;
+    var open  = today[0].open;
+    var high  = Math.max.apply(null, today.map(function(c){return c.high;}));
+    var low   = Math.min.apply(null, today.map(function(c){return c.low;}));
+    var close = today[today.length-1].close;
+    var chg   = close - open;
+    var pct   = open > 0 ? chg/open*100 : 0;
+    document.getElementById('s-ltp').textContent  = close.toFixed(2);
+    document.getElementById('s-open').textContent = open.toFixed(2);
+    document.getElementById('s-high').textContent = high.toFixed(2);
+    document.getElementById('s-low').textContent  = low.toFixed(2);
     var chgEl = document.getElementById('s-chg');
-    chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + ' (' + chgPct.toFixed(1) + '%)';
-    chgEl.className = 'stat-val ' + (chg >= 0 ? 'positive' : 'negative');
+    chgEl.textContent = (chg>=0?'+':'')+chg.toFixed(2)+' ('+pct.toFixed(1)+'%)';
+    chgEl.className = 'sv '+(chg>=0?'pos':'neg');
+    if (ceLtp) document.getElementById('s-ce-val').textContent = ceLtp.toFixed(2);
+    if (peLtp) document.getElementById('s-pe-val').textContent = peLtp.toFixed(2);
 }
 
-// ── Auto-refresh every 60s during market hours ─────────────────────
-function scheduleRefresh() {
+function scheduleRefresh(u, ex, ceSt, peSt) {
     if (_refreshTimer) clearTimeout(_refreshTimer);
     _refreshTimer = setTimeout(function() {
-        var now = new Date();
-        var h = now.getUTCHours() + 5, m = now.getUTCMinutes() + 30;
-        if (m >= 60) { h++; m -= 60; }
-        var mins = h * 60 + m;
-        if (mins >= 555 && mins <= 930) {  // 9:15–15:30 IST
-            loadChart();
-        } else {
-            scheduleRefresh();  // keep the timer alive, check again in 60s
-        }
+        var h = new Date().getUTCHours()*60 + new Date().getUTCMinutes() + 330;
+        if (h%1440 >= 555 && h%1440 <= 930) loadChart();
+        else scheduleRefresh(u, ex, ceSt, peSt);
     }, 60000);
 }
-
-function autoRefresh() { loadChart(); }
 </script>
 </body>
 </html>'''
