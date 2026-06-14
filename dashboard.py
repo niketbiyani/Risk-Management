@@ -5223,19 +5223,20 @@ select:focus{border-color:#58a6ff;}
 .tf-btn.active{background:#1f6feb;border-color:#1f6feb;color:#fff;}
 .btn-go{padding:4px 14px;border-radius:5px;border:none;background:#238636;color:#fff;cursor:pointer;font-size:12px;font-weight:700;}
 .btn-go:hover{background:#2ea043;}
+.btn-fs{padding:3px 8px;border-radius:4px;border:1px solid #30363d;background:none;color:#8b949e;cursor:pointer;font-size:14px;line-height:1;}
+.btn-fs:hover{color:#e6edf3;}
 .statbar{background:#0d1117;border-bottom:1px solid #21262d;padding:4px 14px;display:none;gap:18px;align-items:center;font-size:11px;flex-shrink:0;}
 .si{display:flex;gap:4px;align-items:baseline;}
 .sl{color:#8b949e;}
 .sv{font-weight:700;}
 .pos{color:#3fb950;}.neg{color:#f85149;}.neu{color:#e6edf3;}
 #err{color:#f85149;font-size:11px;}
-/* Three-panel chart area */
-#panels{flex:1;display:flex;flex-direction:column;min-height:0;position:relative;}
-.panel{flex-shrink:0;position:relative;}
-.panel-label{position:absolute;top:4px;left:8px;font-size:10px;color:#484f58;pointer-events:none;z-index:2;}
+#panels{flex:1;display:flex;flex-direction:column;min-height:0;}
+.panel{position:relative;overflow:hidden;}
 #panel-main{flex:1;min-height:0;}
-#panel-macd{height:130px;border-top:1px solid #21262d;}
-#panel-rsi{height:110px;border-top:1px solid #21262d;}
+#panel-macd{height:120px;border-top:1px solid #21262d;}
+#panel-rsi {height:100px;border-top:1px solid #21262d;}
+.panel-label{position:absolute;top:4px;left:8px;font-size:10px;color:#6e7681;pointer-events:none;z-index:2;white-space:nowrap;}
 .overlay-msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#8b949e;font-size:13px;pointer-events:none;text-align:center;z-index:5;}
 </style>
 </head>
@@ -5252,9 +5253,9 @@ select:focus{border-color:#58a6ff;}
   <span class="spot-pill" id="spot-display">Spot: --</span>
   <span class="lbl">Expiry</span>
   <select id="sel-exp" onchange="onExpChange()"><option value="">-- --</option></select>
-  <span class="lbl">CE Strike</span>
+  <span class="lbl">CE</span>
   <select id="sel-ce"><option value="">--</option></select>
-  <span class="lbl">PE Strike</span>
+  <span class="lbl">PE</span>
   <select id="sel-pe"><option value="">--</option></select>
   <div style="display:flex;gap:3px;">
     <button class="tf-btn active" data-tf="1" onclick="setTf(1)">1m</button>
@@ -5263,6 +5264,7 @@ select:focus{border-color:#58a6ff;}
   </div>
   <button class="btn-go" onclick="doLoad()">&#x25B6; Load</button>
   <span id="err"></span>
+  <button class="btn-fs" onclick="toggleFullscreen()" title="Fullscreen">&#x26F6;</button>
   <span style="margin-left:auto;font-size:10px;color:#484f58;" id="ts"></span>
 </div>
 
@@ -5278,12 +5280,12 @@ select:focus{border-color:#58a6ff;}
 
 <div id="panels">
   <div class="panel" id="panel-main">
-    <div class="panel-label">STRANGLE PREMIUM &nbsp;&#x2013;&nbsp; <span id="lbl-strikes"></span> &nbsp;&#x2013;&nbsp; <span style="color:#3db8f5;">EMA20</span> &nbsp;<span style="color:#f0883e;">EMA50</span></div>
+    <div class="panel-label">STRANGLE &nbsp;&#x2013;&nbsp; <span id="lbl-strikes"></span> &nbsp;&#x2013;&nbsp; <span style="color:#3db8f5;">EMA20</span> &nbsp;<span style="color:#f0883e;">EMA50</span></div>
     <div id="chart-main" style="width:100%;height:100%;"></div>
-    <div class="overlay-msg" id="overlay">Select index, expiry and strikes then click Load</div>
+    <div class="overlay-msg" id="overlay">Select index, expiry &amp; strikes then click Load</div>
   </div>
   <div class="panel" id="panel-macd">
-    <div class="panel-label">MACD (12,26,9)</div>
+    <div class="panel-label">MACD (12,26,9) &nbsp;&#x2013;&nbsp; <span style="color:#2962ff;">MACD</span> &nbsp;<span style="color:#ff6d00;">Signal</span></div>
     <div id="chart-macd" style="width:100%;height:100%;"></div>
   </div>
   <div class="panel" id="panel-rsi">
@@ -5293,80 +5295,70 @@ select:focus{border-color:#58a6ff;}
 </div>
 
 <script>
-// ── State ──────────────────────────────────────────────────────────
-var _tf = 1, _spot = 0, _refreshTimer = null, _syncing = false;
-var _cMain = null, _sCandle = null, _sEma20 = null, _sEma50 = null;
-var _cMacd = null, _sMacdHist = null, _sMacdLine = null, _sMacdSig = null;
-var _cRsi = null, _sRsi = null, _sRsiOb = null, _sRsiOs = null;
+var _tf=1, _spot=0, _refreshTimer=null, _rangeSyncing=false;
+var _cMain=null, _sCandle=null, _sEma20=null, _sEma50=null;
+var _cMacd=null, _sMacdHist=null, _sMacdLine=null, _sMacdSig=null;
+var _cRsi=null, _sRsi=null, _sRsiOb=null, _sRsiOs=null;
 
-// ── Chart colours ─────────────────────────────────────────────────
-var BG    = '#0d1117';
-var GRID  = '#161b22';
-var BORDER= '#21262d';
-var TEXT  = '#8b949e';
-var GRN   = '#3fb950';
-var RED   = '#f85149';
-var BLUE  = '#3db8f5';
-var AMBER = '#f0883e';
+var BG='#0d1117', GRID='#161b22', BORDER='#21262d', TEXT='#8b949e';
+var GRN='#3fb950', RED='#f85149', BLUE='#3db8f5', AMBER='#f0883e';
+// Classic TradingView MACD colours
+var MACD_LINE='#2962ff', MACD_SIG='#ff6d00';
+var MACD_HIST_UP='#26a69a', MACD_HIST_DN='#ef5350';
 
-function _chartOpts(h, showTime) {
+function _base(showTimeAxis) {
     return {
-        width:  0,  // set via resize
-        height: h,
-        layout: {background:{type:'Solid',color:BG}, textColor:TEXT},
-        grid:   {vertLines:{color:GRID}, horzLines:{color:GRID}},
-        crosshair: {mode:LightweightCharts.CrosshairMode.Normal},
-        rightPriceScale: {borderColor:BORDER, scaleMargins:{top:0.05,bottom:0.05}},
-        timeScale: {borderColor:BORDER, timeVisible:true, secondsVisible:false,
-                    visible: showTime !== false},
-        handleScroll: true,
-        handleScale:  true,
+        width:0, height:0,
+        layout:{background:{type:'Solid',color:BG}, textColor:TEXT},
+        grid:{vertLines:{color:GRID}, horzLines:{color:GRID}},
+        crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
+        rightPriceScale:{borderColor:BORDER, scaleMargins:{top:0.08,bottom:0.08}},
+        timeScale:{borderColor:BORDER, timeVisible:showTimeAxis, secondsVisible:false,
+                   visible:showTimeAxis},
+        handleScroll:true, handleScale:true,
     };
 }
 
-// ── Init charts ───────────────────────────────────────────────────
+// ── Init ─────────────────────────────────────────────────────────
 function initCharts() {
-    var mainEl = document.getElementById('chart-main');
-    var macdEl = document.getElementById('chart-macd');
-    var rsiEl  = document.getElementById('chart-rsi');
+    var mainEl=document.getElementById('chart-main');
+    var macdEl=document.getElementById('chart-macd');
+    var rsiEl =document.getElementById('chart-rsi');
 
-    _cMain = LightweightCharts.createChart(mainEl, _chartOpts(mainEl.clientHeight, false));
+    // Main: no time axis — RSI at bottom owns it
+    _cMain = LightweightCharts.createChart(mainEl, _base(false));
     _sCandle = _cMain.addSeries(LightweightCharts.CandlestickSeries, {
         upColor:GRN, downColor:RED, borderUpColor:GRN, borderDownColor:RED,
         wickUpColor:GRN, wickDownColor:RED,
     });
-    _sEma20 = _cMain.addSeries(LightweightCharts.LineSeries, {
-        color:BLUE, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
-    });
-    _sEma50 = _cMain.addSeries(LightweightCharts.LineSeries, {
-        color:AMBER, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
-    });
+    _sEma20 = _cMain.addSeries(LightweightCharts.LineSeries,
+        {color:BLUE,  lineWidth:1, priceLineVisible:false, lastValueVisible:false});
+    _sEma50 = _cMain.addSeries(LightweightCharts.LineSeries,
+        {color:AMBER, lineWidth:1, priceLineVisible:false, lastValueVisible:false});
 
-    _cMacd = LightweightCharts.createChart(macdEl, _chartOpts(130, false));
-    _sMacdHist = _cMacd.addSeries(LightweightCharts.HistogramSeries, {
-        color:GRN, priceLineVisible:false, lastValueVisible:false,
-    });
-    _sMacdLine = _cMacd.addSeries(LightweightCharts.LineSeries, {
-        color:BLUE, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
-    });
-    _sMacdSig  = _cMacd.addSeries(LightweightCharts.LineSeries, {
-        color:RED, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
-    });
+    // MACD: no time axis
+    _cMacd = LightweightCharts.createChart(macdEl, _base(false));
+    _sMacdHist = _cMacd.addSeries(LightweightCharts.HistogramSeries,
+        {color:MACD_HIST_UP, priceLineVisible:false, lastValueVisible:false,
+         scaleMargins:{top:0.1,bottom:0.1}});
+    _sMacdLine = _cMacd.addSeries(LightweightCharts.LineSeries,
+        {color:MACD_LINE, lineWidth:1, priceLineVisible:false, lastValueVisible:false});
+    _sMacdSig  = _cMacd.addSeries(LightweightCharts.LineSeries,
+        {color:MACD_SIG,  lineWidth:1, priceLineVisible:false, lastValueVisible:false});
 
-    _cRsi = LightweightCharts.createChart(rsiEl, _chartOpts(110, true));
-    _cRsi.applyOptions({rightPriceScale:{scaleMargins:{top:0.05,bottom:0.05}, autoScale:false,
-        mode:LightweightCharts.PriceScaleMode.Normal}});
-    _sRsi   = _cRsi.addSeries(LightweightCharts.LineSeries, {
-        color:'#e3b341', lineWidth:1, priceLineVisible:false, lastValueVisible:true,
-    });
-    _sRsiOb = _cRsi.addSeries(LightweightCharts.LineSeries, {
-        color:'rgba(248,81,73,0.35)', lineWidth:1, priceLineVisible:false, lastValueVisible:false, lineStyle:2,
-    });
-    _sRsiOs = _cRsi.addSeries(LightweightCharts.LineSeries, {
-        color:'rgba(63,185,80,0.35)', lineWidth:1, priceLineVisible:false, lastValueVisible:false, lineStyle:2,
-    });
+    // RSI: shows time axis at bottom
+    _cRsi = LightweightCharts.createChart(rsiEl, _base(true));
+    _sRsi   = _cRsi.addSeries(LightweightCharts.LineSeries,
+        {color:'#e3b341', lineWidth:2, priceLineVisible:false, lastValueVisible:true});
+    _sRsiOb = _cRsi.addSeries(LightweightCharts.LineSeries,
+        {color:'rgba(248,81,73,0.4)', lineWidth:1, priceLineVisible:false,
+         lastValueVisible:false, lineStyle:LightweightCharts.LineStyle.Dashed});
+    _sRsiOs = _cRsi.addSeries(LightweightCharts.LineSeries,
+        {color:'rgba(63,185,80,0.4)', lineWidth:1, priceLineVisible:false,
+         lastValueVisible:false, lineStyle:LightweightCharts.LineStyle.Dashed});
 
-    syncTimeScales();
+    syncRange();
+    syncCrosshairs();
 
     _cMain.subscribeCrosshairMove(function(p) {
         if (!p.time) return;
@@ -5375,30 +5367,68 @@ function initCharts() {
     });
 }
 
-// ── Sync scrolling / scaling across all three charts ──────────────
-function syncTimeScales() {
+// ── Sync scrolling/zoom ──────────────────────────────────────────
+function syncRange() {
     [_cMain, _cMacd, _cRsi].forEach(function(src) {
         src.timeScale().subscribeVisibleLogicalRangeChange(function(r) {
-            if (_syncing || !r) return;
-            _syncing = true;
+            if (_rangeSyncing || !r) return;
+            _rangeSyncing = true;
             [_cMain, _cMacd, _cRsi].forEach(function(dst) {
                 if (dst !== src) dst.timeScale().setVisibleLogicalRange(r);
             });
-            _syncing = false;
+            _rangeSyncing = false;
         });
     });
 }
 
-// ── Resize ────────────────────────────────────────────────────────
-function resizeAll() {
-    var mainEl = document.getElementById('chart-main');
-    var macdEl = document.getElementById('chart-macd');
-    var rsiEl  = document.getElementById('chart-rsi');
-    var w = mainEl.clientWidth;
-    if (_cMain) _cMain.resize(w, mainEl.clientHeight || 200);
-    if (_cMacd) _cMacd.resize(w, 130);
-    if (_cRsi)  _cRsi.resize(w, 110);
+// ── Sync crosshair position across panels ────────────────────────
+function syncCrosshairs() {
+    // When crosshair moves on any chart, mirror it on the other two
+    var panels = [
+        {c:_cMain, s:_sCandle,   getV:function(d){return d.close;}},
+        {c:_cMacd, s:_sMacdLine, getV:function(d){return d.value;}},
+        {c:_cRsi,  s:_sRsi,      getV:function(d){return d.value;}},
+    ];
+    panels.forEach(function(src, si) {
+        src.c.subscribeCrosshairMove(function(p) {
+            if (!p.point) {
+                panels.forEach(function(dst,di){if(di!==si) try{dst.c.clearCrosshairPosition();}catch(e){}});
+                return;
+            }
+            var logical = p.logical;
+            if (logical == null) return;
+            panels.forEach(function(dst, di) {
+                if (di === si) return;
+                try {
+                    var bar = dst.s.dataByIndex(logical);
+                    if (bar) dst.c.setCrosshairPosition(dst.getV(bar), bar.time, dst.s);
+                } catch(e) {}
+            });
+        });
+    });
 }
+
+// ── Resize ───────────────────────────────────────────────────────
+function resizeAll() {
+    var panelsEl = document.getElementById('panels');
+    var macdH = 120, rsiH = 100;
+    var mainH = Math.max(80, panelsEl.clientHeight - macdH - rsiH);
+    var w = panelsEl.clientWidth;
+    document.getElementById('panel-main').style.height = mainH + 'px';
+    if (_cMain) _cMain.resize(w, mainH);
+    if (_cMacd) _cMacd.resize(w, macdH);
+    if (_cRsi)  _cRsi.resize(w, rsiH);
+}
+
+// ── Fullscreen toggle ────────────────────────────────────────────
+function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(function(){});
+    } else {
+        document.exitFullscreen().catch(function(){});
+    }
+}
+document.addEventListener('fullscreenchange', function() { resizeAll(); });
 
 // ── Spot poll ────────────────────────────────────────────────────
 function pollSpot() {
@@ -5408,7 +5438,8 @@ function pollSpot() {
         .then(function(d) {
             _spot = d.spot || 0;
             if (_spot > 0)
-                document.getElementById('spot-display').textContent = ul + '\\u00A0' + Math.round(_spot).toLocaleString('en-IN');
+                document.getElementById('spot-display').textContent =
+                    ul + '\\u00A0' + Math.round(_spot).toLocaleString('en-IN');
         }).catch(function(){});
 }
 
@@ -5425,10 +5456,11 @@ function onUlChange() {
         fetch('/api/straddle/expiries?underlying='+u).then(function(r){return r.json();}),
         fetch('/api/straddle/spot?underlying='+u).then(function(r){return r.json();})
     ]).then(function(res) {
-        var dates = res[0]; var spotD = res[1];
+        var dates=res[0], spotD=res[1];
         _spot = spotD.spot || 0;
         if (_spot > 0)
-            document.getElementById('spot-display').textContent = u + '\\u00A0' + Math.round(_spot).toLocaleString('en-IN');
+            document.getElementById('spot-display').textContent =
+                u + '\\u00A0' + Math.round(_spot).toLocaleString('en-IN');
         expSel.innerHTML = '<option value="">-- Expiry --</option>';
         dates.forEach(function(d){
             var o=document.createElement('option'); o.value=d; o.textContent=d; expSel.appendChild(o);
@@ -5438,8 +5470,8 @@ function onUlChange() {
 }
 
 function onExpChange() {
-    var u = document.getElementById('sel-ul').value;
-    var ex= document.getElementById('sel-exp').value;
+    var u=document.getElementById('sel-ul').value;
+    var ex=document.getElementById('sel-exp').value;
     if (!ex) return;
     fetch('/api/straddle/strikes?underlying='+u+'&expiry='+ex)
         .then(function(r){return r.json();})
@@ -5474,37 +5506,34 @@ function setTf(tf) {
     });
 }
 
-// ── Indicators (computed client-side from close prices) ───────────
+// ── Indicators ───────────────────────────────────────────────────
 function calcEma(closes, period) {
-    var k = 2/(period+1), ema = closes[0], out = [];
-    for (var i = 0; i < closes.length; i++) {
-        ema = i === 0 ? closes[0] : closes[i]*k + ema*(1-k);
+    var k=2/(period+1), ema=closes[0], out=[];
+    for (var i=0; i<closes.length; i++) {
+        ema = i===0 ? closes[0] : closes[i]*k + ema*(1-k);
         out.push(parseFloat(ema.toFixed(4)));
     }
     return out;
 }
 
 function calcMacd(closes, fast, slow, sig) {
-    var emaFast = calcEma(closes, fast);
-    var emaSlow = calcEma(closes, slow);
-    var macdLine = emaFast.map(function(v,i){return parseFloat((v - emaSlow[i]).toFixed(4));});
-    // Signal needs enough history
-    var sigLine = calcEma(macdLine, sig);
-    var hist = macdLine.map(function(v,i){return parseFloat((v - sigLine[i]).toFixed(4));});
-    return {macd: macdLine, signal: sigLine, hist: hist};
+    var ef=calcEma(closes,fast), es=calcEma(closes,slow);
+    var ml=ef.map(function(v,i){return parseFloat((v-es[i]).toFixed(4));});
+    var sl=calcEma(ml,sig);
+    var hi=ml.map(function(v,i){return parseFloat((v-sl[i]).toFixed(4));});
+    return {macd:ml, signal:sl, hist:hi};
 }
 
 function calcRsi(closes, period) {
-    var out = [];
-    for (var i = 0; i < closes.length; i++) {
+    var out=[];
+    for (var i=0; i<closes.length; i++) {
         if (i < period) { out.push(null); continue; }
-        var gains = 0, losses = 0;
-        for (var j = i - period + 1; j <= i; j++) {
-            var d = closes[j] - closes[j-1];
-            if (d > 0) gains += d; else losses -= d;
+        var g=0, l=0;
+        for (var j=i-period+1; j<=i; j++) {
+            var d=closes[j]-closes[j-1];
+            if (d>0) g+=d; else l-=d;
         }
-        var avgG = gains / period, avgL = losses / period;
-        var rsi = avgL === 0 ? 100 : 100 - (100 / (1 + avgG/avgL));
+        var rsi = l===0 ? 100 : 100-(100/(1+g/period/(l/period)));
         out.push(parseFloat(rsi.toFixed(2)));
     }
     return out;
@@ -5512,103 +5541,104 @@ function calcRsi(closes, period) {
 
 // ── Load & render ────────────────────────────────────────────────
 function doLoad() {
-    var u    = document.getElementById('sel-ul').value;
-    var ex   = document.getElementById('sel-exp').value;
-    var ceSt = document.getElementById('sel-ce').value;
-    var peSt = document.getElementById('sel-pe').value;
-    var errEl = document.getElementById('err');
-    errEl.textContent = '';
+    var u=document.getElementById('sel-ul').value;
+    var ex=document.getElementById('sel-exp').value;
+    var ceSt=document.getElementById('sel-ce').value;
+    var peSt=document.getElementById('sel-pe').value;
+    var errEl=document.getElementById('err');
+    errEl.textContent='';
+    if (!ex)   {errEl.textContent='Select expiry'; return;}
+    if (!ceSt) {errEl.textContent='Select CE strike'; return;}
+    if (!peSt) {errEl.textContent='Select PE strike'; return;}
 
-    if (!ex)   { errEl.textContent = 'Select expiry'; return; }
-    if (!ceSt) { errEl.textContent = 'Select CE strike'; return; }
-    if (!peSt) { errEl.textContent = 'Select PE strike'; return; }
+    var ov=document.getElementById('overlay');
+    ov.textContent='Loading 30 days...'; ov.style.display='block';
 
-    var ov = document.getElementById('overlay');
-    ov.textContent = 'Loading 30 days...';
-    ov.style.display = 'block';
-
-    fetch('/api/straddle/chart?underlying='+u+'&expiry='+ex+'&ce_strike='+ceSt+'&pe_strike='+peSt+'&tf='+_tf)
+    fetch('/api/straddle/chart?underlying='+u+'&expiry='+ex+
+          '&ce_strike='+ceSt+'&pe_strike='+peSt+'&tf='+_tf)
         .then(function(r){return r.json();})
         .then(function(d) {
-            ov.style.display = 'none';
-            if (d.error) { errEl.textContent = d.error; return; }
-            var candles = d.candles || [];
-            if (candles.length === 0) { errEl.textContent = 'No candle data (market may be closed)'; return; }
+            ov.style.display='none';
+            if (d.error) {errEl.textContent=d.error; return;}
+            var candles=d.candles||[];
+            if (candles.length===0) {errEl.textContent='No candle data (market may be closed)'; return;}
 
-            // Render candles
             _sCandle.setData(candles);
 
-            // EMA overlays
-            var closes = candles.map(function(c){return c.close;});
-            var times  = candles.map(function(c){return c.time;});
-            var ema20  = calcEma(closes, 20);
-            var ema50  = calcEma(closes, 50);
-            _sEma20.setData(times.map(function(t,i){return {time:t, value:ema20[i]};}));
-            _sEma50.setData(times.map(function(t,i){return {time:t, value:ema50[i]};}));
+            var closes=candles.map(function(c){return c.close;});
+            var times =candles.map(function(c){return c.time;});
+
+            // EMA
+            var e20=calcEma(closes,20), e50=calcEma(closes,50);
+            _sEma20.setData(times.map(function(t,i){return {time:t,value:e20[i]};}));
+            _sEma50.setData(times.map(function(t,i){return {time:t,value:e50[i]};}));
 
             // MACD
-            var macdData = calcMacd(closes, 12, 26, 9);
+            var md=calcMacd(closes,12,26,9);
             _sMacdHist.setData(times.map(function(t,i){
-                return {time:t, value:macdData.hist[i],
-                        color: macdData.hist[i] >= 0 ? GRN : RED};
+                return {time:t, value:md.hist[i],
+                        color:md.hist[i]>=0 ? MACD_HIST_UP : MACD_HIST_DN};
             }));
-            _sMacdLine.setData(times.map(function(t,i){return {time:t,value:macdData.macd[i]};}));
-            _sMacdSig.setData(times.map(function(t,i){return {time:t,value:macdData.signal[i]};}));
+            _sMacdLine.setData(times.map(function(t,i){return {time:t,value:md.macd[i]};}));
+            _sMacdSig.setData( times.map(function(t,i){return {time:t,value:md.signal[i]};}));
 
-            // RSI
-            var rsiData = calcRsi(closes, 14);
-            _sRsi.setData(times.map(function(t,i){
-                return rsiData[i] !== null ? {time:t, value:rsiData[i]} : null;
-            }).filter(Boolean));
-            var ob = times.map(function(t){return {time:t, value:70};});
-            var os = times.map(function(t){return {time:t, value:30};});
-            _sRsiOb.setData(ob);
-            _sRsiOs.setData(os);
+            // RSI — skip null leading values, then OB/OS spans same range
+            var rsiData=calcRsi(closes,14);
+            var rsiPts=[];
+            for (var i=0;i<times.length;i++) {
+                if (rsiData[i]!==null) rsiPts.push({time:times[i],value:rsiData[i]});
+            }
+            _sRsi.setData(rsiPts);
+            var obPts=rsiPts.map(function(p){return {time:p.time,value:70};});
+            var osPts=rsiPts.map(function(p){return {time:p.time,value:30};});
+            _sRsiOb.setData(obPts);
+            _sRsiOs.setData(osPts);
 
             _cMain.timeScale().fitContent();
+            // Sync MACD and RSI to same range
+            var r=_cMain.timeScale().getVisibleLogicalRange();
+            if (r) { _cMacd.timeScale().setVisibleLogicalRange(r);
+                     _cRsi.timeScale().setVisibleLogicalRange(r); }
 
-            // Stat bar
             updateStats(candles, d.ce_ltp, d.pe_ltp);
-            document.getElementById('statbar').style.display = 'flex';
-            document.getElementById('lbl-strikes').textContent = 'CE '+ceSt+' / PE '+peSt;
-            document.getElementById('ts').textContent = 'Updated '+new Date().toLocaleTimeString('en-IN');
-
-            scheduleRefresh(u, ex, ceSt, peSt);
+            document.getElementById('statbar').style.display='flex';
+            document.getElementById('lbl-strikes').textContent='CE '+ceSt+' / PE '+peSt;
+            document.getElementById('ts').textContent='Updated '+new Date().toLocaleTimeString('en-IN');
+            scheduleRefresh(u,ex,ceSt,peSt);
         })
-        .catch(function(e){ ov.textContent = 'Error: '+e; });
+        .catch(function(e){ov.textContent='Error: '+e;});
 }
 
 function updateStats(candles, ceLtp, peLtp) {
-    var now = new Date();
-    var istMs = now.getTime() + (5*60+30)*60*1000;
-    var todayIST = new Date(istMs).toISOString().slice(0,10);
-    var today = candles.filter(function(c){
-        return new Date(c.time*1000+(5*60+30)*60*1000).toISOString().slice(0,10) === todayIST;
+    var now=new Date();
+    var istMs=now.getTime()+(5*60+30)*60*1000;
+    var todayIST=new Date(istMs).toISOString().slice(0,10);
+    var today=candles.filter(function(c){
+        return new Date(c.time*1000+(5*60+30)*60*1000).toISOString().slice(0,10)===todayIST;
     });
-    if (today.length === 0) today = candles;
-    var open  = today[0].open;
-    var high  = Math.max.apply(null, today.map(function(c){return c.high;}));
-    var low   = Math.min.apply(null, today.map(function(c){return c.low;}));
-    var close = today[today.length-1].close;
-    var chg   = close - open;
-    var pct   = open > 0 ? chg/open*100 : 0;
-    document.getElementById('s-ltp').textContent  = close.toFixed(2);
-    document.getElementById('s-open').textContent = open.toFixed(2);
-    document.getElementById('s-high').textContent = high.toFixed(2);
-    document.getElementById('s-low').textContent  = low.toFixed(2);
-    var chgEl = document.getElementById('s-chg');
-    chgEl.textContent = (chg>=0?'+':'')+chg.toFixed(2)+' ('+pct.toFixed(1)+'%)';
-    chgEl.className = 'sv '+(chg>=0?'pos':'neg');
-    if (ceLtp) document.getElementById('s-ce-val').textContent = ceLtp.toFixed(2);
-    if (peLtp) document.getElementById('s-pe-val').textContent = peLtp.toFixed(2);
+    if (today.length===0) today=candles;
+    var open=today[0].open;
+    var high=Math.max.apply(null,today.map(function(c){return c.high;}));
+    var low =Math.min.apply(null,today.map(function(c){return c.low;}));
+    var close=today[today.length-1].close;
+    var chg=close-open, pct=open>0?chg/open*100:0;
+    document.getElementById('s-ltp').textContent =close.toFixed(2);
+    document.getElementById('s-open').textContent=open.toFixed(2);
+    document.getElementById('s-high').textContent=high.toFixed(2);
+    document.getElementById('s-low').textContent =low.toFixed(2);
+    var chgEl=document.getElementById('s-chg');
+    chgEl.textContent=(chg>=0?'+':'')+chg.toFixed(2)+' ('+pct.toFixed(1)+'%)';
+    chgEl.className='sv '+(chg>=0?'pos':'neg');
+    if (ceLtp) document.getElementById('s-ce-val').textContent=ceLtp.toFixed(2);
+    if (peLtp) document.getElementById('s-pe-val').textContent=peLtp.toFixed(2);
 }
 
-function scheduleRefresh(u, ex, ceSt, peSt) {
+function scheduleRefresh(u,ex,ceSt,peSt) {
     if (_refreshTimer) clearTimeout(_refreshTimer);
-    _refreshTimer = setTimeout(function() {
-        var h = new Date().getUTCHours()*60 + new Date().getUTCMinutes() + 330;
-        if (h%1440 >= 555 && h%1440 <= 930) doLoad();
-        else scheduleRefresh(u, ex, ceSt, peSt);
+    _refreshTimer=setTimeout(function(){
+        var h=new Date().getUTCHours()*60+new Date().getUTCMinutes()+330;
+        if (h%1440>=555 && h%1440<=930) doLoad();
+        else scheduleRefresh(u,ex,ceSt,peSt);
     }, 60000);
 }
 
