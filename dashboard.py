@@ -5044,6 +5044,9 @@ def api_straddle_expiries():
     exchange = "BSE" if underlying in ("SENSEX", "BANKEX") else "NSE"
     if not _instrument_cache:
         return jsonify([])
+    from datetime import datetime as _dt2, timedelta, timezone
+    _ist = timezone(timedelta(hours=5, minutes=30))
+    today_ist = _dt2.now(_ist).date().strftime("%Y-%m-%d")
     seen = set()
     for inst in _instrument_cache._instruments:
         if inst.instrument_type != "OPTIDX":
@@ -5052,7 +5055,7 @@ def api_straddle_expiries():
             continue
         if getattr(inst, "exchange", "NSE") != exchange:
             continue
-        if inst.expiry_date:
+        if inst.expiry_date and inst.expiry_date[:10] >= today_ist:
             seen.add(inst.expiry_date[:10])
     return jsonify(sorted(seen))
 
@@ -5239,7 +5242,9 @@ select:focus{border-color:#58a6ff;}
 #panel-main{flex:1;min-height:0;}
 #panel-macd{height:120px;border-top:1px solid #21262d;}
 #panel-rsi {height:100px;border-top:1px solid #21262d;}
-.panel-label{position:absolute;top:4px;left:8px;font-size:10px;color:#6e7681;pointer-events:none;z-index:2;white-space:nowrap;}
+.panel-label{position:absolute;top:4px;left:8px;font-size:10px;color:#6e7681;z-index:2;white-space:nowrap;display:flex;align-items:center;gap:6px;}
+.exp-btn{background:none;border:none;color:#484f58;cursor:pointer;font-size:12px;padding:0 2px;line-height:1;pointer-events:all;}
+.exp-btn:hover{color:#8b949e;}
 .overlay-msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#8b949e;font-size:13px;pointer-events:none;text-align:center;z-index:5;}
 </style>
 </head>
@@ -5283,16 +5288,19 @@ select:focus{border-color:#58a6ff;}
 
 <div id="panels">
   <div class="panel" id="panel-main">
-    <div class="panel-label">STRANGLE &nbsp;&#x2013;&nbsp; <span id="lbl-strikes"></span> &nbsp;&#x2013;&nbsp; <span style="color:#3db8f5;">EMA20</span> &nbsp;<span style="color:#f0883e;">EMA50</span></div>
+    <div class="panel-label">STRANGLE &nbsp;&#x2013;&nbsp; <span id="lbl-strikes"></span> &nbsp;&#x2013;&nbsp; <span style="color:#3db8f5;">EMA20</span> &nbsp;<span style="color:#f0883e;">EMA50</span>
+      <button class="exp-btn" onclick="expandPane('main')" title="Expand">&#x2922;</button></div>
     <div id="chart-main" style="width:100%;height:100%;"></div>
     <div class="overlay-msg" id="overlay">Select index, expiry &amp; strikes then click Load</div>
   </div>
   <div class="panel" id="panel-macd">
-    <div class="panel-label">MACD (12,26,9) &nbsp;&#x2013;&nbsp; <span style="color:#2962ff;">&#x25A0;</span> MACD &nbsp;<span style="color:#ff6d00;">&#x25A0;</span> Signal</div>
+    <div class="panel-label">MACD (12,26,9) &nbsp;&#x2013;&nbsp; <span style="color:#2962ff;">&#x25A0;</span> MACD &nbsp;<span style="color:#ff6d00;">&#x25A0;</span> Signal
+      <button class="exp-btn" onclick="expandPane('macd')" title="Expand">&#x2922;</button></div>
     <div id="chart-macd" style="width:100%;height:100%;"></div>
   </div>
   <div class="panel" id="panel-rsi">
-    <div class="panel-label">RSI (14)</div>
+    <div class="panel-label">RSI (14)
+      <button class="exp-btn" onclick="expandPane('rsi')" title="Expand">&#x2922;</button></div>
     <div id="chart-rsi" style="width:100%;height:100%;"></div>
   </div>
 </div>
@@ -5362,13 +5370,44 @@ function initCharts() {
          crosshairMarkerVisible:false});
 
     syncRange();
-    syncCrosshairs();
 
     _cMain.subscribeCrosshairMove(function(p) {
         if (!p.time) return;
         var b = p.seriesData && p.seriesData.get(_sCandle);
         if (b) document.getElementById('s-ltp').textContent = b.close.toFixed(2);
     });
+}
+
+// ── Per-pane expand/collapse (like TradingView) ───────────────────
+var _expandedPane = null;
+var _paneIds = ['main','macd','rsi'];
+
+function expandPane(id) {
+    if (_expandedPane === id) {
+        // Restore all panes
+        _expandedPane = null;
+        _paneIds.forEach(function(p) {
+            var el = document.getElementById('panel-'+p);
+            el.style.display = '';
+            el.style.flex    = '';
+            el.style.height  = '';
+        });
+        document.getElementById('panel-main').style.flex = '1';
+        // Fixed heights restored by resizeAll
+    } else {
+        _expandedPane = id;
+        _paneIds.forEach(function(p) {
+            var el = document.getElementById('panel-'+p);
+            if (p === id) {
+                el.style.display = '';
+                el.style.flex    = '1';
+                el.style.height  = '';
+            } else {
+                el.style.display = 'none';
+            }
+        });
+    }
+    resizeAll();
 }
 
 // ── Sync scrolling/zoom ──────────────────────────────────────────
@@ -5385,43 +5424,27 @@ function syncRange() {
     });
 }
 
-// ── Sync crosshair position across panels ────────────────────────
-function syncCrosshairs() {
-    // When crosshair moves on any chart, mirror it on the other two
-    var panels = [
-        {c:_cMain, s:_sCandle,   getV:function(d){return d.close;}},
-        {c:_cMacd, s:_sMacdBars,  getV:function(d){return d.value;}},
-        {c:_cRsi,  s:_sRsi,      getV:function(d){return d.value;}},
-    ];
-    panels.forEach(function(src, si) {
-        src.c.subscribeCrosshairMove(function(p) {
-            if (!p.point) {
-                panels.forEach(function(dst,di){if(di!==si) try{dst.c.clearCrosshairPosition();}catch(e){}});
-                return;
-            }
-            var logical = p.logical;
-            if (logical == null) return;
-            panels.forEach(function(dst, di) {
-                if (di === si) return;
-                try {
-                    var bar = dst.s.dataByIndex(logical);
-                    if (bar) dst.c.setCrosshairPosition(dst.getV(bar), bar.time, dst.s);
-                } catch(e) {}
-            });
-        });
-    });
-}
 
 // ── Resize ───────────────────────────────────────────────────────
 function resizeAll() {
     var panelsEl = document.getElementById('panels');
-    var macdH = 120, rsiH = 100;
-    var mainH = Math.max(80, panelsEl.clientHeight - macdH - rsiH);
+    var totalH = panelsEl.clientHeight;
     var w = panelsEl.clientWidth;
-    document.getElementById('panel-main').style.height = mainH + 'px';
-    if (_cMain) _cMain.resize(w, mainH);
-    if (_cMacd) _cMacd.resize(w, macdH);
-    if (_cRsi)  _cRsi.resize(w, rsiH);
+    var mainH, macdH, rsiH;
+    if (_expandedPane === 'main') {
+        mainH = totalH; macdH = 0; rsiH = 0;
+    } else if (_expandedPane === 'macd') {
+        mainH = 0; macdH = totalH; rsiH = 0;
+    } else if (_expandedPane === 'rsi') {
+        mainH = 0; macdH = 0; rsiH = totalH;
+    } else {
+        macdH = 120; rsiH = 100;
+        mainH = Math.max(80, totalH - macdH - rsiH);
+        document.getElementById('panel-main').style.height = mainH + 'px';
+    }
+    if (_cMain && mainH > 0) _cMain.resize(w, mainH);
+    if (_cMacd && macdH > 0) _cMacd.resize(w, macdH);
+    if (_cRsi  && rsiH  > 0) _cRsi.resize(w, rsiH);
 }
 
 // ── Fullscreen toggle ────────────────────────────────────────────
