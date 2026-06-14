@@ -5225,10 +5225,13 @@ select:focus{border-color:#58a6ff;}
 .pos{color:#3fb950;}.neg{color:#f85149;}.neu{color:#e6edf3;}
 #err{color:#f85149;font-size:11px;}
 #panels{flex:1;display:flex;flex-direction:column;min-height:0;}
-.panel{position:relative;overflow:hidden;}
-#panel-main{flex:1;min-height:0;}
-#panel-macd{height:120px;border-top:1px solid #21262d;}
-#panel-rsi {height:100px;border-top:1px solid #21262d;}
+.panel{position:relative;overflow:hidden;min-height:40px;}
+#panel-main{flex:1;min-height:60px;}
+#panel-macd{height:120px;}
+#panel-rsi {height:100px;}
+.drag-handle{height:5px;background:transparent;cursor:ns-resize;flex-shrink:0;
+             border-top:1px solid #21262d;position:relative;z-index:10;}
+.drag-handle:hover,.drag-handle.dragging{background:#1f6feb;}
 .panel-label{position:absolute;top:4px;left:8px;font-size:10px;color:#6e7681;z-index:2;white-space:nowrap;display:flex;align-items:center;gap:6px;}
 .exp-btn{background:none;border:none;color:#484f58;cursor:pointer;font-size:12px;padding:0 2px;line-height:1;pointer-events:all;}
 .exp-btn:hover{color:#8b949e;}
@@ -5280,11 +5283,13 @@ select:focus{border-color:#58a6ff;}
     <div id="chart-main" style="width:100%;height:100%;"></div>
     <div class="overlay-msg" id="overlay">Select index, expiry &amp; strikes then click Load</div>
   </div>
+  <div class="drag-handle" id="drag-macd" title="Drag to resize"></div>
   <div class="panel" id="panel-macd">
     <div class="panel-label">MACD (12,26,9) &nbsp;&#x2013;&nbsp; <span style="color:#ff6d00;">&#x25A0;</span> MACD &nbsp;<span style="color:#2962ff;">&#x25A0;</span> Signal
       <button class="exp-btn" onclick="expandPane('macd')" title="Expand">&#x2922;</button></div>
     <div id="chart-macd" style="width:100%;height:100%;"></div>
   </div>
+  <div class="drag-handle" id="drag-rsi" title="Drag to resize"></div>
   <div class="panel" id="panel-rsi">
     <div class="panel-label">RSI (14)
       <button class="exp-btn" onclick="expandPane('rsi')" title="Expand">&#x2922;</button></div>
@@ -5301,15 +5306,17 @@ var _cRsi=null, _sRsi=null, _sRsiOb=null, _sRsiOs=null;
 var BG='#0d1117', GRID='#161b22', BORDER='#21262d', TEXT='#8b949e';
 var GRN='#3fb950', RED='#f85149', BLUE='#3db8f5', AMBER='#f0883e';
 
-function _base(showTimeAxis) {
+function _base(showTimeLabels) {
     return {
         width:0, height:0,
         layout:{background:{type:'Solid',color:BG}, textColor:TEXT},
         grid:{vertLines:{color:GRID}, horzLines:{color:GRID}},
         crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
         rightPriceScale:{borderColor:BORDER, scaleMargins:{top:0.08,bottom:0.08}},
-        timeScale:{borderColor:BORDER, timeVisible:showTimeAxis, secondsVisible:false,
-                   visible:showTimeAxis},
+        // All panels show time axis so crosshair date shows wherever you hover.
+        // Upper panels suppress tick labels to avoid repetition; only RSI shows them.
+        timeScale:{borderColor:BORDER, timeVisible:true, secondsVisible:false,
+                   visible:true, tickMarkMaxCharacterLength: showTimeLabels ? 8 : 0},
         handleScroll:true, handleScale:true,
     };
 }
@@ -5357,7 +5364,6 @@ function initCharts() {
          crosshairMarkerVisible:false});
 
     syncRange();
-    syncCrossToRsi();
 
     _cMain.subscribeCrosshairMove(function(p) {
         if (!p.time) return;
@@ -5366,21 +5372,6 @@ function initCharts() {
     });
 }
 
-// ── Show crosshair date on RSI time axis when hovering any panel ──
-function syncCrossToRsi() {
-    [_cMain, _cMacd].forEach(function(src) {
-        src.subscribeCrosshairMove(function(p) {
-            if (!p.time || p.logical == null) {
-                try { _cRsi.clearCrosshairPosition(); } catch(e) {}
-                return;
-            }
-            try {
-                var bar = _sRsi.dataByIndex(p.logical);
-                _cRsi.setCrosshairPosition(bar ? bar.value : 50, p.time, _sRsi);
-            } catch(e) {}
-        });
-    });
-}
 
 // ── Per-pane expand/collapse (like TradingView) ───────────────────
 var _expandedPane = null;
@@ -5434,21 +5425,54 @@ function resizeAll() {
     var panelsEl = document.getElementById('panels');
     var totalH = panelsEl.clientHeight;
     var w = panelsEl.clientWidth;
-    var mainH, macdH, rsiH;
-    if (_expandedPane === 'main') {
-        mainH = totalH; macdH = 0; rsiH = 0;
-    } else if (_expandedPane === 'macd') {
-        mainH = 0; macdH = totalH; rsiH = 0;
-    } else if (_expandedPane === 'rsi') {
-        mainH = 0; macdH = 0; rsiH = totalH;
-    } else {
-        macdH = 120; rsiH = 100;
-        mainH = Math.max(80, totalH - macdH - rsiH);
-        document.getElementById('panel-main').style.height = mainH + 'px';
+    if (_expandedPane) {
+        var h = totalH;
+        if (_expandedPane==='main' && _cMain) _cMain.resize(w, h);
+        if (_expandedPane==='macd' && _cMacd) _cMacd.resize(w, h);
+        if (_expandedPane==='rsi'  && _cRsi)  _cRsi.resize(w, h);
+        return;
     }
-    if (_cMain && mainH > 0) _cMain.resize(w, mainH);
-    if (_cMacd && macdH > 0) _cMacd.resize(w, macdH);
-    if (_cRsi  && rsiH  > 0) _cRsi.resize(w, rsiH);
+    var macdEl = document.getElementById('panel-macd');
+    var rsiEl  = document.getElementById('panel-rsi');
+    var macdH = macdEl.clientHeight || 120;
+    var rsiH  = rsiEl.clientHeight  || 100;
+    // Account for drag handle heights (5px each)
+    var mainH = Math.max(60, totalH - macdH - rsiH - 10);
+    document.getElementById('panel-main').style.height = mainH + 'px';
+    if (_cMain) _cMain.resize(w, mainH);
+    if (_cMacd) _cMacd.resize(w, macdH);
+    if (_cRsi)  _cRsi.resize(w, rsiH);
+}
+
+// ── Drag-to-resize handles ────────────────────────────────────────
+function initDragHandles() {
+    makeDraggable('drag-macd', 'panel-macd', false);
+    makeDraggable('drag-rsi',  'panel-rsi',  false);
+}
+
+function makeDraggable(handleId, panelId, above) {
+    var handle = document.getElementById(handleId);
+    var panel  = document.getElementById(panelId);
+    var startY, startH;
+    handle.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        startY = e.clientY;
+        startH = panel.clientHeight;
+        handle.classList.add('dragging');
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+    function onMove(e) {
+        var delta = e.clientY - startY;
+        var newH  = Math.max(40, startH + delta);
+        panel.style.height = newH + 'px';
+        resizeAll();
+    }
+    function onUp() {
+        handle.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+    }
 }
 
 // ── Fullscreen toggle ────────────────────────────────────────────
@@ -5673,6 +5697,7 @@ function scheduleRefresh(u,ex,ceSt,peSt) {
 window.onload = function() {
     initCharts();
     resizeAll();
+    initDragHandles();
     onUlChange();
     window.addEventListener('resize', resizeAll);
     setInterval(pollSpot, 5000);
