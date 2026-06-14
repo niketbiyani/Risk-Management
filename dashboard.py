@@ -428,7 +428,7 @@ DASHBOARD_HTML = """
             </div>
             <a href="/journal" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Open Trade Journal">&#x1F4D3; Journal</a>
             <a href="/analytics" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Analytics">&#x1F4CA; Analytics</a>
-            <a href="/straddle" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Straddle Chart">&#x1F4C8; Straddle</a>
+            <a href="/straddle" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Strangle Chart">&#x1F4C8; Strangle</a>
             <span id="token-status" style="font-size:12px;padding:4px 10px;border-radius:12px;cursor:pointer;border:1px solid #30363d;color:#8b949e;" onclick="refreshToken()" title="Click to refresh token">API: ...</span>
             <span id="status-badge" class="status-badge status-active">ACTIVE</span>
         </div>
@@ -5024,7 +5024,8 @@ def api_straddle_chart():
     underlying = request.args.get("underlying", "NIFTY").upper()
     expiry     = request.args.get("expiry", "")
     try:
-        strike = float(request.args.get("strike", 0))
+        ce_strike = float(request.args.get("ce_strike", 0))
+        pe_strike = float(request.args.get("pe_strike", 0))
     except ValueError:
         return jsonify({"error": "invalid strike"}), 400
     tf = int(request.args.get("tf", 1))  # 1, 3, or 5
@@ -5032,7 +5033,7 @@ def api_straddle_chart():
     exchange = "BSE" if underlying in ("SENSEX", "BANKEX") else "NSE"
     exchange_segment = "BSE_FNO" if exchange == "BSE" else "NSE_FNO"
 
-    # Find CE and PE security IDs from instrument cache
+    # Find CE and PE security IDs from instrument cache (different strikes)
     ce_id = pe_id = None
     if _instrument_cache:
         for inst in _instrument_cache._instruments:
@@ -5044,14 +5045,13 @@ def api_straddle_chart():
                 continue
             if getattr(inst, "exchange", "NSE") != exchange:
                 continue
-            if abs(inst.strike_price - strike) < 0.01:
-                if inst.option_type == "CE":
-                    ce_id = inst.security_id
-                elif inst.option_type == "PE":
-                    pe_id = inst.security_id
+            if inst.option_type == "CE" and abs(inst.strike_price - ce_strike) < 0.01:
+                ce_id = inst.security_id
+            elif inst.option_type == "PE" and abs(inst.strike_price - pe_strike) < 0.01:
+                pe_id = inst.security_id
 
     if not ce_id or not pe_id:
-        return jsonify({"error": f"Could not find CE/PE for {underlying} {strike} exp {expiry}"}), 404
+        return jsonify({"error": f"Could not find instruments: CE {underlying} {ce_strike} / PE {underlying} {pe_strike} exp {expiry}"}), 404
 
     # Fetch 1m candles for both legs (today + yesterday for context)
     from datetime import timedelta
@@ -5128,7 +5128,7 @@ def _build_straddle_page():
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Straddle Chart</title>
+<title>Strangle Chart</title>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -5158,7 +5158,7 @@ select:focus,input:focus{border-color:#58a6ff;}
 </head>
 <body>
 <div class="header">
-  <h1>&#x1F4C8; Straddle Chart</h1>
+  <h1>&#x1F4C8; Strangle Chart</h1>
   <a href="/">&#x2190; Dashboard</a>
   <div style="margin-left:auto;font-size:11px;color:#484f58;" id="last-updated"></div>
 </div>
@@ -5169,7 +5169,10 @@ select:focus,input:focus{border-color:#58a6ff;}
     <option value="SENSEX">SENSEX</option>
   </select>
   <select id="ctrl-expiry"><option value="">-- Expiry --</option></select>
-  <input id="ctrl-strike" type="number" placeholder="Strike" step="50" style="width:90px;">
+  <label style="font-size:11px;color:#8b949e;">CE Strike</label>
+  <input id="ctrl-ce-strike" type="number" placeholder="e.g. 24100" step="50" style="width:100px;">
+  <label style="font-size:11px;color:#8b949e;">PE Strike</label>
+  <input id="ctrl-pe-strike" type="number" placeholder="e.g. 23900" step="50" style="width:100px;">
   <div style="display:flex;gap:4px;">
     <button class="tf-btn active" data-tf="1" onclick="setTf(1)">1m</button>
     <button class="tf-btn" data-tf="3" onclick="setTf(3)">3m</button>
@@ -5280,19 +5283,21 @@ function setTf(tf) {
 
 // ── Load ─────────────────────────────────────────────────────────────
 function loadChart() {
-    var u  = document.getElementById('ctrl-underlying').value;
-    var ex = document.getElementById('ctrl-expiry').value;
-    var st = document.getElementById('ctrl-strike').value;
+    var u   = document.getElementById('ctrl-underlying').value;
+    var ex  = document.getElementById('ctrl-expiry').value;
+    var ceSt = document.getElementById('ctrl-ce-strike').value;
+    var peSt = document.getElementById('ctrl-pe-strike').value;
     var errEl = document.getElementById('ctrl-error');
     errEl.textContent = '';
 
-    if (!ex) { errEl.textContent = 'Select an expiry'; return; }
-    if (!st)  { errEl.textContent = 'Enter a strike';  return; }
+    if (!ex)   { errEl.textContent = 'Select an expiry'; return; }
+    if (!ceSt) { errEl.textContent = 'Enter CE strike';  return; }
+    if (!peSt) { errEl.textContent = 'Enter PE strike';  return; }
 
     document.getElementById('status-msg').textContent = 'Loading...';
     if (_series) _series.setData([]);
 
-    fetch('/api/straddle/chart?underlying='+u+'&expiry='+ex+'&strike='+st+'&tf='+_tf)
+    fetch('/api/straddle/chart?underlying='+u+'&expiry='+ex+'&ce_strike='+ceSt+'&pe_strike='+peSt+'&tf='+_tf)
         .then(function(r){return r.json();})
         .then(function(d) {
             if (d.error) { errEl.textContent = d.error; document.getElementById('status-msg').textContent = d.error; return; }
