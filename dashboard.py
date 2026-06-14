@@ -5333,7 +5333,7 @@ function initCharts() {
         {color:AMBER, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
          crosshairMarkerVisible:false});
 
-    // MACD: MACD orange histogram behind, Signal blue histogram on top
+    // MACD orange behind, Signal blue in front (added last = rendered on top)
     _cMacd = LightweightCharts.createChart(macdEl, _base(false));
     _sMacdBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
         {color:'#ff6d00', priceLineVisible:false, lastValueVisible:false,
