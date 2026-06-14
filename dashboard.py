@@ -5141,28 +5141,15 @@ def api_straddle_chart():
 
     def fetch_candles(sec_id):
         try:
-            bars = {}
-            empty_streak = 0
-            end_d = today_d
-            for _ in range(5):  # up to ~35 calendar days back
-                chunk_start = end_d - timedelta(days=7)
-                raw = _monitor.api.get_chart_data(
-                    security_id=sec_id,
-                    exchange_segment=exchange_segment,
-                    instrument_type="OPTIDX",
-                    from_date=chunk_start.strftime("%Y-%m-%d"),
-                    to_date=end_d.strftime("%Y-%m-%d"),
-                )
-                parsed = _parse_raw(raw)
-                if parsed:
-                    bars.update(parsed)
-                    empty_streak = 0
-                else:
-                    empty_streak += 1
-                    if empty_streak >= 2:
-                        break  # two consecutive empty chunks → no more data
-                end_d = chunk_start - timedelta(days=1)
-            return bars
+            from_date = (today_d - timedelta(days=35)).strftime("%Y-%m-%d")
+            raw = _monitor.api.get_chart_data(
+                security_id=sec_id,
+                exchange_segment=exchange_segment,
+                instrument_type="OPTIDX",
+                from_date=from_date,
+                to_date=today_d.strftime("%Y-%m-%d"),
+            )
+            return _parse_raw(raw)
         except Exception as e:
             logger.warning("straddle fetch_candles %s: %s", sec_id, e)
             return {}
@@ -5370,11 +5357,28 @@ function initCharts() {
          crosshairMarkerVisible:false});
 
     syncRange();
+    syncCrossToRsi();
 
     _cMain.subscribeCrosshairMove(function(p) {
         if (!p.time) return;
         var b = p.seriesData && p.seriesData.get(_sCandle);
         if (b) document.getElementById('s-ltp').textContent = b.close.toFixed(2);
+    });
+}
+
+// ── Show crosshair date on RSI time axis when hovering any panel ──
+function syncCrossToRsi() {
+    [_cMain, _cMacd].forEach(function(src) {
+        src.subscribeCrosshairMove(function(p) {
+            if (!p.time || p.logical == null) {
+                try { _cRsi.clearCrosshairPosition(); } catch(e) {}
+                return;
+            }
+            try {
+                var bar = _sRsi.dataByIndex(p.logical);
+                _cRsi.setCrosshairPosition(bar ? bar.value : 50, p.time, _sRsi);
+            } catch(e) {}
+        });
     });
 }
 
