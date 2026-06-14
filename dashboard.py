@@ -5281,7 +5281,7 @@ select:focus{border-color:#58a6ff;}
     <div class="overlay-msg" id="overlay">Select index, expiry &amp; strikes then click Load</div>
   </div>
   <div class="panel" id="panel-macd">
-    <div class="panel-label">MACD (12,26,9) &nbsp;&#x2013;&nbsp; <span style="color:#2962ff;">&#x25A0;</span> MACD &nbsp;<span style="color:#ff6d00;">&#x25A0;</span> Signal
+    <div class="panel-label">MACD (12,26,9) &nbsp;&#x2013;&nbsp; <span style="color:#ff6d00;">&#x25A0;</span> MACD &nbsp;<span style="color:#2962ff;">&#x25A0;</span> Signal
       <button class="exp-btn" onclick="expandPane('macd')" title="Expand">&#x2922;</button></div>
     <div id="chart-macd" style="width:100%;height:100%;"></div>
   </div>
@@ -5333,12 +5333,12 @@ function initCharts() {
         {color:AMBER, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
          crosshairMarkerVisible:false});
 
-    // MACD: Signal orange histogram behind, MACD blue histogram on top
+    // MACD: MACD orange histogram behind, Signal blue histogram on top
     _cMacd = LightweightCharts.createChart(macdEl, _base(false));
-    _sMacdSigBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
+    _sMacdBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
         {color:'#ff6d00', priceLineVisible:false, lastValueVisible:false,
          crosshairMarkerVisible:false});
-    _sMacdBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
+    _sMacdSigBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
         {color:'#2962ff', priceLineVisible:false, lastValueVisible:false,
          crosshairMarkerVisible:false});
 
