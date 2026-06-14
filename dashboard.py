@@ -5363,38 +5363,35 @@ function initCharts() {
     syncCrosshairs();
 }
 
-// ── Bidirectional crosshair sync across all 3 panels ─────────────
-// Vertical line moves simultaneously in all panes; date shows on RSI.
-var _xhSyncing = false;
+// ── Crosshair sync — official LW Charts pattern ───────────────────
+function getCrossDataPoint(series, param) {
+    if (!param.time) return null;
+    return param.seriesData.get(series) || null;
+}
+function applySync(chart, series, dp) {
+    if (dp) {
+        var price = dp.close !== undefined ? dp.close : dp.value;
+        chart.setCrosshairPosition(price, dp.time, series);
+    } else {
+        chart.clearCrosshairPosition();
+    }
+}
 function syncCrosshairs() {
-    var panels = [
-        {c:_cMain, s:_sCandle,   price:function(d){return d?d.close:null;}},
-        {c:_cMacd, s:_sMacdBars, price:function(d){return d?d.value:null;}},
-        {c:_cRsi,  s:_sRsi,      price:function(d){return d?d.value:50;}},
-    ];
-    panels.forEach(function(src, si) {
-        src.c.subscribeCrosshairMove(function(p) {
-            if (_xhSyncing) return;
-            // Update stat bar from main chart candle
-            if (si===0 && p.time) {
-                var b = p.seriesData && p.seriesData.get(_sCandle);
-                if (b) document.getElementById('s-ltp').textContent = b.close.toFixed(2);
-            }
-            _xhSyncing = true;
-            panels.forEach(function(dst, di) {
-                if (di === si) return;
-                if (!p.time || p.logical == null) {
-                    try { dst.c.clearCrosshairPosition(); } catch(e) {}
-                } else {
-                    try {
-                        var bar = dst.s.dataByIndex(p.logical);
-                        var pv  = dst.price(bar);
-                        if (pv != null) dst.c.setCrosshairPosition(pv, p.time, dst.s);
-                    } catch(e) {}
-                }
-            });
-            _xhSyncing = false;
-        });
+    _cMain.subscribeCrosshairMove(function(p) {
+        var dp = getCrossDataPoint(_sCandle, p);
+        if (dp && p.time) document.getElementById('s-ltp').textContent = dp.close.toFixed(2);
+        applySync(_cMacd, _sMacdBars, dp);
+        applySync(_cRsi,  _sRsi,      dp);
+    });
+    _cMacd.subscribeCrosshairMove(function(p) {
+        var dp = getCrossDataPoint(_sMacdBars, p);
+        applySync(_cMain, _sCandle, dp);
+        applySync(_cRsi,  _sRsi,    dp);
+    });
+    _cRsi.subscribeCrosshairMove(function(p) {
+        var dp = getCrossDataPoint(_sRsi, p);
+        applySync(_cMain, _sCandle,   dp);
+        applySync(_cMacd, _sMacdBars, dp);
     });
 }
 
