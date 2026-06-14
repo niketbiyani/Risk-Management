@@ -5095,36 +5095,60 @@ def api_straddle_chart():
     if not ce_id or not pe_id:
         return jsonify({"error": f"Could not find instruments: CE {underlying} {ce_strike} / PE {underlying} {pe_strike} exp {expiry}"}), 404
 
-    # Fetch 1m candles for both legs (today + yesterday for context)
-    from datetime import timedelta
-    ist = timezone(timedelta(hours=5, minutes=30))
-    today = datetime.now(ist).strftime("%Y-%m-%d")
-    yesterday = (datetime.now(ist) - timedelta(days=1)).strftime("%Y-%m-%d")
+    # Fetch 1m candles for both legs (today + previous trading day)
+    from datetime import timedelta, date as _date, datetime as _dt
+
+    def _prev_weekday(d):
+        prev = d - timedelta(days=1)
+        while prev.weekday() >= 5:
+            prev -= timedelta(days=1)
+        return prev
+
+    today_d    = _date.today()
+    prev_d     = _prev_weekday(today_d)
+    today_str  = today_d.strftime("%Y-%m-%d")
+    prev_str   = prev_d.strftime("%Y-%m-%d")
+
+    def _parse_raw(raw):
+        """Parse get_chart_data response into {unix_ts: {o,h,l,c}} dict."""
+        data = raw if isinstance(raw, dict) else {}
+        if "data" in data and isinstance(data["data"], dict):
+            data = data["data"]
+        timestamps = data.get("timestamp", data.get("start_Time", []))
+        opens  = data.get("open",  [])
+        highs  = data.get("high",  [])
+        lows   = data.get("low",   [])
+        closes = data.get("close", [])
+        result = {}
+        for i, ts in enumerate(timestamps):
+            try:
+                unix_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp())
+            except (ValueError, TypeError):
+                try:
+                    unix_ts = int(ts)
+                except (ValueError, TypeError):
+                    continue
+            o = opens[i]  if i < len(opens)  else 0
+            h = highs[i]  if i < len(highs)  else 0
+            l = lows[i]   if i < len(lows)   else 0
+            c = closes[i] if i < len(closes) else 0
+            if o > 0 and h > 0 and l > 0 and c > 0:
+                result[unix_ts] = {"o": o, "h": h, "l": l, "c": c}
+        return result
 
     def fetch_candles(sec_id):
         try:
-            raw = _monitor.api.get_chart_data(
-                security_id=sec_id,
-                exchange_segment=exchange_segment,
-                instrument_type="OPTIDX",
-                from_date=yesterday,
-                to_date=today,
-            )
-            data = raw.get("data", {}) if isinstance(raw, dict) else {}
-            timestamps = data.get("timestamp", [])
-            opens  = data.get("open",  [])
-            highs  = data.get("high",  [])
-            lows   = data.get("low",   [])
-            closes = data.get("close", [])
-            result = {}
-            for i, ts in enumerate(timestamps):
-                result[int(ts)] = {
-                    "o": opens[i]  if i < len(opens)  else 0,
-                    "h": highs[i]  if i < len(highs)  else 0,
-                    "l": lows[i]   if i < len(lows)   else 0,
-                    "c": closes[i] if i < len(closes) else 0,
-                }
-            return result
+            bars = {}
+            for from_d, to_d in [(prev_str, prev_str), (today_str, today_str)]:
+                raw = _monitor.api.get_chart_data(
+                    security_id=sec_id,
+                    exchange_segment=exchange_segment,
+                    instrument_type="OPTIDX",
+                    from_date=from_d,
+                    to_date=to_d,
+                )
+                bars.update(_parse_raw(raw))
+            return bars
         except Exception as e:
             logger.warning("straddle fetch_candles %s: %s", sec_id, e)
             return {}
