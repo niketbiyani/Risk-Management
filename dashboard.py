@@ -428,6 +428,7 @@ DASHBOARD_HTML = """
             </div>
             <a href="/journal" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Open Trade Journal">&#x1F4D3; Journal</a>
             <a href="/analytics" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Analytics">&#x1F4CA; Analytics</a>
+            <a href="/straddle" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Straddle Chart">&#x1F4C8; Straddle</a>
             <span id="token-status" style="font-size:12px;padding:4px 10px;border-radius:12px;cursor:pointer;border:1px solid #30363d;color:#8b949e;" onclick="refreshToken()" title="Click to refresh token">API: ...</span>
             <span id="status-badge" class="status-badge status-active">ACTIVE</span>
         </div>
@@ -4987,6 +4988,388 @@ def api_chart_nifty():
             pass
     candles.sort(key=lambda c: c["time"])
     return jsonify({"candles": candles[-150:]})
+
+
+@app.route("/straddle")
+def straddle_page():
+    return _build_straddle_page()
+
+
+@app.route("/api/straddle/expiries")
+def api_straddle_expiries():
+    """Return sorted list of expiry dates for a given underlying."""
+    underlying = request.args.get("underlying", "NIFTY").upper()
+    exchange = "BSE" if underlying in ("SENSEX", "BANKEX") else "NSE"
+    if not _instrument_cache:
+        return jsonify([])
+    seen = set()
+    for inst in _instrument_cache._instruments:
+        if inst.instrument_type != "OPTIDX":
+            continue
+        if not inst.trading_symbol.upper().startswith(underlying + "-"):
+            continue
+        if getattr(inst, "exchange", "NSE") != exchange:
+            continue
+        if inst.expiry_date:
+            seen.add(inst.expiry_date[:10])
+    return jsonify(sorted(seen))
+
+
+@app.route("/api/straddle/chart")
+def api_straddle_chart():
+    """
+    Fetch combined CE+PE intraday 1m candles and resample to requested timeframe.
+    Returns [{time, open, high, low, close}] summed across both legs.
+    """
+    underlying = request.args.get("underlying", "NIFTY").upper()
+    expiry     = request.args.get("expiry", "")
+    try:
+        strike = float(request.args.get("strike", 0))
+    except ValueError:
+        return jsonify({"error": "invalid strike"}), 400
+    tf = int(request.args.get("tf", 1))  # 1, 3, or 5
+
+    exchange = "BSE" if underlying in ("SENSEX", "BANKEX") else "NSE"
+    exchange_segment = "BSE_FNO" if exchange == "BSE" else "NSE_FNO"
+
+    # Find CE and PE security IDs from instrument cache
+    ce_id = pe_id = None
+    if _instrument_cache:
+        for inst in _instrument_cache._instruments:
+            if inst.instrument_type != "OPTIDX":
+                continue
+            if not inst.trading_symbol.upper().startswith(underlying + "-"):
+                continue
+            if not inst.expiry_date or inst.expiry_date[:10] != expiry:
+                continue
+            if getattr(inst, "exchange", "NSE") != exchange:
+                continue
+            if abs(inst.strike_price - strike) < 0.01:
+                if inst.option_type == "CE":
+                    ce_id = inst.security_id
+                elif inst.option_type == "PE":
+                    pe_id = inst.security_id
+
+    if not ce_id or not pe_id:
+        return jsonify({"error": f"Could not find CE/PE for {underlying} {strike} exp {expiry}"}), 404
+
+    # Fetch 1m candles for both legs (today + yesterday for context)
+    from datetime import timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    today = datetime.now(ist).strftime("%Y-%m-%d")
+    yesterday = (datetime.now(ist) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    def fetch_candles(sec_id):
+        try:
+            raw = _monitor.api.get_chart_data(
+                security_id=sec_id,
+                exchange_segment=exchange_segment,
+                instrument_type="OPTIDX",
+                from_date=yesterday,
+                to_date=today,
+            )
+            data = raw.get("data", {}) if isinstance(raw, dict) else {}
+            timestamps = data.get("timestamp", [])
+            opens  = data.get("open",  [])
+            highs  = data.get("high",  [])
+            lows   = data.get("low",   [])
+            closes = data.get("close", [])
+            result = {}
+            for i, ts in enumerate(timestamps):
+                result[int(ts)] = {
+                    "o": opens[i]  if i < len(opens)  else 0,
+                    "h": highs[i]  if i < len(highs)  else 0,
+                    "l": lows[i]   if i < len(lows)   else 0,
+                    "c": closes[i] if i < len(closes) else 0,
+                }
+            return result
+        except Exception as e:
+            logger.warning("straddle fetch_candles %s: %s", sec_id, e)
+            return {}
+
+    ce_bars = fetch_candles(ce_id)
+    pe_bars = fetch_candles(pe_id)
+
+    # Merge on common timestamps
+    common_ts = sorted(set(ce_bars) & set(pe_bars))
+    merged = []
+    for ts in common_ts:
+        ce = ce_bars[ts]
+        pe = pe_bars[ts]
+        merged.append({
+            "time":  ts,
+            "open":  round(ce["o"] + pe["o"], 2),
+            "high":  round(ce["h"] + pe["h"], 2),
+            "low":   round(ce["l"] + pe["l"], 2),
+            "close": round(ce["c"] + pe["c"], 2),
+        })
+
+    # Resample to tf minutes
+    if tf > 1:
+        resampled = []
+        i = 0
+        while i < len(merged):
+            bucket = merged[i:i+tf]
+            resampled.append({
+                "time":  bucket[0]["time"],
+                "open":  bucket[0]["open"],
+                "high":  max(b["high"] for b in bucket),
+                "low":   min(b["low"]  for b in bucket),
+                "close": bucket[-1]["close"],
+            })
+            i += tf
+        merged = resampled
+
+    return jsonify({"candles": merged, "ce_id": ce_id, "pe_id": pe_id})
+
+
+def _build_straddle_page():
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Straddle Chart</title>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;height:100vh;display:flex;flex-direction:column;}
+.header{background:#161b22;border-bottom:1px solid #21262d;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;}
+.header h1{font-size:14px;font-weight:700;color:#e6edf3;white-space:nowrap;}
+.header a{font-size:12px;color:#8b949e;text-decoration:none;padding:3px 8px;border:1px solid #30363d;border-radius:5px;white-space:nowrap;}
+select,input[type=number],input[type=text]{background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:5px;font-size:12px;outline:none;}
+select:focus,input:focus{border-color:#58a6ff;}
+.btn{padding:5px 14px;border-radius:5px;border:none;cursor:pointer;font-size:12px;font-weight:600;}
+.btn-primary{background:#238636;color:#fff;}
+.btn-primary:hover{background:#2ea043;}
+.btn-neutral{background:#21262d;color:#e6edf3;border:1px solid #30363d;}
+.btn-neutral:hover{background:#30363d;}
+.tf-btn{padding:4px 10px;border-radius:4px;border:1px solid #30363d;background:none;color:#8b949e;cursor:pointer;font-size:12px;font-weight:600;}
+.tf-btn.active{background:#1f6feb;border-color:#1f6feb;color:#fff;}
+.controls{background:#161b22;border-bottom:1px solid #21262d;padding:8px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0;}
+.stat-bar{background:#0d1117;border-bottom:1px solid #21262d;padding:6px 20px;display:flex;gap:24px;align-items:center;font-size:12px;flex-shrink:0;}
+.stat-item{display:flex;gap:6px;align-items:baseline;}
+.stat-label{color:#8b949e;font-size:11px;}
+.stat-val{font-weight:700;}
+.positive{color:#3fb950;}.negative{color:#f85149;}.neutral{color:#e6edf3;}
+#chart-container{flex:1;position:relative;min-height:0;}
+#chart{width:100%;height:100%;}
+#status-msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#8b949e;font-size:13px;pointer-events:none;}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>&#x1F4C8; Straddle Chart</h1>
+  <a href="/">&#x2190; Dashboard</a>
+  <div style="margin-left:auto;font-size:11px;color:#484f58;" id="last-updated"></div>
+</div>
+
+<div class="controls">
+  <select id="ctrl-underlying" onchange="onUnderlyingChange()">
+    <option value="NIFTY">NIFTY</option>
+    <option value="SENSEX">SENSEX</option>
+  </select>
+  <select id="ctrl-expiry"><option value="">-- Expiry --</option></select>
+  <input id="ctrl-strike" type="number" placeholder="Strike" step="50" style="width:90px;">
+  <div style="display:flex;gap:4px;">
+    <button class="tf-btn active" data-tf="1" onclick="setTf(1)">1m</button>
+    <button class="tf-btn" data-tf="3" onclick="setTf(3)">3m</button>
+    <button class="tf-btn" data-tf="5" onclick="setTf(5)">5m</button>
+  </div>
+  <button class="btn btn-primary" onclick="loadChart()">Load</button>
+  <button class="btn btn-neutral" onclick="autoRefresh()">&#x21bb; Refresh</button>
+  <span id="ctrl-error" style="color:#f85149;font-size:11px;"></span>
+</div>
+
+<div class="stat-bar" id="stat-bar" style="display:none;">
+  <div class="stat-item"><span class="stat-label">Straddle LTP</span><span class="stat-val neutral" id="s-ltp">-</span></div>
+  <div class="stat-item"><span class="stat-label">Day Open</span><span class="stat-val neutral" id="s-open">-</span></div>
+  <div class="stat-item"><span class="stat-label">Day High</span><span class="stat-val positive" id="s-high">-</span></div>
+  <div class="stat-item"><span class="stat-label">Day Low</span><span class="stat-val negative" id="s-low">-</span></div>
+  <div class="stat-item"><span class="stat-label">Change</span><span class="stat-val" id="s-chg">-</span></div>
+  <div class="stat-item"><span class="stat-label">CE</span><span class="stat-val neutral" id="s-ce">-</span></div>
+  <div class="stat-item"><span class="stat-label">PE</span><span class="stat-val neutral" id="s-pe">-</span></div>
+</div>
+
+<div id="chart-container">
+  <div id="chart"></div>
+  <div id="status-msg">Select underlying, expiry and strike then click Load</div>
+</div>
+
+<script>
+var _chart = null;
+var _series = null;
+var _tf = 1;
+var _candles = [];
+var _ceId = null;
+var _peId = null;
+var _refreshTimer = null;
+
+// ── Init chart ──────────────────────────────────────────────────────
+window.onload = function() {
+    initChart();
+    onUnderlyingChange();
+    window.addEventListener('resize', function() {
+        if (_chart) _chart.applyOptions({width: document.getElementById('chart').clientWidth});
+    });
+};
+
+function initChart() {
+    var container = document.getElementById('chart');
+    _chart = LightweightCharts.createChart(container, {
+        width:  container.clientWidth,
+        height: container.clientHeight,
+        layout: {
+            background: {color: '#0d1117'},
+            textColor:  '#8b949e',
+        },
+        grid: {
+            vertLines: {color: '#161b22'},
+            horzLines: {color: '#161b22'},
+        },
+        crosshair: {mode: LightweightCharts.CrosshairMode.Normal},
+        rightPriceScale: {borderColor: '#21262d'},
+        timeScale: {borderColor: '#21262d', timeVisible: true, secondsVisible: false},
+    });
+
+    _series = _chart.addSeries(LightweightCharts.CandlestickSeries, {
+        upColor:          '#3fb950',
+        downColor:        '#f85149',
+        borderUpColor:    '#3fb950',
+        borderDownColor:  '#f85149',
+        wickUpColor:      '#3fb950',
+        wickDownColor:    '#f85149',
+    });
+
+    // Crosshair tooltip
+    _chart.subscribeCrosshairMove(function(param) {
+        if (!param.time || !param.seriesData) return;
+        var bar = param.seriesData.get(_series);
+        if (!bar) return;
+        document.getElementById('s-ltp').textContent = bar.close.toFixed(2);
+    });
+}
+
+// ── Controls ────────────────────────────────────────────────────────
+function onUnderlyingChange() {
+    var u = document.getElementById('ctrl-underlying').value;
+    var expSel = document.getElementById('ctrl-expiry');
+    expSel.innerHTML = '<option value="">Loading...</option>';
+    fetch('/api/straddle/expiries?underlying='+u)
+        .then(function(r){return r.json();})
+        .then(function(dates) {
+            expSel.innerHTML = '<option value="">-- Expiry --</option>';
+            dates.forEach(function(d) {
+                var opt = document.createElement('option');
+                opt.value = d;
+                opt.textContent = d;
+                expSel.appendChild(opt);
+            });
+            // Default to nearest expiry
+            if (dates.length > 0) expSel.value = dates[0];
+        })
+        .catch(function(){ expSel.innerHTML = '<option value="">Error</option>'; });
+}
+
+function setTf(tf) {
+    _tf = tf;
+    document.querySelectorAll('.tf-btn').forEach(function(b) {
+        b.classList.toggle('active', parseInt(b.dataset.tf) === tf);
+    });
+    if (_candles.length > 0) applyTf();
+}
+
+// ── Load ─────────────────────────────────────────────────────────────
+function loadChart() {
+    var u  = document.getElementById('ctrl-underlying').value;
+    var ex = document.getElementById('ctrl-expiry').value;
+    var st = document.getElementById('ctrl-strike').value;
+    var errEl = document.getElementById('ctrl-error');
+    errEl.textContent = '';
+
+    if (!ex) { errEl.textContent = 'Select an expiry'; return; }
+    if (!st)  { errEl.textContent = 'Enter a strike';  return; }
+
+    document.getElementById('status-msg').textContent = 'Loading...';
+    if (_series) _series.setData([]);
+
+    fetch('/api/straddle/chart?underlying='+u+'&expiry='+ex+'&strike='+st+'&tf='+_tf)
+        .then(function(r){return r.json();})
+        .then(function(d) {
+            if (d.error) { errEl.textContent = d.error; document.getElementById('status-msg').textContent = d.error; return; }
+            _candles = d.candles || [];
+            _ceId = d.ce_id;
+            _peId = d.pe_id;
+            document.getElementById('status-msg').textContent = '';
+            renderCandles(_candles);
+            updateStats(_candles);
+            document.getElementById('stat-bar').style.display = '';
+            var now = new Date();
+            document.getElementById('last-updated').textContent =
+                'Updated ' + now.getHours() + ':' + String(now.getMinutes()).padStart(2,'0') + ':' + String(now.getSeconds()).padStart(2,'0');
+            scheduleRefresh();
+        })
+        .catch(function(e) {
+            errEl.textContent = 'Fetch error: ' + e;
+            document.getElementById('status-msg').textContent = 'Error loading data';
+        });
+}
+
+function applyTf() {
+    // Re-resample raw 1m candles client-side for tf switching without refetch
+    // (server already returns correct tf; re-fetch when tf changes)
+    loadChart();
+}
+
+function renderCandles(candles) {
+    if (!_series || candles.length === 0) return;
+    _series.setData(candles);
+    _chart.timeScale().fitContent();
+}
+
+function updateStats(candles) {
+    if (!candles || candles.length === 0) return;
+    var todayStr = new Date().toISOString().slice(0,10);
+    // find first bar of today
+    var todayBars = candles.filter(function(c) {
+        return new Date(c.time * 1000).toISOString().slice(0,10) === todayStr;
+    });
+    if (todayBars.length === 0) todayBars = candles;
+    var dayOpen  = todayBars[0].open;
+    var dayHigh  = Math.max.apply(null, todayBars.map(function(c){return c.high;}));
+    var dayLow   = Math.min.apply(null, todayBars.map(function(c){return c.low;}));
+    var lastClose= todayBars[todayBars.length-1].close;
+    var chg      = lastClose - dayOpen;
+    var chgPct   = dayOpen > 0 ? (chg/dayOpen*100) : 0;
+
+    document.getElementById('s-ltp').textContent  = lastClose.toFixed(2);
+    document.getElementById('s-open').textContent = dayOpen.toFixed(2);
+    document.getElementById('s-high').textContent = dayHigh.toFixed(2);
+    document.getElementById('s-low').textContent  = dayLow.toFixed(2);
+    var chgEl = document.getElementById('s-chg');
+    chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + ' (' + chgPct.toFixed(1) + '%)';
+    chgEl.className = 'stat-val ' + (chg >= 0 ? 'positive' : 'negative');
+}
+
+// ── Auto-refresh every 60s during market hours ─────────────────────
+function scheduleRefresh() {
+    if (_refreshTimer) clearTimeout(_refreshTimer);
+    _refreshTimer = setTimeout(function() {
+        var now = new Date();
+        var h = now.getUTCHours() + 5, m = now.getUTCMinutes() + 30;
+        if (m >= 60) { h++; m -= 60; }
+        var mins = h * 60 + m;
+        if (mins >= 555 && mins <= 930) {  // 9:15–15:30 IST
+            loadChart();
+        } else {
+            scheduleRefresh();  // keep the timer alive, check again in 60s
+        }
+    }, 60000);
+}
+
+function autoRefresh() { loadChart(); }
+</script>
+</body>
+</html>'''
 
 
 @app.route("/journal")
