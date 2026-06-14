@@ -5096,7 +5096,7 @@ def api_straddle_chart():
         return jsonify({"error": f"Could not find instruments: CE {underlying} {ce_strike} / PE {underlying} {pe_strike} exp {expiry}"}), 404
 
     # Fetch 1m candles for both legs (today + previous trading day)
-    from datetime import timedelta, date as _date, datetime as _dt
+    from datetime import timedelta, date as _date, datetime as _dt, timezone
 
     def _prev_weekday(d):
         prev = d - timedelta(days=1)
@@ -5104,10 +5104,10 @@ def api_straddle_chart():
             prev -= timedelta(days=1)
         return prev
 
-    today_d    = _date.today()
+    # Use IST date — VPS is UTC; after 18:30 UTC the IST date has already rolled over
+    _ist = timezone(timedelta(hours=5, minutes=30))
+    today_d    = _dt.now(_ist).date()
     prev_d     = _prev_weekday(today_d)
-    today_str  = today_d.strftime("%Y-%m-%d")
-    prev_str   = prev_d.strftime("%Y-%m-%d")
 
     def _parse_raw(raw):
         """Parse get_chart_data response into {unix_ts: {o,h,l,c}} dict."""
@@ -5139,22 +5139,25 @@ def api_straddle_chart():
     def fetch_candles(sec_id):
         try:
             bars = {}
-            # Fetch up to 30 trading days back in weekly chunks to stay within Dhan limits
+            empty_streak = 0
             end_d = today_d
-            for _ in range(6):  # 6 chunks × ~5 days ≈ 30 trading days
-                chunk_end = end_d
+            for _ in range(5):  # up to ~35 calendar days back
                 chunk_start = end_d - timedelta(days=7)
                 raw = _monitor.api.get_chart_data(
                     security_id=sec_id,
                     exchange_segment=exchange_segment,
                     instrument_type="OPTIDX",
                     from_date=chunk_start.strftime("%Y-%m-%d"),
-                    to_date=chunk_end.strftime("%Y-%m-%d"),
+                    to_date=end_d.strftime("%Y-%m-%d"),
                 )
                 parsed = _parse_raw(raw)
-                bars.update(parsed)
-                if not parsed:
-                    break  # no more data
+                if parsed:
+                    bars.update(parsed)
+                    empty_streak = 0
+                else:
+                    empty_streak += 1
+                    if empty_streak >= 2:
+                        break  # two consecutive empty chunks → no more data
                 end_d = chunk_start - timedelta(days=1)
             return bars
         except Exception as e:
