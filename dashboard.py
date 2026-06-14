@@ -5285,7 +5285,7 @@ select:focus{border-color:#58a6ff;}
     <div class="overlay-msg" id="overlay">Select index, expiry &amp; strikes then click Load</div>
   </div>
   <div class="panel" id="panel-macd">
-    <div class="panel-label">MACD (12,26,9) &nbsp;&#x2013;&nbsp; <span style="color:#26a69a;">&#x25A0;</span><span style="color:#4db6ac;">&#x25A0;</span> MACD &nbsp;<span style="color:#ff6d00;">&#x25A0;</span> Signal</div>
+    <div class="panel-label">MACD (12,26,9) &nbsp;&#x2013;&nbsp; <span style="color:#2962ff;">&#x25A0;</span> MACD &nbsp;<span style="color:#ff6d00;">&#x25A0;</span> Signal</div>
     <div id="chart-macd" style="width:100%;height:100%;"></div>
   </div>
   <div class="panel" id="panel-rsi">
@@ -5302,12 +5302,6 @@ var _cRsi=null, _sRsi=null, _sRsiOb=null, _sRsiOs=null;
 
 var BG='#0d1117', GRID='#161b22', BORDER='#21262d', TEXT='#8b949e';
 var GRN='#3fb950', RED='#f85149', BLUE='#3db8f5', AMBER='#f0883e';
-// MACD 4-colour momentum scheme (matches TradingView screenshot)
-var MC0='#26a69a';   // positive, rising
-var MC1='#4db6ac';   // positive, falling
-var MC2='#e57373';   // negative, rising (less negative)
-var MC3='#ef5350';   // negative, falling (more negative)
-var MACD_SIG_C='#ff6d00'; // signal histogram colour
 
 function _base(showTimeAxis) {
     return {
@@ -5341,13 +5335,13 @@ function initCharts() {
         {color:AMBER, lineWidth:1, priceLineVisible:false, lastValueVisible:false,
          crosshairMarkerVisible:false});
 
-    // MACD: MACD values as 4-colour histogram, signal as orange histogram
+    // MACD: Signal orange histogram behind, MACD blue histogram on top
     _cMacd = LightweightCharts.createChart(macdEl, _base(false));
     _sMacdSigBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
-        {color:MACD_SIG_C, priceLineVisible:false, lastValueVisible:false,
+        {color:'#ff6d00', priceLineVisible:false, lastValueVisible:false,
          crosshairMarkerVisible:false});
     _sMacdBars = _cMacd.addSeries(LightweightCharts.HistogramSeries,
-        {color:MC0, priceLineVisible:false, lastValueVisible:false,
+        {color:'#2962ff', priceLineVisible:false, lastValueVisible:false,
          crosshairMarkerVisible:false});
 
     // RSI: shows time axis at bottom — blue, thin, no dots
@@ -5580,16 +5574,10 @@ function doLoad() {
             _sEma20.setData(times.map(function(t,i){return {time:t,value:e20[i]};}));
             _sEma50.setData(times.map(function(t,i){return {time:t,value:e50[i]};}));
 
-            // MACD — both as histograms; 4-colour momentum on MACD bars
+            // MACD — Signal (orange) behind, MACD (blue) on top
             var md=calcMacd(closes,12,26,9);
-            _sMacdBars.setData(times.map(function(t,i){
-                var v=md.macd[i], prev=i>0?md.macd[i-1]:v;
-                var c = v>=0 ? (v>=prev ? MC0 : MC1) : (v>=prev ? MC2 : MC3);
-                return {time:t, value:v, color:c};
-            }));
-            _sMacdSigBars.setData(times.map(function(t,i){
-                return {time:t, value:md.signal[i], color:MACD_SIG_C};
-            }));
+            _sMacdSigBars.setData(times.map(function(t,i){return {time:t,value:md.signal[i]};}));
+            _sMacdBars.setData(times.map(function(t,i){return {time:t,value:md.macd[i]};}));
 
             // RSI — skip null leading values, then OB/OS spans same range
             var rsiData=calcRsi(closes,14);
