@@ -6261,14 +6261,14 @@ function adaptiveClusterWindow(trades) {
     var gaps = [];
     for (var i = 1; i < trades.length; i++)
         gaps.push(timeToMin(trades[i].entry_time) - timeToMin(trades[i-1].entry_time));
-    // Exclude "break" gaps (>30 min — lunch, morning→afternoon, overnight) so the
-    // threshold reflects within-session trading pace, not session-level pauses.
+    // Exclude session-level breaks (>30 min) so threshold reflects trading pace only
     var sessionGaps = gaps.filter(function(g){ return g >= 0 && g <= 30; });
     if (sessionGaps.length === 0) return 5;
     sessionGaps.sort(function(a,b){return a-b;});
-    var median = sessionGaps[Math.floor(sessionGaps.length/2)];
-    // Use median × 1.5 but cap tighter so bursts split clearly
-    var w = Math.max(1.5, Math.min(10, median * 1.5));
+    // Split at P70 — the top 30% of gaps become cluster boundaries.
+    // This always creates natural breaks at the widest pauses in the session.
+    var p70idx = Math.floor(sessionGaps.length * 0.70);
+    var w = Math.max(1, Math.min(10, sessionGaps[p70idx]));
     return parseFloat(w.toFixed(1));
 }
 
