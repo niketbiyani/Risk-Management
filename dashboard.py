@@ -5167,10 +5167,12 @@ def api_straddle_chart():
         comb_c = ce["c"] + pe["c"]
         body_hi = max(comb_o, comb_c)
         body_lo = min(comb_o, comb_c)
-        # CE and PE are inversely correlated — summing both highs/lows overstates wicks.
-        # Use the larger per-leg wick extension as the combined wick (conservative, realistic).
-        wick_up  = max(ce["h"] - max(ce["o"], ce["c"]), pe["h"] - max(pe["o"], pe["c"]))
-        wick_dn  = max(min(ce["o"], ce["c"]) - ce["l"], min(pe["o"], pe["c"]) - pe["l"])
+        # CE and PE are inversely correlated on spot moves — if CE wicks high, PE wicks low
+        # and the combined net move is ~zero. Only IV-expansion events move both legs in the
+        # same direction simultaneously. Use min() so a wick only appears when BOTH legs wick
+        # the same way (IV event). Spot-driven wicks cancel and show as zero (no artifact).
+        wick_up  = min(ce["h"] - max(ce["o"], ce["c"]), pe["h"] - max(pe["o"], pe["c"]))
+        wick_dn  = min(min(ce["o"], ce["c"]) - ce["l"], min(pe["o"], pe["c"]) - pe["l"])
         merged.append({
             "time":  ts,
             "open":  round(comb_o, 2),
