@@ -5884,16 +5884,10 @@ tr:hover td{background:#1c2128;}
       <div id="thrash-content"></div>
     </div>
 
-    <!-- Running P&L scatter + bounce-back -->
-    <div id="scatter-section" style="display:none;">
-      <div class="section-hdr scatter-hdr">Running P&L at Entry vs Trade P&L</div>
-      <div id="scatter-canvas" style="width:100%;min-height:200px;"></div>
-      <div style="margin-top:4px;font-size:10px;color:#8b949e;display:flex;gap:14px;flex-wrap:wrap;">
-        <span><span class="legend-dot" style="background:#3fb950;"></span>Win</span>
-        <span><span class="legend-dot" style="background:#f85149;"></span>Loss</span>
-        <span><span class="legend-dot" style="background:#f0883e;"></span>Re-entry ≤3 min after loss</span>
-      </div>
-      <div id="bounce-section"></div>
+    <!-- Trade clusters -->
+    <div id="cluster-section" style="display:none;">
+      <div class="section-hdr" style="color:#a371f7;">&#x29D6; Trade Clusters <span id="cluster-badge" style="font-size:10px;font-weight:400;color:#8b949e;margin-left:6px;"></span></div>
+      <div id="cluster-content"></div>
     </div>
   </div>
 
@@ -6126,37 +6120,17 @@ function renderDayTrades(trades) {
     var el = document.getElementById('day-detail-trades');
     if (!trades || trades.length === 0) {
         el.innerHTML = '<div style="color:#484f58;padding:12px;text-align:center;">No trade detail available.</div>';
-        renderThrashSessions([]);
-        renderScatter([]);
+        document.getElementById('thrash-section').style.display = 'none';
+        document.getElementById('cluster-section').style.display = 'none';
         return;
     }
-    // Sort by entry_time ascending
     var sorted = trades.slice().sort(function(a,b){ return (a.entry_time||'').localeCompare(b.entry_time||''); });
-    var html = '<table><thead><tr><th>Entry</th><th>Exit</th><th>Instrument</th><th>Entry &#8377;</th><th>Exit &#8377;</th><th>Qty</th><th>P&L</th></tr></thead><tbody>';
-    for (var i = 0; i < sorted.length; i++) {
-        var t = sorted[i];
-        var pnl = t.pnl != null ? t.pnl : null;
-        var cls = pnl == null ? '' : (pnl >= 0 ? 'positive' : 'negative');
-        var otype = (t.option_type||'').toUpperCase();
-        var tag = otype ? '<span class="tag '+(otype==='CE'?'tag-ce':'tag-pe')+'">'+otype+'</span> ' : '';
-        var sym = tag + (t.strike ? t.strike : (t.symbol||t.underlying||'-'));
-        html += '<tr>';
-        html += '<td style="white-space:nowrap;">'+(t.entry_time||'-')+'</td>';
-        html += '<td style="white-space:nowrap;color:#8b949e;">'+(t.exit_time||'-')+'</td>';
-        html += '<td>'+sym+'</td>';
-        html += '<td>&#8377;'+(t.entry_price!=null?t.entry_price.toFixed(2):'-')+'</td>';
-        html += '<td>&#8377;'+(t.exit_price!=null?t.exit_price.toFixed(2):'-')+'</td>';
-        html += '<td>'+(t.quantity||'-')+'</td>';
-        html += '<td class="'+cls+'" style="font-weight:600;">'+(pnl!=null?fmt(pnl):'-')+'</td>';
-        html += '</tr>';
-    }
-    html += '</tbody></table>';
-    el.innerHTML = html;
+    el.innerHTML = tradeTable(sorted);
     renderThrashSessions(sorted);
-    renderScatter(sorted);
+    renderClusters(sorted);
 }
 
-// ── Thrash / Scatter / Bounce-back ──────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────
 
 function timeToMin(t) {
     if (!t) return 0;
@@ -6164,20 +6138,61 @@ function timeToMin(t) {
     return parseInt(p[0]||0)*60 + parseInt(p[1]||0) + parseInt(p[2]||0)/60;
 }
 
+function tradeTable(trades) {
+    if (!trades || trades.length === 0) return '<div style="color:#484f58;font-size:11px;padding:8px;">No trades.</div>';
+    var html = '<table style="margin-top:6px;"><thead><tr><th>Entry</th><th>Exit</th><th>Instrument</th><th>Entry &#8377;</th><th>Exit &#8377;</th><th>Qty</th><th>P&L</th></tr></thead><tbody>';
+    trades.forEach(function(t) {
+        var pnl = t.pnl != null ? t.pnl : null;
+        var cls = pnl == null ? '' : (pnl >= 0 ? 'positive' : 'negative');
+        var otype = (t.option_type||'').toUpperCase();
+        var tag = otype ? '<span class="tag '+(otype==='CE'?'tag-ce':'tag-pe')+'">'+otype+'</span> ' : '';
+        html += '<tr>';
+        html += '<td style="white-space:nowrap;">'+(t.entry_time||'-')+'</td>';
+        html += '<td style="white-space:nowrap;color:#8b949e;">'+(t.exit_time||'-')+'</td>';
+        html += '<td>'+tag+(t.strike||t.symbol||t.underlying||'-')+'</td>';
+        html += '<td>&#8377;'+(t.entry_price!=null?t.entry_price.toFixed(2):'-')+'</td>';
+        html += '<td>&#8377;'+(t.exit_price!=null?t.exit_price.toFixed(2):'-')+'</td>';
+        html += '<td>'+(t.quantity||'-')+'</td>';
+        html += '<td class="'+cls+'" style="font-weight:600;">'+(pnl!=null?fmt(pnl):'-')+'</td>';
+        html += '</tr>';
+    });
+    return html + '</tbody></table>';
+}
+
+// ── Thrash sessions (same instrument, adaptive window) ───────────────
+
+function adaptiveThrashWindow(trades) {
+    // Compute gaps between consecutive same-symbol trades, use median * 1.5 as threshold
+    var gaps = [];
+    var bySymbol = {};
+    trades.forEach(function(t) {
+        var sym = (t.underlying||'')+'|'+(t.strike||'')+'|'+(t.option_type||'');
+        if (!bySymbol[sym]) bySymbol[sym] = [];
+        bySymbol[sym].push(timeToMin(t.entry_time));
+    });
+    Object.keys(bySymbol).forEach(function(sym) {
+        var times = bySymbol[sym].sort(function(a,b){return a-b;});
+        for (var i = 1; i < times.length; i++) gaps.push(times[i]-times[i-1]);
+    });
+    if (gaps.length === 0) return 5;
+    gaps.sort(function(a,b){return a-b;});
+    var median = gaps[Math.floor(gaps.length/2)];
+    var w = Math.max(2, Math.min(15, median * 1.5));
+    return parseFloat(w.toFixed(1));
+}
+
 function detectThrash(trades, windowMin) {
-    // Thrash session = 2+ trades on same symbol with entry times within windowMin of each other
     var sessions = [], used = {};
     for (var i = 0; i < trades.length; i++) {
         if (used[i]) continue;
         var t = trades[i];
-        var sym = (t.underlying||'') + '|' + (t.strike||'') + '|' + (t.option_type||'');
+        var sym = (t.underlying||'')+'|'+(t.strike||'')+'|'+(t.option_type||'');
         var tMin = timeToMin(t.entry_time);
         var group = [i];
         for (var j = i+1; j < trades.length; j++) {
             if (used[j]) continue;
-            var t2 = trades[j];
-            var sym2 = (t2.underlying||'') + '|' + (t2.strike||'') + '|' + (t2.option_type||'');
-            if (sym2 === sym && (timeToMin(t2.entry_time) - tMin) <= windowMin) {
+            var sym2 = (trades[j].underlying||'')+'|'+(trades[j].strike||'')+'|'+(trades[j].option_type||'');
+            if (sym2 === sym && (timeToMin(trades[j].entry_time) - tMin) <= windowMin) {
                 group.push(j); used[j] = true;
             }
         }
@@ -6185,8 +6200,9 @@ function detectThrash(trades, windowMin) {
         if (group.length >= 2) {
             var gt = group.map(function(idx){ return trades[idx]; });
             var netPnl = gt.reduce(function(a,r){ return a+(r.pnl||0); }, 0);
+            var otype = (t.option_type||'').toUpperCase();
             sessions.push({
-                label: (t.option_type||'').toUpperCase() + ' ' + (t.strike||''),
+                label: otype + ' ' + (t.strike||''),
                 count: group.length,
                 trades: gt,
                 netPnl: netPnl,
@@ -6198,129 +6214,109 @@ function detectThrash(trades, windowMin) {
     return sessions;
 }
 
+var _thrashExpanded = {};
+function toggleThrash(idx) {
+    _thrashExpanded[idx] = !_thrashExpanded[idx];
+    var detail = document.getElementById('thrash-detail-'+idx);
+    var arrow  = document.getElementById('thrash-arrow-'+idx);
+    if (detail) detail.style.display = _thrashExpanded[idx] ? 'block' : 'none';
+    if (arrow)  arrow.textContent = _thrashExpanded[idx] ? '▲' : '▼';
+}
+
 function renderThrashSessions(trades) {
-    var sessions = detectThrash(trades, 5);
     var section = document.getElementById('thrash-section');
+    var w = adaptiveThrashWindow(trades);
+    var sessions = detectThrash(trades, w);
     if (sessions.length === 0) { section.style.display='none'; return; }
     section.style.display = 'block';
+    _thrashExpanded = {};
     document.getElementById('thrash-badge').textContent =
-        sessions.length + ' session'+(sessions.length!==1?'s':'')+' found';
-    var html = '<div style="font-size:11px;color:#8b949e;margin-bottom:8px;">Same instrument traded ≥2 times within 5 minutes of each other.</div>';
-    html += '<table><thead><tr><th>Instrument</th><th>Flips</th><th>Start</th><th>End</th><th>Net P&L</th></tr></thead><tbody>';
-    sessions.forEach(function(s) {
-        var cls = s.netPnl >= 0 ? 'positive' : 'negative';
-        html += '<tr><td>'+s.label+'</td><td>'+s.count+'</td>';
-        html += '<td>'+(s.startTime||'-')+'</td><td style="color:#8b949e;">'+(s.endTime||'-')+'</td>';
-        html += '<td class="'+cls+'" style="font-weight:600;">'+fmt(s.netPnl)+'</td></tr>';
+        sessions.length+' session'+(sessions.length!==1?'s':'')+' · auto window: '+w+'m';
+    var thrashPnl   = sessions.reduce(function(a,s){ return a+s.netPnl; }, 0);
+    var thrashCount = sessions.reduce(function(a,s){ return a+s.count; }, 0);
+    var html = '<div style="font-size:11px;color:#8b949e;margin-bottom:8px;">Same instrument traded ≥2× within '+w+' min (auto-detected). '+thrashCount+' trades &nbsp;|&nbsp; Net: <span class="'+(thrashPnl>=0?'positive':'negative')+'" style="font-weight:600;">'+fmt(thrashPnl)+'</span></div>';
+    sessions.forEach(function(s, idx) {
+        var cls = s.netPnl >= 0 ? '#3fb950' : '#f85149';
+        html += '<div style="background:#0d1117;border:1px solid #21262d;border-radius:6px;margin-bottom:6px;">';
+        html += '<div onclick="toggleThrash('+idx+')" style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;user-select:none;">';
+        html += '<span style="font-size:12px;font-weight:700;color:#e6edf3;flex:1;">'+s.label+'</span>';
+        html += '<span style="font-size:11px;color:#8b949e;">'+s.count+' flips &nbsp; '+s.startTime+' → '+(s.endTime||'-')+'</span>';
+        html += '<span style="font-size:12px;font-weight:700;color:'+cls+';margin-left:10px;">'+fmt(s.netPnl)+'</span>';
+        html += '<span id="thrash-arrow-'+idx+'" style="color:#484f58;margin-left:8px;font-size:10px;">▼</span>';
+        html += '</div>';
+        html += '<div id="thrash-detail-'+idx+'" style="display:none;border-top:1px solid #21262d;padding:8px 12px;">'+tradeTable(s.trades)+'</div>';
+        html += '</div>';
     });
-    html += '</tbody></table>';
-    var thrashPnl = sessions.reduce(function(a,s){ return a+s.netPnl; }, 0);
-    var thrashTrades = sessions.reduce(function(a,s){ return a+s.count; }, 0);
-    html += '<div style="margin-top:8px;font-size:11px;color:#8b949e;">'+thrashTrades+' trades in thrash sessions &nbsp;|&nbsp; Net thrash P&L: <span class="'+(thrashPnl>=0?'positive':'negative')+'" style="font-weight:600;">'+fmt(thrashPnl)+'</span></div>';
     document.getElementById('thrash-content').innerHTML = html;
 }
 
-function renderScatter(trades) {
-    var section = document.getElementById('scatter-section');
-    var container = document.getElementById('scatter-canvas');
-    var closed = trades.filter(function(t){ return t.pnl != null && t.entry_time; });
-    if (closed.length < 2) { section.style.display='none'; return; }
-    section.style.display = 'block';
+// ── Trade clusters (any instrument, adaptive window) ─────────────────
 
-    // Compute running P&L at entry for each trade
-    var points = closed.map(function(t, i) {
-        var running = 0;
-        for (var j = 0; j < i; j++) {
-            var prev = closed[j];
-            if ((prev.exit_time||prev.entry_time) <= t.entry_time) running += (prev.pnl||0);
-        }
-        // Re-entry after loss: within 3 min of previous losing trade's exit
-        var isBounce = false;
-        for (var j = i-1; j >= 0; j--) {
-            if ((closed[j].pnl||0) < 0) {
-                var gap = timeToMin(t.entry_time) - timeToMin(closed[j].exit_time||closed[j].entry_time);
-                if (gap >= 0 && gap <= 3) isBounce = true;
-                break;
-            }
-        }
-        var sym = (t.option_type||'').toUpperCase() + ' ' + (t.strike||'');
-        return {x:running, y:t.pnl, bounce:isBounce, label:t.entry_time+' '+sym};
-    });
-
-    var W = Math.max(container.clientWidth || 600, 320), H = 200;
-    var PAD = {l:54, r:18, t:14, b:34};
-    var xs = points.map(function(p){return p.x;}), ys = points.map(function(p){return p.y;});
-    var xMin=Math.min.apply(null,xs), xMax=Math.max.apply(null,xs);
-    var yMin=Math.min.apply(null,ys), yMax=Math.max.apply(null,ys);
-    var xR=xMax-xMin||1, yR=yMax-yMin||1;
-    xMin-=xR*0.12; xMax+=xR*0.12; yMin-=yR*0.18; yMax+=yR*0.18;
-    function sx(v){ return PAD.l+(v-xMin)/(xMax-xMin)*(W-PAD.l-PAD.r); }
-    function sy(v){ return H-PAD.b-(v-yMin)/(yMax-yMin)*(H-PAD.t-PAD.b); }
-
-    function fmtAx(v) {
-        var a=Math.abs(v), s=a>=1000?(a/1000).toFixed(0)+'k':a.toFixed(0);
-        return (v<0?'-':'')+s;
-    }
-
-    var svg = '<svg width="'+W+'" height="'+H+'" style="display:block;overflow:visible;">';
-    // Zero lines
-    svg += '<line x1="'+PAD.l+'" y1="'+sy(0)+'" x2="'+(W-PAD.r)+'" y2="'+sy(0)+'" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>';
-    svg += '<line x1="'+sx(0)+'" y1="'+PAD.t+'" x2="'+sx(0)+'" y2="'+(H-PAD.b)+'" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>';
-    // Y-axis ticks
-    [yMin,0,yMax].forEach(function(v){
-        var y=sy(v);
-        svg += '<line x1="'+(PAD.l-4)+'" y1="'+y+'" x2="'+PAD.l+'" y2="'+y+'" stroke="#484f58" stroke-width="1"/>';
-        svg += '<text x="'+(PAD.l-6)+'" y="'+(y+3)+'" fill="#484f58" font-size="9" text-anchor="end">'+fmtAx(v)+'</text>';
-    });
-    // X-axis label
-    svg += '<text x="'+(PAD.l+(W-PAD.l-PAD.r)/2)+'" y="'+(H-4)+'" fill="#8b949e" font-size="10" text-anchor="middle">Running P&L at entry &#8377;</text>';
-    // Y-axis label
-    svg += '<text transform="rotate(-90)" x="'+(-(H/2))+'" y="12" fill="#8b949e" font-size="10" text-anchor="middle">Trade P&L &#8377;</text>';
-    // Dots
-    points.forEach(function(p) {
-        var cx=sx(p.x).toFixed(1), cy=sy(p.y).toFixed(1);
-        var col = p.bounce ? '#f0883e' : (p.y>=0 ? '#3fb950' : '#f85149');
-        var r = p.bounce ? 6 : 5;
-        svg += '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="'+col+'" fill-opacity="0.85" stroke="'+col+'" stroke-width="1" stroke-opacity="0.4">';
-        svg += '<title>'+p.label+'\\nAt entry: '+fmt(p.x)+'\\nTrade P&L: '+fmt(p.y)+(p.bounce?' [re-entry after loss]':'')+'</title></circle>';
-    });
-    svg += '</svg>';
-    container.innerHTML = svg;
-    renderBounceBack(closed);
+function adaptiveClusterWindow(trades) {
+    // Gaps between all consecutive trades; threshold = median * 1.5, capped 2–15 min
+    if (trades.length < 2) return 5;
+    var gaps = [];
+    for (var i = 1; i < trades.length; i++)
+        gaps.push(timeToMin(trades[i].entry_time) - timeToMin(trades[i-1].entry_time));
+    gaps = gaps.filter(function(g){ return g >= 0; }).sort(function(a,b){return a-b;});
+    if (gaps.length === 0) return 5;
+    var median = gaps[Math.floor(gaps.length/2)];
+    var w = Math.max(2, Math.min(15, median * 1.5));
+    return parseFloat(w.toFixed(1));
 }
 
-function renderBounceBack(trades) {
-    var el = document.getElementById('bounce-section');
-    var bounces = [];
+function detectClusters(trades, windowMin) {
+    // A cluster = contiguous run where each consecutive gap ≤ windowMin, and cluster has ≥2 trades
+    if (trades.length === 0) return [];
+    var clusters = [], current = [trades[0]];
     for (var i = 1; i < trades.length; i++) {
-        var prev = trades[i-1];
-        if ((prev.pnl||0) >= 0) continue;
-        var prevEnd = prev.exit_time || prev.entry_time;
-        var gap = timeToMin(trades[i].entry_time) - timeToMin(prevEnd);
-        if (gap >= 0 && gap <= 3) bounces.push({prev:prev, curr:trades[i], gap:gap});
+        var gap = timeToMin(trades[i].entry_time) - timeToMin(trades[i-1].entry_time);
+        if (gap >= 0 && gap <= windowMin) {
+            current.push(trades[i]);
+        } else {
+            if (current.length >= 2) clusters.push(current);
+            current = [trades[i]];
+        }
     }
-    if (bounces.length === 0) {
-        el.innerHTML = '<div style="font-size:11px;color:#484f58;margin-top:10px;">No re-entries within 3 min of a loss today.</div>';
-        return;
-    }
-    var wins = bounces.filter(function(b){ return (b.curr.pnl||0)>=0; });
-    var wr = (wins.length/bounces.length*100).toFixed(0);
-    var totPnl = bounces.reduce(function(a,b){ return a+(b.curr.pnl||0); }, 0);
-    var html = '<div class="bounce-hdr">Re-entries after loss (within 3 min) &nbsp;';
-    html += '<span style="font-weight:400;color:#8b949e;">'+bounces.length+' total | '+wins.length+'W / '+(bounces.length-wins.length)+'L | '+wr+'% win rate | Net: <span class="'+(totPnl>=0?'positive':'negative')+'" style="font-weight:600;">'+fmt(totPnl)+'</span></span></div>';
-    html += '<table style="font-size:11px;"><thead><tr><th>Loss exit</th><th>Loss P&L</th><th>Re-entry</th><th>Gap</th><th>Re-entry P&L</th></tr></thead><tbody>';
-    bounces.forEach(function(b) {
-        var gapStr = b.gap < 1 ? '<1m' : b.gap.toFixed(1)+'m';
-        var sym2 = (b.curr.option_type||'').toUpperCase()+' '+(b.curr.strike||'');
-        var rcls = (b.curr.pnl||0)>=0 ? 'positive':'negative';
-        html += '<tr><td style="color:#8b949e;">'+(b.prev.exit_time||'-')+'</td>';
-        html += '<td class="negative">'+fmt(b.prev.pnl)+'</td>';
-        html += '<td>'+sym2+' @ '+(b.curr.entry_time||'-')+'</td>';
-        html += '<td style="color:#8b949e;">'+gapStr+'</td>';
-        html += '<td class="'+rcls+'" style="font-weight:600;">'+fmt(b.curr.pnl)+'</td></tr>';
+    if (current.length >= 2) clusters.push(current);
+    return clusters;
+}
+
+var _clusterExpanded = {};
+function toggleCluster(idx) {
+    _clusterExpanded[idx] = !_clusterExpanded[idx];
+    var detail = document.getElementById('cluster-detail-'+idx);
+    var arrow  = document.getElementById('cluster-arrow-'+idx);
+    if (detail) detail.style.display = _clusterExpanded[idx] ? 'block' : 'none';
+    if (arrow)  arrow.textContent = _clusterExpanded[idx] ? '▲' : '▼';
+}
+
+function renderClusters(trades) {
+    var section = document.getElementById('cluster-section');
+    var w = adaptiveClusterWindow(trades);
+    var clusters = detectClusters(trades, w);
+    if (clusters.length === 0) { section.style.display='none'; return; }
+    section.style.display = 'block';
+    _clusterExpanded = {};
+    document.getElementById('cluster-badge').textContent =
+        clusters.length+' cluster'+(clusters.length!==1?'s':'')+' · auto window: '+w+'m';
+    var html = '<div style="font-size:11px;color:#8b949e;margin-bottom:8px;">Consecutive trades with gaps ≤'+w+' min (auto-detected).</div>';
+    clusters.forEach(function(cluster, idx) {
+        var netPnl = cluster.reduce(function(a,t){ return a+(t.pnl||0); }, 0);
+        var spanMin = timeToMin(cluster[cluster.length-1].entry_time) - timeToMin(cluster[0].entry_time);
+        var spanStr = spanMin < 1 ? '<1m' : spanMin.toFixed(1)+'m';
+        var col = netPnl >= 0 ? '#3fb950' : '#f85149';
+        html += '<div style="background:#0d1117;border:1px solid #30363d;border-radius:6px;margin-bottom:6px;">';
+        html += '<div onclick="toggleCluster('+idx+')" style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;user-select:none;">';
+        html += '<span style="font-size:11px;color:#8b949e;flex:1;">'+cluster[0].entry_time+' → '+(cluster[cluster.length-1].exit_time||cluster[cluster.length-1].entry_time)+' &nbsp;<span style="color:#484f58;">('+spanStr+')</span></span>';
+        html += '<span style="font-size:11px;color:#8b949e;">'+cluster.length+' trades</span>';
+        html += '<span style="font-size:12px;font-weight:700;color:'+col+';margin-left:10px;">'+fmt(netPnl)+'</span>';
+        html += '<span id="cluster-arrow-'+idx+'" style="color:#484f58;margin-left:8px;font-size:10px;">▼</span>';
+        html += '</div>';
+        html += '<div id="cluster-detail-'+idx+'" style="display:none;border-top:1px solid #21262d;padding:8px 12px;">'+tradeTable(cluster)+'</div>';
+        html += '</div>';
     });
-    html += '</tbody></table>';
-    el.innerHTML = html;
+    document.getElementById('cluster-content').innerHTML = html;
 }
 </script>
 </body>
