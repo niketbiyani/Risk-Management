@@ -6175,9 +6175,13 @@ function adaptiveThrashWindow(trades) {
         for (var i = 1; i < times.length; i++) gaps.push(times[i]-times[i-1]);
     });
     if (gaps.length === 0) return 5;
-    gaps.sort(function(a,b){return a-b;});
-    var median = gaps[Math.floor(gaps.length/2)];
-    var w = Math.max(2, Math.min(15, median * 1.5));
+    // Exclude session-level breaks before computing threshold
+    var sessionGaps = gaps.filter(function(g){ return g >= 0 && g <= 30; });
+    if (sessionGaps.length === 0) return 5;
+    sessionGaps.sort(function(a,b){return a-b;});
+    var median = sessionGaps[Math.floor(sessionGaps.length/2)];
+    // Thrash = revenge re-entry: keep window tight (max 5 min — beyond that it's deliberate)
+    var w = Math.max(1.5, Math.min(5, median * 1.5));
     return parseFloat(w.toFixed(1));
 }
 
@@ -6253,15 +6257,18 @@ function renderThrashSessions(trades) {
 // ── Trade clusters (any instrument, adaptive window) ─────────────────
 
 function adaptiveClusterWindow(trades) {
-    // Gaps between all consecutive trades; threshold = median * 1.5, capped 2–15 min
     if (trades.length < 2) return 5;
     var gaps = [];
     for (var i = 1; i < trades.length; i++)
         gaps.push(timeToMin(trades[i].entry_time) - timeToMin(trades[i-1].entry_time));
-    gaps = gaps.filter(function(g){ return g >= 0; }).sort(function(a,b){return a-b;});
-    if (gaps.length === 0) return 5;
-    var median = gaps[Math.floor(gaps.length/2)];
-    var w = Math.max(2, Math.min(15, median * 1.5));
+    // Exclude "break" gaps (>30 min — lunch, morning→afternoon, overnight) so the
+    // threshold reflects within-session trading pace, not session-level pauses.
+    var sessionGaps = gaps.filter(function(g){ return g >= 0 && g <= 30; });
+    if (sessionGaps.length === 0) return 5;
+    sessionGaps.sort(function(a,b){return a-b;});
+    var median = sessionGaps[Math.floor(sessionGaps.length/2)];
+    // Use median × 1.5 but cap tighter so bursts split clearly
+    var w = Math.max(1.5, Math.min(10, median * 1.5));
     return parseFloat(w.toFixed(1));
 }
 
