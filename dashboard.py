@@ -6140,16 +6140,23 @@ function timeToMin(t) {
 
 function tradeTable(trades) {
     if (!trades || trades.length === 0) return '<div style="color:#484f58;font-size:11px;padding:8px;">No trades.</div>';
-    var html = '<table style="margin-top:6px;"><thead><tr><th>Entry</th><th>Exit</th><th>Instrument</th><th>Entry &#8377;</th><th>Exit &#8377;</th><th>Qty</th><th>P&L</th></tr></thead><tbody>';
+    var html = '<table style="margin-top:6px;"><thead><tr><th>Entry</th><th>Exit</th><th>Instrument</th><th>Dir</th><th>Entry &#8377;</th><th>Exit &#8377;</th><th>Qty</th><th>P&L</th></tr></thead><tbody>';
     trades.forEach(function(t) {
         var pnl = t.pnl != null ? t.pnl : null;
         var cls = pnl == null ? '' : (pnl >= 0 ? 'positive' : 'negative');
         var otype = (t.option_type||'').toUpperCase();
         var tag = otype ? '<span class="tag '+(otype==='CE'?'tag-ce':'tag-pe')+'">'+otype+'</span> ' : '';
+        var dir = (t.direction||'').toUpperCase();
+        var dirHtml = dir === 'SHORT'
+            ? '<span style="color:#f85149;font-size:10px;font-weight:700;">SHORT</span>'
+            : dir === 'LONG'
+                ? '<span style="color:#3fb950;font-size:10px;font-weight:700;">LONG</span>'
+                : '<span style="color:#484f58;font-size:10px;">-</span>';
         html += '<tr>';
         html += '<td style="white-space:nowrap;">'+(t.entry_time||'-')+'</td>';
         html += '<td style="white-space:nowrap;color:#8b949e;">'+(t.exit_time||'-')+'</td>';
         html += '<td>'+tag+(t.strike||t.symbol||t.underlying||'-')+'</td>';
+        html += '<td>'+dirHtml+'</td>';
         html += '<td>&#8377;'+(t.entry_price!=null?t.entry_price.toFixed(2):'-')+'</td>';
         html += '<td>&#8377;'+(t.exit_price!=null?t.exit_price.toFixed(2):'-')+'</td>';
         html += '<td>'+(t.quantity||'-')+'</td>';
