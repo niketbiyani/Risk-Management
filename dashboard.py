@@ -5167,12 +5167,15 @@ def api_straddle_chart():
         comb_c = ce["c"] + pe["c"]
         body_hi = max(comb_o, comb_c)
         body_lo = min(comb_o, comb_c)
-        # CE and PE are inversely correlated on spot moves — if CE wicks high, PE wicks low
-        # and the combined net move is ~zero. Only IV-expansion events move both legs in the
-        # same direction simultaneously. Use min() so a wick only appears when BOTH legs wick
-        # the same way (IV event). Spot-driven wicks cancel and show as zero (no artifact).
-        wick_up  = min(ce["h"] - max(ce["o"], ce["c"]), pe["h"] - max(pe["o"], pe["c"]))
-        wick_dn  = min(min(ce["o"], ce["c"]) - ce["l"], min(pe["o"], pe["c"]) - pe["l"])
+        # CE and PE are inversely correlated on spot moves — if CE wicks high, PE wicks low.
+        # Use average of both legs' wicks * 0.5: spot-driven wicks roughly cancel (×0.5 discount),
+        # IV-driven wicks (same direction on both) show through at ~full size.
+        ce_wu = ce["h"] - max(ce["o"], ce["c"])
+        pe_wu = pe["h"] - max(pe["o"], pe["c"])
+        ce_wd = min(ce["o"], ce["c"]) - ce["l"]
+        pe_wd = min(pe["o"], pe["c"]) - pe["l"]
+        wick_up = round((ce_wu + pe_wu) * 0.5, 2)
+        wick_dn = round((ce_wd + pe_wd) * 0.5, 2)
         merged.append({
             "time":  ts,
             "open":  round(comb_o, 2),
@@ -5308,7 +5311,7 @@ select:focus{border-color:#58a6ff;}
 </div>
 
 <script>
-var _tf=1, _spot=0, _refreshTimer=null, _rangeSyncing=false;
+var _tf=1, _spot=0, _refreshTimer=null, _rangeSyncing=false, _crossSyncing=false;
 var _cMain=null, _sCandle=null, _sEma20=null, _sEma50=null;
 var _cMacd=null, _sMacdBars=null, _sMacdSigBars=null, _sMacdZero=null;
 var _cRsi=null, _sRsi=null, _sRsiOb=null, _sRsiOs=null;
@@ -5391,22 +5394,31 @@ function applySync(chart, series, dp) {
     }
 }
 function syncCrosshairs() {
-    // _sRsiOb and _sMacdZero span full time range — used as anchors (like _sRsi/_sMacdBars start late)
+    // Guard against feedback loop: setCrosshairPosition fires subscribeCrosshairMove on target
     _cMain.subscribeCrosshairMove(function(p) {
+        if (_crossSyncing) return;
+        _crossSyncing = true;
         var dp = getCrossDataPoint(_sCandle, p);
         if (dp && p.time) document.getElementById('s-ltp').textContent = dp.close.toFixed(2);
         applySync(_cMacd, _sMacdZero, dp);
         applySync(_cRsi,  _sRsiOb,    dp);
+        _crossSyncing = false;
     });
     _cMacd.subscribeCrosshairMove(function(p) {
+        if (_crossSyncing) return;
+        _crossSyncing = true;
         var dp = getCrossDataPoint(_sMacdZero, p);
         applySync(_cMain, _sCandle, dp);
         applySync(_cRsi,  _sRsiOb,  dp);
+        _crossSyncing = false;
     });
     _cRsi.subscribeCrosshairMove(function(p) {
+        if (_crossSyncing) return;
+        _crossSyncing = true;
         var dp = getCrossDataPoint(_sRsiOb, p);
         applySync(_cMain, _sCandle,   dp);
         applySync(_cMacd, _sMacdZero, dp);
+        _crossSyncing = false;
     });
 }
 
