@@ -5163,12 +5163,20 @@ def api_straddle_chart():
     for ts in common_ts:
         ce = ce_bars[ts]
         pe = pe_bars[ts]
+        comb_o = ce["o"] + pe["o"]
+        comb_c = ce["c"] + pe["c"]
+        body_hi = max(comb_o, comb_c)
+        body_lo = min(comb_o, comb_c)
+        # CE and PE are inversely correlated — summing both highs/lows overstates wicks.
+        # Use the larger per-leg wick extension as the combined wick (conservative, realistic).
+        wick_up  = max(ce["h"] - max(ce["o"], ce["c"]), pe["h"] - max(pe["o"], pe["c"]))
+        wick_dn  = max(min(ce["o"], ce["c"]) - ce["l"], min(pe["o"], pe["c"]) - pe["l"])
         merged.append({
             "time":  ts,
-            "open":  round(ce["o"] + pe["o"], 2),
-            "high":  round(ce["h"] + pe["h"], 2),
-            "low":   round(ce["l"] + pe["l"], 2),
-            "close": round(ce["c"] + pe["c"], 2),
+            "open":  round(comb_o, 2),
+            "high":  round(body_hi + wick_up, 2),
+            "low":   round(body_lo - wick_dn, 2),
+            "close": round(comb_c, 2),
         })
 
     # Resample to tf minutes
