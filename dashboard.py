@@ -5320,14 +5320,26 @@ var BG='#0d1117', GRID='#161b22', BORDER='#21262d', TEXT='#8b949e';
 var GRN='#3fb950', RED='#f85149', BLUE='#3db8f5', AMBER='#f0883e';
 
 function _base(showTime) {
+    function fmtTime(t) {
+        var d = new Date(t * 1000);
+        return d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0');
+    }
+    function fmtTick(t, type) {
+        var d = new Date(t * 1000);
+        if (type === 0) return d.getUTCFullYear().toString();
+        if (type === 1) return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
+        if (type === 2) return String(d.getUTCDate()).padStart(2,'0') + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
+        return d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0');
+    }
     return {
         width:0, height:0,
         layout:{background:{type:'Solid',color:BG}, textColor:TEXT},
         grid:{vertLines:{color:GRID}, horzLines:{color:GRID}},
         crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
         rightPriceScale:{borderColor:BORDER, scaleMargins:{top:0.08,bottom:0.08}},
+        localization:{timeFormatter:fmtTime},
         timeScale:{borderColor:BORDER, timeVisible:true, secondsVisible:false,
-                   visible:showTime},
+                   visible:showTime, tickMarkFormatter:fmtTick},
         handleScroll:true, handleScale:true,
     };
 }
