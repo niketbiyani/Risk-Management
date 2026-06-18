@@ -5320,26 +5320,14 @@ var BG='#0d1117', GRID='#161b22', BORDER='#21262d', TEXT='#8b949e';
 var GRN='#3fb950', RED='#f85149', BLUE='#3db8f5', AMBER='#f0883e';
 
 function _base(showTime) {
-    function fmtTime(t) {
-        var d = new Date(t * 1000);
-        return d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0');
-    }
-    function fmtTick(t, type) {
-        var d = new Date(t * 1000);
-        if (type === 0) return d.getUTCFullYear().toString();
-        if (type === 1) return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
-        if (type === 2) return String(d.getUTCDate()).padStart(2,'0') + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
-        return d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0');
-    }
     return {
         width:0, height:0,
         layout:{background:{type:'Solid',color:BG}, textColor:TEXT},
         grid:{vertLines:{color:GRID}, horzLines:{color:GRID}},
         crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
         rightPriceScale:{borderColor:BORDER, scaleMargins:{top:0.08,bottom:0.08}},
-        localization:{timeFormatter:fmtTime},
         timeScale:{borderColor:BORDER, timeVisible:true, secondsVisible:false,
-                   visible:showTime, tickMarkFormatter:fmtTick},
+                   visible:showTime},
         handleScroll:true, handleScale:true,
     };
 }
@@ -5694,6 +5682,13 @@ function doLoad() {
             if (d.error) {errEl.textContent=d.error; return;}
             var candles=d.candles||[];
             if (candles.length===0) {errEl.textContent='No candle data (market may be closed)'; return;}
+
+            // Timestamps from server are IST strings parsed naively as UTC (so +5:30 shifted).
+            // LW Charts v5 uses browser local timezone; cancel that offset so display = IST.
+            var tzShift = new Date().getTimezoneOffset() * 60; // (UTC - local) in seconds; UAE = -10800
+            candles = candles.map(function(c){
+                return {time:c.time+tzShift, open:c.open, high:c.high, low:c.low, close:c.close};
+            });
 
             _sCandle.setData(candles);
 
