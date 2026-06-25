@@ -190,7 +190,9 @@ class PositionMonitor:
                 if pos.get("netQty", 0) != 0:
                     open_position_count += 1
 
-            # Use trade-analyser realized if available, else fall back to Dhan's field
+            # Use trade-analyser realized if available, else fall back to Dhan's field.
+            # Dhan's realizedProfit = (sellAvg - buyAvg) * totalQty — inflated on active
+            # scalping days because it averages across all re-entries, not FIFO per trade.
             if self._analyser_realized_pnl is not None:
                 realized_pnl = self._analyser_realized_pnl
             else:
