@@ -182,6 +182,11 @@ class PositionMonitor:
                 unrealized_pnl += u_pnl
                 if pos.get("netQty", 0) != 0:
                     open_position_count += 1
+                logger.info("POS RAW: %s qty=%s R=%.2f U=%.2f buyAvg=%.2f sellAvg=%.2f buyQty=%s sellQty=%s",
+                    pos.get("tradingSymbol", pos.get("securityId")),
+                    pos.get("netQty"), r_pnl, u_pnl,
+                    pos.get("buyAvg", 0) or 0, pos.get("sellAvg", 0) or 0,
+                    pos.get("buyQty", 0), pos.get("sellQty", 0))
 
             # Detect spreads
             spreads = self.trade_mgr.detect_spreads(positions)
