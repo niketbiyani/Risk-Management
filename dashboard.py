@@ -478,22 +478,41 @@ DASHBOARD_HTML = """
 
     <!-- Risk Meters -->
     <div class="grid grid-detail">
-        <div class="card">
-            <h3>Trailing Drawdown</h3>
-            <div style="display:flex;justify-content:space-between;align-items:baseline;">
-                <div>
-                    <div class="value" id="hwm-value" style="font-size:22px;">&#8377;0</div>
-                    <div class="sub">High Water Mark</div>
-                </div>
-                <div style="text-align:right;">
-                    <div id="drawdown-value" style="font-size:22px;font-weight:700;">&#8377;0</div>
-                    <div class="sub">Current Drawdown</div>
+        <div class="card" id="dd-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <h3 style="margin:0;">Trailing Drawdown</h3>
+                <span id="dd-badge" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#21262d;color:#484f58;">&#9679; Inactive</span>
+            </div>
+            <!-- Inactive state -->
+            <div id="dd-inactive">
+                <div style="color:#8b949e;font-size:12px;">Activates when realized &ge; &#8377;10,000</div>
+                <div style="margin-top:6px;">
+                    <span style="font-size:11px;color:#484f58;">Need </span>
+                    <span id="dd-need" style="font-size:13px;font-weight:700;color:#8b949e;">&#8377;--</span>
+                    <span style="font-size:11px;color:#484f58;"> more realized</span>
                 </div>
             </div>
-            <div class="progress-bar" style="margin-top:16px;">
-                <div class="progress-fill" id="drawdown-bar" style="width:0%;background:#3fb950;"></div>
+            <!-- Active state -->
+            <div id="dd-active" style="display:none;">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+                    <div>
+                        <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Gap to Lockout</div>
+                        <div id="dd-gap" style="font-size:26px;font-weight:700;color:#3fb950;">&#8377;--</div>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-size:10px;color:#8b949e;">Floor</div>
+                        <div id="dd-floor" style="font-size:14px;font-weight:700;color:#f85149;">&#8377;--</div>
+                        <div style="font-size:10px;color:#484f58;">HWM <span id="dd-hwm">&#8377;--</span></div>
+                    </div>
+                </div>
+                <div class="progress-bar" style="margin-bottom:4px;">
+                    <div class="progress-fill" id="drawdown-bar" style="width:0%;background:#3fb950;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:#484f58;">
+                    <span id="dd-floor-label">&#9650; Floor</span>
+                    <span id="dd-hwm-label">HWM &#9650;</span>
+                </div>
             </div>
-            <div class="sub" style="margin-top:4px;" id="drawdown-info"></div>
         </div>
 
         <div class="card">
@@ -1337,18 +1356,52 @@ DASHBOARD_HTML = """
             document.getElementById('trade-stats').textContent =
                 data.trades.total + ' trades (W:' + data.trades.winners + ' L:' + data.trades.losers + ')';
 
-            // Trailing drawdown
+            // Trailing drawdown — new style
             if (data.trailing_drawdown.enabled) {
-                document.getElementById('hwm-value').textContent = fmt(data.trailing_drawdown.high_water_mark);
-                document.getElementById('drawdown-value').textContent = fmt(data.trailing_drawdown.current_drawdown);
-                var ddLimit = data.trailing_drawdown.drawdown_limit;
-                var ddCurrent = data.trailing_drawdown.current_drawdown;
-                var ddPct = ddLimit > 0 ? Math.min(100, (ddCurrent / ddLimit) * 100) : 0;
-                var ddBar = document.getElementById('drawdown-bar');
-                ddBar.style.width = ddPct + '%';
-                ddBar.style.background = ddPct > 70 ? '#f85149' : ddPct > 40 ? '#d29922' : '#3fb950';
-                document.getElementById('drawdown-info').textContent =
-                    'Limit: ' + fmt(ddLimit) + ' | Buffer: ' + fmt(data.trailing_drawdown.buffer);
+                var dd = data.trailing_drawdown;
+                var hwm = dd.high_water_mark || 0;
+                var threshold = 10000;
+                var realized = data.pnl ? data.pnl.realized : 0;
+                var total = data.pnl ? data.pnl.total : 0;
+                var floor = dd.drawdown_limit > 0 ? hwm - dd.drawdown_limit : 0;
+                var gap = total - floor;
+                var active = hwm >= threshold;
+
+                var badge = document.getElementById('dd-badge');
+                var card = document.getElementById('dd-card');
+                document.getElementById('dd-inactive').style.display = active ? 'none' : 'block';
+                document.getElementById('dd-active').style.display = active ? 'block' : 'none';
+
+                if (!active) {
+                    var need = Math.max(0, threshold - realized);
+                    document.getElementById('dd-need').textContent = fmt(need);
+                    badge.textContent = '⬤ Inactive';
+                    badge.style.background = '#21262d'; badge.style.color = '#484f58';
+                    card.style.borderColor = '';
+                } else {
+                    document.getElementById('dd-hwm').textContent = fmt(hwm);
+                    document.getElementById('dd-floor').textContent = fmt(floor);
+                    document.getElementById('dd-floor-label').textContent = '▲ Floor ' + fmt(floor);
+                    document.getElementById('dd-hwm-label').textContent = 'HWM ' + fmt(hwm) + ' ▲';
+                    document.getElementById('dd-gap').textContent = fmt(Math.max(0, gap));
+
+                    var danger = gap < dd.drawdown_limit * 0.2;
+                    var warn   = gap < dd.drawdown_limit * 0.5;
+                    var gapColor = danger ? '#f85149' : warn ? '#f0883e' : '#3fb950';
+                    document.getElementById('dd-gap').style.color = gapColor;
+
+                    // Bar: how much of the safe zone remains (gap / drawdown_limit)
+                    var barPct = dd.drawdown_limit > 0 ? Math.min(100, Math.max(0, gap / dd.drawdown_limit * 100)) : 0;
+                    var ddBar = document.getElementById('drawdown-bar');
+                    ddBar.style.width = barPct + '%';
+                    ddBar.style.background = gapColor;
+
+                    badge.textContent = danger ? '⚠ Active' : '⬤ Active';
+                    badge.style.background = danger ? '#2d1117' : '#1f2d1f';
+                    badge.style.color = danger ? '#f85149' : '#3fb950';
+                    badge.style.border = '1px solid ' + gapColor;
+                    card.style.borderColor = danger ? '#f85149' : '';
+                }
             }
 
             // Positions table
