@@ -985,6 +985,9 @@ DASHBOARD_HTML = """
         const QUICK_SL_OFFSETS = {{ quick_sl_offsets }};
         const QUICK_TP_OFFSETS = {{ quick_tp_offsets }};
 
+        // Auto hard-refresh every hour (clears stale WS state, memory leaks, etc.)
+        setTimeout(function(){ location.reload(true); }, 3600000);
+
         // ── Sound Alert System (with volume/mute controls) ─────────
         var AudioCtx = window.AudioContext || window.webkitAudioContext;
         var audioCtx = null;
@@ -5123,9 +5126,12 @@ def api_straddle_chart():
         lows   = data.get("low",   [])
         closes = data.get("close", [])
         result = {}
+        _IST_OFFSET = 19800  # IST = UTC+5:30 = 5.5*3600 seconds
         for i, ts in enumerate(timestamps):
             try:
-                unix_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp())
+                # Dhan returns IST strings. Naive parse on UTC server treats them as UTC
+                # (5.5h ahead). Subtract IST offset to get real UTC unix timestamp.
+                unix_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp()) - _IST_OFFSET
             except (ValueError, TypeError):
                 try:
                     unix_ts = int(ts)
@@ -5319,6 +5325,23 @@ var _cRsi=null, _sRsi=null, _sRsiOb=null, _sRsiOs=null;
 var BG='#0d1117', GRID='#161b22', BORDER='#21262d', TEXT='#8b949e';
 var GRN='#3fb950', RED='#f85149', BLUE='#3db8f5', AMBER='#f0883e';
 
+var _MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+// Always display as IST (UTC+5:30) regardless of browser timezone
+function _istDate(unixSec) {
+    return new Date((unixSec + 19800) * 1000);
+}
+function _fmtTimeCross(t) {
+    var d = _istDate(t);
+    return d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0');
+}
+function _fmtTick(t, type) {
+    var d = _istDate(t);
+    if (type === 0) return d.getUTCFullYear().toString();
+    if (type === 1) return _MONTHS[d.getUTCMonth()];
+    if (type === 2) return d.getUTCDate() + ' ' + _MONTHS[d.getUTCMonth()];
+    return d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0');
+}
+
 function _base(showTime) {
     return {
         width:0, height:0,
@@ -5326,8 +5349,9 @@ function _base(showTime) {
         grid:{vertLines:{color:GRID}, horzLines:{color:GRID}},
         crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
         rightPriceScale:{borderColor:BORDER, scaleMargins:{top:0.08,bottom:0.08}},
+        localization:{timeFormatter:_fmtTimeCross},
         timeScale:{borderColor:BORDER, timeVisible:true, secondsVisible:false,
-                   visible:showTime},
+                   visible:showTime, tickMarkFormatter:_fmtTick},
         handleScroll:true, handleScale:true,
     };
 }
@@ -5682,13 +5706,6 @@ function doLoad() {
             if (d.error) {errEl.textContent=d.error; return;}
             var candles=d.candles||[];
             if (candles.length===0) {errEl.textContent='No candle data (market may be closed)'; return;}
-
-            // Timestamps from server are IST strings parsed naively as UTC (so +5:30 shifted).
-            // LW Charts v5 uses browser local timezone; cancel that offset so display = IST.
-            var tzShift = new Date().getTimezoneOffset() * 60; // (UTC - local) in seconds; UAE = -10800
-            candles = candles.map(function(c){
-                return {time:c.time+tzShift, open:c.open, high:c.high, low:c.low, close:c.close};
-            });
 
             _sCandle.setData(candles);
 
