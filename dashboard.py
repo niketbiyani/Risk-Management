@@ -4618,17 +4618,40 @@ def api_journal_trades():
 ANALYSER_URL = "http://localhost:5556"
 
 
+def _analyser_import():
+    """Trigger trade-analyser to re-import from Dhan. Safe to call any time."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            f"{ANALYSER_URL}/api/import",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=8)
+    except Exception as e:
+        logger.warning("analyser import trigger failed: %s", e)
+
+
 def _analyser_trades(days: int = 30) -> list:
-    """Fetch trades from trade-analyser, using /api/dates to avoid iterating empty days."""
+    """Fetch trades from trade-analyser, using /api/dates to avoid iterating empty days.
+    Auto-triggers a reimport if today's data is missing."""
     import urllib.request, json as _json
-    from datetime import timedelta
+    from datetime import timedelta, date as _date
     ist = timezone(timedelta(hours=5, minutes=30))
+    today = datetime.now(ist).strftime("%Y-%m-%d")
     cutoff = (datetime.now(ist) - timedelta(days=days)).strftime("%Y-%m-%d")
     # Get list of dates that actually have data
     try:
-        with urllib.request.urlopen(f"{ANALYSER_URL}/api/dates", timeout=3) as r:
+        with urllib.request.urlopen(f"{ANALYSER_URL}/api/dates", timeout=5) as r:
             all_dates = _json.loads(r.read())
         dates = [d for d in all_dates if d >= cutoff]
+        # If today is missing from the date list, trigger a reimport and retry once
+        if today not in dates:
+            _analyser_import()
+            with urllib.request.urlopen(f"{ANALYSER_URL}/api/dates", timeout=5) as r:
+                all_dates = _json.loads(r.read())
+            dates = [d for d in all_dates if d >= cutoff]
     except Exception:
         # Fallback: iterate last N days (slower)
         dates = []
@@ -4637,8 +4660,13 @@ def _analyser_trades(days: int = 30) -> list:
     trades = []
     for d in dates:
         try:
-            with urllib.request.urlopen(f"{ANALYSER_URL}/api/trades?date={d}", timeout=3) as r:
+            with urllib.request.urlopen(f"{ANALYSER_URL}/api/trades?date={d}", timeout=5) as r:
                 day_trades = _json.loads(r.read())
+                # If a date returns empty unexpectedly, trigger reimport and retry once
+                if not day_trades and d == today:
+                    _analyser_import()
+                    with urllib.request.urlopen(f"{ANALYSER_URL}/api/trades?date={d}", timeout=5) as r2:
+                        day_trades = _json.loads(r2.read())
                 trades.extend(day_trades)
         except Exception:
             pass
