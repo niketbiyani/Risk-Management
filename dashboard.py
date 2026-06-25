@@ -6067,9 +6067,12 @@ function buildSummary(date, trades) {
     };
 }
 
-function loadAll() {
+// Silent background refresh — re-fetches data without showing "Loading..."
+setInterval(function() { loadAll(true); }, 120000);
+
+function loadAll(silent) {
     var statsEl = document.getElementById('overall-stats');
-    statsEl.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#8b949e;padding:20px;">Loading...</div>';
+    if (!silent) statsEl.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#8b949e;padding:20px;">Loading...</div>';
 
     fetchWithTimeout('/api/analyser/dates', 5000)
         .then(function(r){ return r.json(); })
