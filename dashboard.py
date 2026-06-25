@@ -6243,6 +6243,21 @@ function selectDay(date) {
     detail.scrollIntoView({behavior:'smooth', block:'nearest'});
 }
 
+var _allDayTrades = [];
+
+function filterDayTrades(tab) {
+    document.querySelectorAll('.trade-type-tab').forEach(function(b){
+        b.style.borderBottom = '2px solid transparent';
+        b.style.color = '#8b949e';
+        b.style.fontWeight = '400';
+    });
+    var active = document.getElementById('tab-'+tab);
+    if (active) { active.style.borderBottom = '2px solid #3fb950'; active.style.color = '#e6edf3'; active.style.fontWeight = '700'; }
+    var filtered = tab === 'all' ? _allDayTrades :
+                   _allDayTrades.filter(function(t){ return (t.option_type||'').toUpperCase() === tab.toUpperCase(); });
+    document.getElementById('day-detail-trades').innerHTML = tradeTable(filtered);
+}
+
 function renderDayTrades(trades) {
     var el = document.getElementById('day-detail-trades');
     if (!trades || trades.length === 0) {
@@ -6252,7 +6267,16 @@ function renderDayTrades(trades) {
         return;
     }
     var sorted = trades.slice().sort(function(a,b){ return (a.entry_time||'').localeCompare(b.entry_time||''); });
-    el.innerHTML = tradeTable(sorted);
+    _allDayTrades = sorted;
+    // Inject tabs above table
+    var ceCount = sorted.filter(function(t){ return (t.option_type||'').toUpperCase()==='CE'; }).length;
+    var peCount = sorted.filter(function(t){ return (t.option_type||'').toUpperCase()==='PE'; }).length;
+    var tabBar = '<div style="display:flex;gap:4px;margin-bottom:8px;border-bottom:1px solid #21262d;">'
+        + '<button id="tab-all" class="trade-type-tab" onclick="filterDayTrades(\'all\')" style="background:none;border:none;padding:6px 12px;cursor:pointer;font-size:12px;border-bottom:2px solid #3fb950;color:#e6edf3;font-weight:700;">All ('+sorted.length+')</button>'
+        + '<button id="tab-CE" class="trade-type-tab" onclick="filterDayTrades(\'CE\')" style="background:none;border:none;padding:6px 12px;cursor:pointer;font-size:12px;border-bottom:2px solid transparent;color:#8b949e;">CE ('+ceCount+')</button>'
+        + '<button id="tab-PE" class="trade-type-tab" onclick="filterDayTrades(\'PE\')" style="background:none;border:none;padding:6px 12px;cursor:pointer;font-size:12px;border-bottom:2px solid transparent;color:#8b949e;">PE ('+peCount+')</button>'
+        + '</div>';
+    el.innerHTML = tabBar + tradeTable(sorted);
     renderThrashSessions(sorted);
     renderClusters(sorted);
 }
