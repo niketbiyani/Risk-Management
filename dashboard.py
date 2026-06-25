@@ -3530,6 +3530,25 @@ def api_admin_unlock():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route("/api/admin/reset_hwm", methods=["POST"])
+def api_admin_reset_hwm():
+    """Reset only the HWM in state without clearing anything else. Use when HWM is stale/inflated."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "monitor not ready"}), 503
+    try:
+        old_hwm = _monitor.state.high_water_mark
+        _monitor.state._state["high_water_mark"] = 0.0
+        _monitor.state._state["trailing_drawdown_active"] = False
+        _monitor.state._state["profit_lock_active"] = False
+        _monitor.state._state["profit_lock_floor"] = 0.0
+        _monitor.state._state["profit_lock_level"] = 0.0
+        _monitor.state._save()
+        logger.warning("MANUAL HWM RESET: HWM reset from ₹%.0f to 0 via admin endpoint", old_hwm)
+        return jsonify({"status": "ok", "message": f"HWM reset from ₹{old_hwm:,.0f} to 0. Everything else preserved."})
+    except Exception as e:
+        logger.error("HWM reset failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/api/status")
 def api_status():
     if _monitor:
