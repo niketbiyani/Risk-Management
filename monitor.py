@@ -17,6 +17,7 @@ import signal
 import sys
 import time
 import threading
+import urllib.request
 from datetime import datetime, timedelta, timezone, time as dtime
 
 from config import Config
@@ -51,6 +52,9 @@ class PositionMonitor:
         self._last_trade_count = 0
         self._prev_realized_pnl = 0.0
         self._lockout_executed = False
+        self._analyser_realized_pnl: float | None = None  # True realized from trade-analyser
+        self._analyser_last_import: float = 0.0           # Timestamp of last import
+        self._analyser_import_interval: float = 60.0      # Re-import every 60s
         self._journaled_order_ids: set = set()  # prevent duplicate journal entries
         self._order_cache_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "order_cache.json"
@@ -170,23 +174,27 @@ class PositionMonitor:
             # Re-subscribe MarketFeed if open positions changed
             self._refresh_market_feed(positions)
 
-            # Calculate realized + unrealized P&L from positions
-            realized_pnl = 0.0
+            # Refresh true realized P&L from trade-analyser every 60s
+            now = time.time()
+            if now - self._analyser_last_import >= self._analyser_import_interval:
+                self._analyser_last_import = now
+                threading.Thread(target=self._refresh_analyser_realized, daemon=True).start()
+
+            # Calculate unrealized P&L from open positions; use analyser for realized
             unrealized_pnl = 0.0
             open_position_count = 0
 
             for pos in positions:
-                r_pnl = pos.get("realizedProfit", 0) or 0
                 u_pnl = pos.get("unrealizedProfit", 0) or 0
-                realized_pnl += r_pnl
                 unrealized_pnl += u_pnl
                 if pos.get("netQty", 0) != 0:
                     open_position_count += 1
-                logger.info("POS RAW: %s qty=%s R=%.2f U=%.2f buyAvg=%.2f sellAvg=%.2f buyQty=%s sellQty=%s",
-                    pos.get("tradingSymbol", pos.get("securityId")),
-                    pos.get("netQty"), r_pnl, u_pnl,
-                    pos.get("buyAvg", 0) or 0, pos.get("sellAvg", 0) or 0,
-                    pos.get("buyQty", 0), pos.get("sellQty", 0))
+
+            # Use trade-analyser realized if available, else fall back to Dhan's field
+            if self._analyser_realized_pnl is not None:
+                realized_pnl = self._analyser_realized_pnl
+            else:
+                realized_pnl = sum((pos.get("realizedProfit", 0) or 0) for pos in positions)
 
             # Detect spreads
             spreads = self.trade_mgr.detect_spreads(positions)
@@ -415,6 +423,34 @@ class PositionMonitor:
 
         except Exception as e:
             logger.error("Error in order update callback: %s", e)
+
+    def _refresh_analyser_realized(self):
+        """Import latest trades from Dhan into trade-analyser, then sum closed P&L."""
+        analyser = "http://localhost:5556"
+        try:
+            # Trigger re-import
+            req = urllib.request.Request(
+                f"{analyser}/api/import",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception as e:
+            logger.warning("Trade-analyser import failed: %s", e)
+            return  # Keep previous value
+
+        try:
+            from datetime import date as _date
+            today = str(_date.today())
+            url = f"{analyser}/api/trades?date={today}"
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                trades = json.loads(resp.read())
+            realized = sum(t.get("pnl", 0) or 0 for t in trades if t.get("status") == "CLOSED")
+            self._analyser_realized_pnl = realized
+            logger.debug("Analyser realized P&L: ₹%.0f (%d closed trades)", realized, sum(1 for t in trades if t.get("status") == "CLOSED"))
+        except Exception as e:
+            logger.warning("Trade-analyser fetch failed: %s", e)
 
     def _persist_order_cache(self, orders: list):
         """Save today's order list to disk so backfill works after service restart."""
