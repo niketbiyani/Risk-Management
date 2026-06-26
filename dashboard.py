@@ -515,10 +515,14 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
-        <div class="card">
-            <h3>Trade History</h3>
-            <div class="trade-log" id="trade-log">
-                <div style="color:#484f58;padding:20px;text-align:center;">No trades yet</div>
+        <div class="card" id="equity-curve-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <h3 style="margin:0;">Equity Curve</h3>
+                <span id="eq-summary" style="font-size:11px;color:#8b949e;"></span>
+            </div>
+            <div style="position:relative;height:180px;width:100%;">
+                <canvas id="equity-chart"></canvas>
+                <div id="eq-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#484f58;font-size:12px;">No closed trades today</div>
             </div>
         </div>
     </div>
@@ -933,12 +937,16 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
-    <!-- Intraday P&L Chart -->
+    <!-- Equity Curve (full width, larger view) -->
     <div style="padding:0 24px;margin-top:16px;">
         <div class="card">
-            <h3>Intraday P&L</h3>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <h3 style="margin:0;">Today's Equity Curve</h3>
+                <span id="eq-summary-full" style="font-size:11px;color:#8b949e;"></span>
+            </div>
             <div style="position:relative;height:250px;width:100%;">
-                <canvas id="pnl-chart"></canvas>
+                <canvas id="equity-chart-full"></canvas>
+                <div id="eq-empty-full" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#484f58;font-size:12px;">No closed trades today</div>
             </div>
         </div>
     </div>
@@ -992,14 +1000,27 @@ DASHBOARD_HTML = """
             }
         });
 
-        // Chart.js - loaded async, chart section hidden if unavailable
+        // Chart.js - loaded async, equity curve initialized on load
         loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js', 8000, function(ok) {
             if (ok && typeof Chart !== 'undefined') {
-                try { initPnlChart(); console.log('Chart.js initialized'); } catch(e) { console.warn('Chart init error:', e); }
+                try {
+                    initEquityCharts();
+                    console.log('Chart.js initialized');
+                    // Fetch equity curve immediately then every 60s
+                    refreshEquityCurve();
+                    setInterval(refreshEquityCurve, 60000);
+                } catch(e) { console.warn('Chart init error:', e); }
             } else {
                 console.warn('Chart.js not available - chart disabled');
             }
         });
+
+        function refreshEquityCurve() {
+            fetch('/api/equity_curve')
+                .then(function(r) { return r.json(); })
+                .then(function(d) { updateEquityCharts(d); })
+                .catch(function(e) { console.warn('Equity curve fetch error:', e); });
+        }
 
         const QUICK_SL_OFFSETS = {{ quick_sl_offsets }};
         const QUICK_TP_OFFSETS = {{ quick_tp_offsets }};
@@ -1413,8 +1434,8 @@ DASHBOARD_HTML = """
             // Recent orders (rejected/executed/cancelled)
             updateRecentOrders(data.recent_orders || []);
 
-            // P&L chart
-            updatePnlChart(data.pnl_chart || []);
+            // Equity curve (fetched separately every 60s)
+            if (data.equity_curve) updateEquityCharts(data.equity_curve);
 
             // Journal today tab
             if (data.trades && data.trades.history) {
@@ -1574,51 +1595,132 @@ DASHBOARD_HTML = """
             }
         });
 
-        // ── P&L Chart ────────────────────────────────────────────────
-        var pnlChart = null;
-        function initPnlChart() {
-            var ctx = document.getElementById('pnl-chart');
-            if (!ctx || typeof Chart === 'undefined') return;
-            pnlChart = new Chart(ctx, {
+        // ── Equity Curve ─────────────────────────────────────────────
+        var _eqChart = null;
+        var _eqChartFull = null;
+        var _eqData = [];  // [{time, pnl, cumulative, win}]
+
+        function _buildEqChartConfig(canvasId, height) {
+            return {
                 type: 'line',
                 data: {
                     labels: [],
                     datasets: [
-                        { label: 'Total', data: [], borderColor: '#58a6ff', borderWidth: 2, fill: false, tension: 0.1, pointRadius: 0 },
-                        { label: 'Realized', data: [], borderColor: '#3fb950', borderWidth: 1, fill: false, tension: 0.1, pointRadius: 0, borderDash: [5,3] },
-                        { label: 'Unrealized', data: [], borderColor: '#d29922', borderWidth: 1, fill: false, tension: 0.1, pointRadius: 0, borderDash: [3,3] }
+                        {
+                            label: 'Realized P&L',
+                            data: [],
+                            borderColor: '#58a6ff',
+                            borderWidth: 2,
+                            fill: false,
+                            tension: 0.3,
+                            pointRadius: 5,
+                            pointBackgroundColor: [],
+                            pointBorderColor: [],
+                        },
+                        {
+                            label: 'Lockout Floor',
+                            data: [],
+                            borderColor: '#f85149',
+                            borderWidth: 1,
+                            borderDash: [6, 3],
+                            fill: false,
+                            pointRadius: 0,
+                            tension: 0,
+                        }
                     ]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { labels: { color: '#8b949e', font: { size: 11 } } } },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(ctx) {
+                                    if (ctx.datasetIndex === 0) {
+                                        var pt = _eqData[ctx.dataIndex];
+                                        if (!pt) return '';
+                                        var sign = pt.pnl >= 0 ? '+' : '';
+                                        return 'Cumul: \\u20B9' + ctx.parsed.y.toLocaleString('en-IN') + '  (trade: ' + sign + pt.pnl.toFixed(0) + ')';
+                                    }
+                                    return 'Floor: \\u20B9' + ctx.parsed.y.toLocaleString('en-IN');
+                                }
+                            }
+                        }
+                    },
                     scales: {
-                        x: { ticks: { color: '#484f58', maxTicksLimit: 12, font: { size: 10 } }, grid: { color: '#161b22' } },
-                        y: { ticks: { color: '#8b949e', callback: function(v){ return '\\u20B9' + v.toLocaleString('en-IN'); } }, grid: { color: '#21262d' } }
+                        x: { ticks: { color: '#484f58', font: { size: 10 }, maxTicksLimit: 10 }, grid: { color: '#161b22' } },
+                        y: { ticks: { color: '#8b949e', font: { size: 10 }, callback: function(v){ return '\\u20B9' + v.toLocaleString('en-IN'); } }, grid: { color: '#21262d' } }
                     },
                     animation: { duration: 0 }
                 }
-            });
+            };
         }
-        // Chart.js is now initialized via async CDN loader callback above
 
-        function updatePnlChart(chartData) {
-            if (!pnlChart || !chartData || chartData.length === 0) return;
-            var data = chartData;
-            if (data.length > 500) {
-                var step = Math.ceil(data.length / 500);
-                data = data.filter(function(_, i) { return i % step === 0 || i === data.length - 1; });
-            }
-            pnlChart.data.labels = data.map(function(p) {
-                var d = new Date(p.timestamp * 1000);
-                return d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
-            });
-            pnlChart.data.datasets[0].data = data.map(function(p){ return p.total; });
-            pnlChart.data.datasets[1].data = data.map(function(p){ return p.realized; });
-            pnlChart.data.datasets[2].data = data.map(function(p){ return p.unrealized; });
-            pnlChart.update('none');
+        function initEquityCharts() {
+            if (typeof Chart === 'undefined') return;
+            var c1 = document.getElementById('equity-chart');
+            var c2 = document.getElementById('equity-chart-full');
+            if (c1 && !_eqChart) _eqChart = new Chart(c1, _buildEqChartConfig('equity-chart', 180));
+            if (c2 && !_eqChartFull) _eqChartFull = new Chart(c2, _buildEqChartConfig('equity-chart-full', 250));
         }
+
+        function _applyEqData(chart, emptyId, summaryId, trades, floor) {
+            var empty = document.getElementById(emptyId);
+            var sumEl = document.getElementById(summaryId);
+            if (!chart) return;
+            if (!trades || trades.length === 0) {
+                if (empty) empty.style.display = 'flex';
+                chart.data.labels = [];
+                chart.data.datasets[0].data = [];
+                chart.data.datasets[1].data = [];
+                chart.update('none');
+                return;
+            }
+            if (empty) empty.style.display = 'none';
+
+            var labels = [], cumValues = [], colors = [], borders = [], floorLine = [];
+            var cumul = 0;
+            var wins = 0, losses = 0;
+            trades.forEach(function(t) {
+                var pnl = t.pnl || 0;
+                cumul += pnl;
+                var timeStr = (t.time || t.exit_time || '').substring(11, 16);
+                labels.push(timeStr);
+                cumValues.push(Math.round(cumul));
+                var win = pnl >= 0;
+                if (win) wins++; else losses++;
+                colors.push(win ? '#3fb950' : '#f85149');
+                borders.push(win ? '#3fb950' : '#f85149');
+                floorLine.push(floor > 0 ? Math.round(floor) : null);
+            });
+
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = cumValues;
+            chart.data.datasets[0].pointBackgroundColor = colors;
+            chart.data.datasets[0].pointBorderColor = borders;
+            chart.data.datasets[1].data = floor > 0 ? floorLine : [];
+            chart.update('none');
+
+            if (sumEl) {
+                var total = wins + losses;
+                sumEl.textContent = wins + 'W / ' + losses + 'L  (' + (total > 0 ? Math.round(wins/total*100) : 0) + '%)';
+                sumEl.style.color = cumul >= 0 ? '#3fb950' : '#f85149';
+            }
+        }
+
+        function updateEquityCharts(eqData) {
+            if (!eqData) return;
+            var trades = eqData.trades || [];
+            var floor = eqData.floor || 0;
+            _eqData = trades;
+            _applyEqData(_eqChart, 'eq-empty', 'eq-summary', trades, floor);
+            _applyEqData(_eqChartFull, 'eq-empty-full', 'eq-summary-full', trades, floor);
+        }
+
+        // legacy stub — no-op (pnl-chart canvas removed)
+        function initPnlChart() {}
+        function updatePnlChart() {}
 
         // ── Pending Orders ──────────────────────────────────────────
         function updatePendingOrders(orders) {
@@ -4671,6 +4773,57 @@ def _analyser_trades(days: int = 30) -> list:
         except Exception:
             pass
     return trades
+
+
+@app.route("/api/equity_curve")
+def api_equity_curve():
+    """Return today's per-trade realized P&L sequence for equity curve chart."""
+    import urllib.request as _ur
+    import json as _json
+    try:
+        from datetime import date as _date
+        today = str(_date.today())
+        # Trigger import first so data is fresh
+        try:
+            req = _ur.Request(
+                f"{ANALYSER_URL}/api/import",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            _ur.urlopen(req, timeout=5)
+        except Exception:
+            pass
+        # Fetch today's trades
+        with _ur.urlopen(f"{ANALYSER_URL}/api/trades?date={today}", timeout=5) as r:
+            trades = _json.loads(r.read())
+    except Exception as e:
+        logger.warning("equity_curve fetch failed: %s", e)
+        return jsonify({"trades": [], "floor": 0})
+
+    closed = [t for t in trades if t.get("status") == "CLOSED"]
+    # Sort by exit time
+    closed.sort(key=lambda t: t.get("exit_time") or t.get("time") or "")
+
+    # Get profit lock floor from risk state
+    floor = 0.0
+    if _monitor:
+        try:
+            st = _monitor.state
+            if st.profit_lock_active:
+                floor = st.profit_lock_floor
+        except Exception:
+            pass
+
+    result = []
+    for t in closed:
+        result.append({
+            "time": t.get("exit_time") or t.get("time") or "",
+            "pnl": float(t.get("pnl") or 0),
+            "symbol": t.get("symbol") or t.get("security_id") or "",
+        })
+
+    return jsonify({"trades": result, "floor": floor})
 
 
 @app.route("/api/journal/daily_summaries")
