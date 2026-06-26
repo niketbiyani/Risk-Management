@@ -242,6 +242,22 @@ DASHBOARD_HTML = """
         .oc-leg-sell-selected { background:#2d1117 !important; }
         .oc-leg-buy-selected  { background:#0d2117 !important; }
 
+        /* ── Mobile responsive ───────────────────────────────────── */
+        @media (max-width: 768px) {
+            body { font-size: 13px; }
+            .desktop-only { display: none !important; }
+            .page-header { padding: 10px 12px; }
+            .page-header h1 { font-size: 18px; }
+            .grid { grid-template-columns: 1fr !important; }
+            .grid-detail { grid-template-columns: 1fr !important; }
+            .main-content { padding: 0 8px !important; }
+            .card { padding: 12px !important; }
+            table { font-size: 11px; }
+            th, td { padding: 5px 6px !important; }
+            .btn-sell, .btn-buy, .btn-neutral { padding: 8px 12px; font-size: 12px; }
+            h3 { font-size: 14px !important; }
+        }
+
         .trade-log {
             max-height: 300px;
             overflow-y: auto;
@@ -528,7 +544,7 @@ DASHBOARD_HTML = """
     </div>
 
     <!-- Option Chain + Depth of Market (side by side) -->
-    <div style="padding:0 24px;margin-top:16px;">
+    <div class="desktop-only" style="padding:0 24px;margin-top:16px;">
         <div style="display:flex;gap:16px;">
             <!-- Left: Option Chain -->
             <div style="flex:0 0 38%;min-width:0;">
@@ -896,7 +912,7 @@ DASHBOARD_HTML = """
     </div>
 
     <!-- Today's Trades -->
-    <div style="padding:0 24px;margin-top:16px;">
+    <div class="desktop-only" style="padding:0 24px;margin-top:16px;">
         <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                 <h3 style="margin:0;">Today's Trades</h3>
