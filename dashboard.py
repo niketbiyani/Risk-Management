@@ -6419,6 +6419,7 @@ def _build_analytics_page():
 <meta charset="utf-8">
 <title>Analytics</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh;}
@@ -6525,6 +6526,14 @@ tr:hover td{background:#1c2128;}
     <div id="cluster-section" style="display:none;">
       <div class="section-hdr" style="color:#a371f7;">&#x29D6; Trade Clusters <span id="cluster-badge" style="font-size:10px;font-weight:400;color:#8b949e;margin-left:6px;"></span></div>
       <div id="cluster-content"></div>
+    </div>
+
+    <!-- Day equity curve -->
+    <div id="day-eq-section" style="display:none;margin-top:18px;">
+      <div class="section-hdr" style="color:#58a6ff;">&#x1F4C8; Equity Curve</div>
+      <div style="position:relative;height:200px;margin-top:10px;">
+        <canvas id="day-eq-chart"></canvas>
+      </div>
     </div>
   </div>
 
@@ -6807,6 +6816,7 @@ function renderDayTrades(trades) {
     el.innerHTML = tabBar + tradeTable(sorted);
     renderThrashSessions(sorted);
     renderClusters(sorted);
+    renderDayEquityCurve(sorted);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -7010,6 +7020,71 @@ function renderClusters(trades) {
         html += '</div>';
     });
     document.getElementById('cluster-content').innerHTML = html;
+}
+
+// ── Day equity curve ────────────────────────────────────────────────
+var _dayEqChart = null;
+
+function renderDayEquityCurve(trades) {
+    var section = document.getElementById('day-eq-section');
+    var closed = trades.filter(function(t){ return t.pnl != null && t.status !== 'OPEN'; });
+    if (!closed.length) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    var labels = [], vals = [], colors = [], borders = [];
+    var cumul = 0;
+    closed.forEach(function(t) {
+        cumul += t.pnl || 0;
+        labels.push((t.exit_time || t.entry_time || '').substring(11,16));
+        vals.push(Math.round(cumul));
+        var win = (t.pnl || 0) >= 0;
+        colors.push(win ? '#3fb950' : '#f85149');
+        borders.push(win ? '#3fb950' : '#f85149');
+    });
+
+    if (typeof Chart === 'undefined') return;
+    var ctx = document.getElementById('day-eq-chart');
+    if (!ctx) return;
+
+    if (_dayEqChart) { _dayEqChart.destroy(); _dayEqChart = null; }
+
+    _dayEqChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: vals,
+                borderColor: '#58a6ff',
+                borderWidth: 2,
+                fill: false,
+                tension: 0.3,
+                pointRadius: 5,
+                pointBackgroundColor: colors,
+                pointBorderColor: borders,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            var t = closed[ctx.dataIndex];
+                            var sign = (t.pnl||0) >= 0 ? '+' : '';
+                            return 'Cumul: ₹' + ctx.parsed.y.toLocaleString('en-IN') + '  (trade: ' + sign + Math.round(t.pnl||0) + ')';
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { ticks: { color: '#484f58', font: { size: 10 }, maxTicksLimit: 12 }, grid: { color: '#161b22' } },
+                y: { ticks: { color: '#8b949e', font: { size: 10 }, callback: function(v){ return '₹' + v.toLocaleString('en-IN'); } }, grid: { color: '#21262d' } }
+            },
+            animation: { duration: 0 }
+        }
+    });
 }
 </script>
 </body>
