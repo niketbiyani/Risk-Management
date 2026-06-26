@@ -6418,6 +6418,7 @@ def _build_analytics_page():
 <head>
 <meta charset="utf-8">
 <title>Analytics</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh;}
@@ -6425,7 +6426,7 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
 .header h1{font-size:16px;font-weight:700;color:#e6edf3;}
 .header a{font-size:12px;color:#8b949e;text-decoration:none;padding:4px 10px;border:1px solid #30363d;border-radius:6px;}
 .header a:hover{color:#e6edf3;}
-.content{padding:24px;max-width:1200px;margin:0 auto;}
+.content{padding:16px;max-width:1200px;margin:0 auto;}
 /* Stats cards */
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:28px;}
 .stat-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px 16px;text-align:center;}
@@ -6437,9 +6438,9 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
 .cal-nav button{background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:14px;}
 .cal-nav button:hover{background:#21262d;}
 .cal-month-label{font-size:16px;font-weight:600;color:#e6edf3;min-width:140px;text-align:center;}
-.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:28px;}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:28px;}
 .cal-dow{text-align:center;font-size:11px;color:#8b949e;padding:6px 0;font-weight:600;}
-.cal-cell{background:#161b22;border:1px solid #21262d;border-radius:6px;min-height:72px;padding:8px;cursor:default;position:relative;transition:border-color .15s;}
+.cal-cell{background:#161b22;border:1px solid #21262d;border-radius:6px;min-height:60px;padding:6px;cursor:default;position:relative;transition:border-color .15s;}
 .cal-cell.has-data{cursor:pointer;}
 .cal-cell.has-data:hover{border-color:#58a6ff;}
 .cal-cell.selected{border-color:#58a6ff;background:#0d2137;}
@@ -6447,19 +6448,19 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
 .cal-cell.profit{border-left:3px solid #3fb950;}
 .cal-cell.loss{border-left:3px solid #f85149;}
 .cal-cell.empty{background:transparent;border-color:transparent;}
-.cal-day-num{font-size:11px;color:#8b949e;margin-bottom:4px;}
-.cal-day-pnl{font-size:13px;font-weight:700;}
-.cal-day-trades{font-size:10px;color:#8b949e;margin-top:2px;}
+.cal-day-num{font-size:10px;color:#8b949e;margin-bottom:2px;}
+.cal-day-pnl{font-size:11px;font-weight:700;}
+.cal-day-trades{font-size:9px;color:#8b949e;margin-top:2px;}
 /* Day detail */
-#day-detail{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:20px;margin-bottom:28px;display:none;}
+#day-detail{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px;margin-bottom:28px;display:none;}
 #day-detail h2{font-size:14px;font-weight:700;margin-bottom:16px;color:#58a6ff;}
-.day-stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:18px;}
+.day-stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;margin-bottom:18px;}
 .day-stat{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:10px 12px;text-align:center;}
 .day-stat .lbl{font-size:10px;color:#8b949e;text-transform:uppercase;}
-.day-stat .val{font-size:16px;font-weight:700;margin-top:3px;}
+.day-stat .val{font-size:15px;font-weight:700;margin-top:3px;}
 table{width:100%;border-collapse:collapse;font-size:12px;}
-th{color:#8b949e;text-align:left;padding:8px 10px;border-bottom:1px solid #21262d;font-weight:600;font-size:11px;text-transform:uppercase;}
-td{padding:8px 10px;border-bottom:1px solid #161b22;color:#e6edf3;}
+th{color:#8b949e;text-align:left;padding:8px 6px;border-bottom:1px solid #21262d;font-weight:600;font-size:11px;text-transform:uppercase;}
+td{padding:8px 6px;border-bottom:1px solid #161b22;color:#e6edf3;}
 tr:hover td{background:#1c2128;}
 /* Thrash / scatter sections */
 .section-hdr{font-size:12px;font-weight:700;margin-bottom:10px;margin-top:18px;padding-bottom:6px;border-bottom:1px solid #21262d;}
@@ -6468,6 +6469,19 @@ tr:hover td{background:#1c2128;}
 .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;}
 .tag-ce{background:#0d2137;color:#58a6ff;border:1px solid #1f4f7a;}
 .tag-pe{background:#2d1a00;color:#e3b341;border:1px solid #7d4e00;}
+/* Mobile */
+@media(max-width:600px){
+  .content{padding:10px;}
+  .stat-grid{grid-template-columns:repeat(2,1fr);gap:8px;}
+  .stat-card{padding:10px;}
+  .stat-val{font-size:16px;}
+  .cal-cell{min-height:48px;padding:4px;}
+  .cal-day-pnl{font-size:10px;}
+  .day-stat-grid{grid-template-columns:repeat(2,1fr);}
+  table{font-size:11px;}
+  th,td{padding:6px 4px;}
+  .header{padding:10px 14px;}
+}
 </style>
 </head>
 <body>
