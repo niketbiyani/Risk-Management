@@ -6020,6 +6020,377 @@ def journal_page():
     return redirect(f"http://{host}:5556", code=302)
 
 
+@app.route("/mobile")
+def mobile_page():
+    return _build_mobile_page()
+
+
+def _build_mobile_page():
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Risk Dashboard</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0d1117; color: #e6edf3; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; padding-bottom: 80px; }
+.header { background: #161b22; border-bottom: 1px solid #21262d; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
+.header-pnl { font-size: 22px; font-weight: 700; }
+.header-time { font-size: 11px; color: #484f58; }
+.badge { font-size: 11px; padding: 3px 10px; border-radius: 12px; font-weight: 600; }
+.badge-green { background: #1f2d1f; color: #3fb950; border: 1px solid #3fb950; }
+.badge-red { background: #2d1117; color: #f85149; border: 1px solid #f85149; }
+.badge-grey { background: #21262d; color: #484f58; border: 1px solid #30363d; }
+.section { padding: 12px 16px; border-bottom: 1px solid #21262d; }
+.section-title { font-size: 11px; color: #484f58; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; font-weight: 600; }
+.pnl-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.pnl-box { flex: 1; background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 10px 12px; }
+.pnl-label { font-size: 10px; color: #484f58; margin-bottom: 4px; }
+.pnl-val { font-size: 18px; font-weight: 700; }
+.pos-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+.pos-name { font-size: 12px; color: #8b949e; margin-bottom: 6px; word-break: break-all; }
+.pos-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.pos-qty { font-size: 13px; font-weight: 600; }
+.pos-pnl { font-size: 16px; font-weight: 700; }
+.exit-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.exit-btn { flex: 1; min-width: 60px; padding: 10px 4px; border: 1px solid #30363d; border-radius: 6px; background: #21262d; color: #e6edf3; font-size: 12px; font-weight: 600; cursor: pointer; text-align: center; }
+.exit-btn-full { background: #2d1117; border-color: #f85149; color: #f85149; }
+.exit-btn:active { opacity: 0.7; }
+.dd-bar-wrap { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px; }
+.dd-bar-bg { background: #21262d; border-radius: 4px; height: 8px; margin: 8px 0; overflow: hidden; }
+.dd-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s; }
+.pending-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; font-size: 12px; }
+.pending-label { color: #d29922; font-size: 10px; font-weight: 600; margin-bottom: 4px; }
+.btn-cancel { padding: 8px 16px; background: none; border: 1px solid #484f58; color: #8b949e; border-radius: 6px; font-size: 12px; cursor: pointer; margin-top: 6px; }
+.btn-exit-all { width: 100%; padding: 14px; background: #2d1117; border: 1px solid #f85149; color: #f85149; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 4px; }
+.btn-exit-all:active { background: #f85149; color: #0d1117; }
+.eq-wrap { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px; }
+.green { color: #3fb950; } .red { color: #f85149; } .grey { color: #484f58; } .amber { color: #d29922; }
+.empty { color: #484f58; text-align: center; padding: 20px; font-size: 12px; }
+.toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #21262d; border: 1px solid #30363d; color: #e6edf3; padding: 10px 20px; border-radius: 8px; font-size: 13px; z-index: 999; opacity: 0; transition: opacity 0.3s; pointer-events: none; white-space: nowrap; }
+.toast.show { opacity: 1; }
+.refresh-btn { position: fixed; bottom: 16px; right: 16px; width: 52px; height: 52px; border-radius: 50%; background: #21262d; border: 1px solid #30363d; color: #8b949e; font-size: 22px; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 100; }
+.refresh-btn:active { background: #30363d; }
+</style>
+</head>
+<body>
+
+<div class="header">
+    <div>
+        <div class="header-pnl" id="m-total-pnl">₹0</div>
+        <div class="header-time" id="m-time">--:--:--</div>
+    </div>
+    <span id="m-status-badge" class="badge badge-grey">...</span>
+</div>
+
+<!-- P&L Summary -->
+<div class="section">
+    <div class="section-title">P&amp;L</div>
+    <div class="pnl-row">
+        <div class="pnl-box">
+            <div class="pnl-label">Realized</div>
+            <div class="pnl-val" id="m-realized">₹0</div>
+        </div>
+        <div class="pnl-box">
+            <div class="pnl-label">Unrealized</div>
+            <div class="pnl-val" id="m-unrealized">₹0</div>
+        </div>
+    </div>
+    <div class="pnl-row">
+        <div class="pnl-box">
+            <div class="pnl-label">Loss Remaining</div>
+            <div class="pnl-val" id="m-loss-remain">--</div>
+        </div>
+        <div class="pnl-box">
+            <div class="pnl-label">Trades</div>
+            <div class="pnl-val" id="m-trades">0</div>
+        </div>
+    </div>
+</div>
+
+<!-- Trailing Drawdown -->
+<div class="section">
+    <div class="section-title">Trailing Drawdown</div>
+    <div class="dd-bar-wrap">
+        <div id="m-dd-inactive" style="color:#484f58;font-size:12px;">Activates when realized ≥ ₹10,000</div>
+        <div id="m-dd-active" style="display:none;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                <span style="font-size:12px;color:#8b949e;">Gap to lockout</span>
+                <span id="m-dd-gap" style="font-size:16px;font-weight:700;">--</span>
+            </div>
+            <div class="dd-bar-bg"><div id="m-dd-bar" class="dd-bar-fill" style="width:100%;background:#3fb950;"></div></div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:#484f58;margin-top:4px;">
+                <span>HWM: <span id="m-dd-hwm">--</span></span>
+                <span>Floor: <span id="m-dd-floor">--</span></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Positions -->
+<div class="section">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div class="section-title" style="margin:0;">Positions <span id="m-pos-count" class="grey"></span></div>
+        <button class="btn-exit-all" style="width:auto;padding:8px 16px;font-size:12px;" onclick="mExitAll()">EXIT ALL</button>
+    </div>
+    <div id="m-positions"><div class="empty">No open positions</div></div>
+</div>
+
+<!-- Pending Spreads -->
+<div class="section">
+    <div class="section-title">Pending Spreads</div>
+    <div id="m-pending"><div class="empty">None</div></div>
+</div>
+
+<!-- Equity Curve -->
+<div class="section">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div class="section-title" style="margin:0;">Equity Curve</div>
+        <span id="m-eq-summary" style="font-size:11px;color:#8b949e;"></span>
+    </div>
+    <div class="eq-wrap" style="position:relative;height:160px;">
+        <canvas id="m-eq-chart"></canvas>
+        <div id="m-eq-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;" class="empty">No closed trades today</div>
+    </div>
+</div>
+
+<div id="toast" class="toast"></div>
+<button class="refresh-btn" onclick="fetchStatus()" title="Refresh">↻</button>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+var _eqChart = null;
+
+function fmt(v) {
+    var s = Math.abs(v).toLocaleString("en-IN", {maximumFractionDigits: 0});
+    return (v < 0 ? "-" : "+") + "\\u20B9" + s;
+}
+function fmtAbs(v) {
+    return "\\u20B9" + Math.abs(v).toLocaleString("en-IN", {maximumFractionDigits: 0});
+}
+function colorVal(v) { return v > 0 ? "green" : v < 0 ? "red" : "grey"; }
+
+function showToast(msg, cls) {
+    var t = document.getElementById("toast");
+    t.textContent = msg;
+    t.className = "toast show" + (cls ? " " + cls : "");
+    setTimeout(function() { t.className = "toast"; }, 3000);
+}
+
+function fetchStatus() {
+    fetch("/api/status")
+        .then(function(r) { return r.json(); })
+        .then(renderStatus)
+        .catch(function(e) { console.warn(e); });
+}
+
+function renderStatus(d) {
+    document.getElementById("m-time").textContent = new Date().toLocaleTimeString("en-IN");
+
+    // Status badge
+    var badge = document.getElementById("m-status-badge");
+    if (d.lockout && d.lockout.active) {
+        badge.className = "badge badge-red"; badge.textContent = "LOCKED";
+    } else if (d.can_trade) {
+        badge.className = "badge badge-green"; badge.textContent = "CAN TRADE";
+    } else {
+        badge.className = "badge badge-red"; badge.textContent = "BLOCKED";
+    }
+
+    // P&L
+    var pnl = d.pnl || {};
+    var total = pnl.total || 0, realized = pnl.realized || 0, unrealized = pnl.unrealized || 0;
+    var totalEl = document.getElementById("m-total-pnl");
+    totalEl.textContent = fmt(total);
+    totalEl.className = "header-pnl " + colorVal(total);
+    var rEl = document.getElementById("m-realized");
+    rEl.textContent = fmt(realized); rEl.className = "pnl-val " + colorVal(realized);
+    var uEl = document.getElementById("m-unrealized");
+    uEl.textContent = fmt(unrealized); uEl.className = "pnl-val " + colorVal(unrealized);
+
+    var limits = d.limits || {};
+    var lrEl = document.getElementById("m-loss-remain");
+    lrEl.textContent = fmtAbs(limits.loss_remaining || 0);
+    lrEl.className = "pnl-val " + ((limits.loss_remaining || 0) < 5000 ? "red" : "green");
+
+    var trades = d.trades || {};
+    document.getElementById("m-trades").textContent =
+        (trades.winners || 0) + "W / " + (trades.losers || 0) + "L";
+
+    // Trailing drawdown
+    var dd = d.trailing_drawdown || {};
+    if (dd.enabled && dd.high_water_mark > 0) {
+        document.getElementById("m-dd-inactive").style.display = "none";
+        document.getElementById("m-dd-active").style.display = "block";
+        var hwm = dd.high_water_mark, floor = hwm - dd.drawdown_limit, gap = dd.buffer || 0;
+        var pct = dd.drawdown_limit > 0 ? Math.max(0, Math.min(100, (gap / dd.drawdown_limit) * 100)) : 100;
+        var gapEl = document.getElementById("m-dd-gap");
+        gapEl.textContent = fmt(gap);
+        gapEl.className = gap < dd.drawdown_limit * 0.25 ? "red" : gap < dd.drawdown_limit * 0.6 ? "amber" : "green";
+        var bar = document.getElementById("m-dd-bar");
+        bar.style.width = pct + "%";
+        bar.style.background = pct < 25 ? "#f85149" : pct < 60 ? "#d29922" : "#3fb950";
+        document.getElementById("m-dd-hwm").textContent = fmtAbs(hwm);
+        document.getElementById("m-dd-floor").textContent = fmtAbs(floor > 0 ? floor : 0);
+    } else {
+        document.getElementById("m-dd-inactive").style.display = "block";
+        document.getElementById("m-dd-active").style.display = "none";
+    }
+
+    // Positions
+    renderPositions(d.positions || [], d.sl_tp_orders || {});
+
+    // Pending
+    renderPending(d.pending_orders || []);
+}
+
+function renderPositions(positions, slOrders) {
+    var el = document.getElementById("m-positions");
+    var open = positions.filter(function(p) { return (p.netQty || 0) !== 0; });
+    document.getElementById("m-pos-count").textContent = open.length ? "(" + open.length + ")" : "";
+    if (!open.length) { el.innerHTML = \'<div class="empty">No open positions</div>\'; return; }
+    el.innerHTML = open.map(function(p) {
+        var sid = p.securityId || p.security_id || "";
+        var name = p.tradingSymbol || p.symbol || sid;
+        var qty = Math.abs(p.netQty || 0);
+        var upnl = p.unrealizedProfit || 0;
+        var side = (p.netQty || 0) > 0 ? "LONG" : "SHORT";
+        var sideColor = side === "SHORT" ? "red" : "green";
+        var pnlColor = upnl >= 0 ? "green" : "red";
+        var exSeg = p.exchangeSegment || "NSE_FNO";
+        var prod = p.productType || "MARGIN";
+        return \'<div class="pos-card">\' +
+            \'<div class="pos-name">\' + name + \'</div>\' +
+            \'<div class="pos-row">\' +
+                \'<span class="pos-qty \' + sideColor + \'">\' + side + \' \' + qty + \'</span>\' +
+                \'<span class="pos-pnl \' + pnlColor + \'">\' + fmt(upnl) + \'</span>\' +
+            \'</div>\' +
+            \'<div class="exit-btns">\' +
+                \'<button class="exit-btn" onclick="mExit(\\\'\' + sid + \'\\\',\\\'\' + exSeg + \'\\\',\\\'\' + prod + \'\\\',\\\'\' + side + \'\\\',\' + Math.round(qty*0.5) + \',\' + qty + \')">50%</button>\' +
+                \'<button class="exit-btn exit-btn-full" onclick="mExit(\\\'\' + sid + \'\\\',\\\'\' + exSeg + \'\\\',\\\'\' + prod + \'\\\',\\\'\' + side + \'\\\',\' + qty + \',\' + qty + \')">EXIT ALL</button>\' +
+            \'</div>\' +
+        \'</div>\';
+    }).join("");
+}
+
+function renderPending(orders) {
+    var el = document.getElementById("m-pending");
+    if (!orders.length) { el.innerHTML = \'<div class="empty">None</div>\'; return; }
+    el.innerHTML = orders.map(function(o) {
+        var sid = o.spread_id || o.id || "";
+        return \'<div class="pending-card">\' +
+            \'<div class="pending-label">PENDING SPREAD</div>\' +
+            (o.sell_symbol || o.sell_security_id || "") + " → " + (o.buy_symbol || o.buy_security_id || "") +
+            "<br>Trigger ≤ ₹" + (o.sell_trigger_price || "--") + "  Qty: " + (o.quantity || "--") +
+            \'<br><button class="btn-cancel" onclick="mCancelPending(\\\'\' + sid + \'\\\')">Cancel</button>\' +
+        \'</div>\';
+    }).join("");
+}
+
+function mExit(sid, exSeg, prod, side, qty, fullQty) {
+    var dir = side === "SHORT" ? "BUY" : "SELL";
+    if (!confirm("Exit " + qty + " @ MARKET?")) return;
+    fetch("/api/order/place", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            security_id: sid, exchange_segment: exSeg, product_type: prod,
+            transaction_type: dir, quantity: qty, order_type: "MARKET", price: 0
+        })
+    }).then(function(r) { return r.json(); })
+      .then(function(d) {
+          showToast(d.status === "ok" ? "Exit placed" : (d.error || "Error"));
+          setTimeout(fetchStatus, 2000);
+      });
+}
+
+function mExitAll() {
+    if (!confirm("Exit ALL positions at MARKET?")) return;
+    fetch("/api/order/exit_all", { method: "POST", headers: {"Content-Type": "application/json"}, body: "{}" })
+        .then(function(r) { return r.json(); })
+        .then(function(d) { showToast("Exit all sent"); setTimeout(fetchStatus, 2000); });
+}
+
+function mCancelPending(sid) {
+    fetch("/api/order/cancel_spread/" + sid, { method: "POST" })
+        .then(function() { showToast("Cancelled"); fetchStatus(); });
+}
+
+// Equity curve
+function initMobileChart() {
+    var c = document.getElementById("m-eq-chart");
+    if (!c || typeof Chart === "undefined") return;
+    _eqChart = new Chart(c, {
+        type: "line",
+        data: {
+            labels: [],
+            datasets: [{
+                data: [], borderColor: "#58a6ff", borderWidth: 2, fill: false,
+                tension: 0.3, pointRadius: 4, pointBackgroundColor: [], pointBorderColor: []
+            }, {
+                data: [], borderColor: "#f85149", borderWidth: 1,
+                borderDash: [6,3], fill: false, pointRadius: 0, tension: 0
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { color: "#484f58", font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: "#161b22" } },
+                y: { ticks: { color: "#8b949e", font: { size: 9 }, callback: function(v) { return "\\u20B9" + v.toLocaleString("en-IN"); } }, grid: { color: "#21262d" } }
+            },
+            animation: { duration: 0 }
+        }
+    });
+    fetchEquity();
+}
+
+function fetchEquity() {
+    fetch("/api/equity_curve")
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var trades = d.trades || [], floor = d.floor || 0;
+            var empty = document.getElementById("m-eq-empty");
+            var sumEl = document.getElementById("m-eq-summary");
+            if (!_eqChart) return;
+            if (!trades.length) { empty.style.display = "flex"; _eqChart.data.labels = []; _eqChart.data.datasets[0].data = []; _eqChart.update("none"); return; }
+            empty.style.display = "none";
+            var labels = [], vals = [], colors = [], borders = [], floorLine = [];
+            var cumul = 0, wins = 0, losses = 0;
+            trades.forEach(function(t) {
+                cumul += t.pnl || 0;
+                labels.push((t.time || "").substring(11, 16));
+                vals.push(Math.round(cumul));
+                var w = (t.pnl || 0) >= 0; if (w) wins++; else losses++;
+                colors.push(w ? "#3fb950" : "#f85149");
+                borders.push(w ? "#3fb950" : "#f85149");
+                floorLine.push(floor > 0 ? Math.round(floor) : null);
+            });
+            _eqChart.data.labels = labels;
+            _eqChart.data.datasets[0].data = vals;
+            _eqChart.data.datasets[0].pointBackgroundColor = colors;
+            _eqChart.data.datasets[0].pointBorderColor = borders;
+            _eqChart.data.datasets[1].data = floor > 0 ? floorLine : [];
+            _eqChart.update("none");
+            var total = wins + losses;
+            sumEl.textContent = wins + "W / " + losses + "L (" + (total ? Math.round(wins/total*100) : 0) + "%)";
+            sumEl.style.color = cumul >= 0 ? "#3fb950" : "#f85149";
+        });
+}
+
+// Init
+if (typeof Chart !== "undefined") { initMobileChart(); } else {
+    window.addEventListener("load", function() { if (typeof Chart !== "undefined") initMobileChart(); });
+}
+fetchStatus();
+setInterval(fetchStatus, 3000);
+setInterval(fetchEquity, 60000);
+</script>
+</body>
+</html>'''
+
+
 @app.route("/analytics")
 def analytics_page():
     return _build_analytics_page()
