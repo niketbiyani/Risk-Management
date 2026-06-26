@@ -534,7 +534,10 @@ DASHBOARD_HTML = """
         <div class="card" id="equity-curve-card">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                 <h3 style="margin:0;">Equity Curve</h3>
-                <span id="eq-summary" style="font-size:11px;color:#8b949e;"></span>
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <span style="font-size:9px;color:#484f58;">scroll=zoom · drag=pan · dblclick=reset</span>
+                    <span id="eq-summary" style="font-size:11px;color:#8b949e;"></span>
+                </div>
             </div>
             <div style="position:relative;height:180px;width:100%;">
                 <canvas id="equity-chart"></canvas>
@@ -976,16 +979,20 @@ DASHBOARD_HTML = """
             }
         });
 
-        // Chart.js - loaded async, equity curve initialized on load
+        // Chart.js + zoom plugin — loaded async
         loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js', 8000, function(ok) {
             if (ok && typeof Chart !== 'undefined') {
-                try {
-                    initEquityCharts();
-                    console.log('Chart.js initialized');
-                    // Fetch equity curve immediately then every 60s
-                    refreshEquityCurve();
-                    setInterval(refreshEquityCurve, 60000);
-                } catch(e) { console.warn('Chart init error:', e); }
+                // Load zoom plugin (requires hammerjs for pinch on mobile)
+                loadScript('https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js', 5000, function() {
+                    loadScript('https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js', 5000, function() {
+                        try {
+                            initEquityCharts();
+                            console.log('Chart.js + zoom initialized');
+                            refreshEquityCurve();
+                            setInterval(refreshEquityCurve, 60000);
+                        } catch(e) { console.warn('Chart init error:', e); }
+                    });
+                });
             } else {
                 console.warn('Chart.js not available - chart disabled');
             }
@@ -1605,6 +1612,17 @@ DASHBOARD_HTML = """
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            ticks: { color: '#8b949e', font: { size: 10 }, maxTicksLimit: 12, maxRotation: 0 },
+                            grid: { color: '#161b22' },
+                            title: { display: false }
+                        },
+                        y: {
+                            ticks: { color: '#8b949e', font: { size: 10 }, callback: function(v){ return '\\u20B9' + v.toLocaleString('en-IN'); } },
+                            grid: { color: '#21262d' }
+                        }
+                    },
                     plugins: {
                         legend: { display: false },
                         tooltip: {
@@ -1619,11 +1637,21 @@ DASHBOARD_HTML = """
                                     return 'Floor: \\u20B9' + ctx.parsed.y.toLocaleString('en-IN');
                                 }
                             }
+                        },
+                        zoom: {
+                            zoom: {
+                                wheel: { enabled: true, speed: 0.1 },
+                                pinch: { enabled: true },
+                                mode: 'x',
+                            },
+                            pan: {
+                                enabled: true,
+                                mode: 'x',
+                            },
+                            limits: {
+                                x: { minRange: 2 }
+                            }
                         }
-                    },
-                    scales: {
-                        x: { ticks: { color: '#484f58', font: { size: 10 }, maxTicksLimit: 10 }, grid: { color: '#161b22' } },
-                        y: { ticks: { color: '#8b949e', font: { size: 10 }, callback: function(v){ return '\\u20B9' + v.toLocaleString('en-IN'); } }, grid: { color: '#21262d' } }
                     },
                     animation: { duration: 0 }
                 }
@@ -1633,7 +1661,10 @@ DASHBOARD_HTML = """
         function initEquityCharts() {
             if (typeof Chart === 'undefined') return;
             var c1 = document.getElementById('equity-chart');
-            if (c1 && !_eqChart) _eqChart = new Chart(c1, _buildEqChartConfig('equity-chart', 180));
+            if (c1 && !_eqChart) {
+                _eqChart = new Chart(c1, _buildEqChartConfig('equity-chart', 180));
+                c1.addEventListener('dblclick', function(){ _eqChart.resetZoom(); });
+            }
         }
 
         function _applyEqData(chart, emptyId, summaryId, trades, floor) {
