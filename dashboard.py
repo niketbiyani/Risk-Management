@@ -895,32 +895,6 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
-    <!-- Recent Orders (Rejected / Executed / Cancelled) -->
-    <div style="padding:0 24px;margin-top:16px;">
-        <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <h3 style="margin:0;">Recent Orders</h3>
-                <span id="recent-orders-count" style="color:#8b949e;font-size:12px;"></span>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Instrument</th>
-                        <th>Side</th>
-                        <th>Qty</th>
-                        <th>Type</th>
-                        <th>Price</th>
-                        <th>Status</th>
-                        <th>Reason / Info</th>
-                    </tr>
-                </thead>
-                <tbody id="recent-orders-body">
-                    <tr><td colspan="7" style="text-align:center;color:#484f58;">No recent orders</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
     <!-- Today's Trades -->
     <div style="padding:0 24px;margin-top:16px;">
         <div class="card">
@@ -934,20 +908,6 @@ DASHBOARD_HTML = """
                     <tr><td colspan="5" style="text-align:center;color:#484f58;">No trades today</td></tr>
                 </tbody>
             </table>
-        </div>
-    </div>
-
-    <!-- Equity Curve (full width, larger view) -->
-    <div style="padding:0 24px;margin-top:16px;">
-        <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                <h3 style="margin:0;">Today's Equity Curve</h3>
-                <span id="eq-summary-full" style="font-size:11px;color:#8b949e;"></span>
-            </div>
-            <div style="position:relative;height:250px;width:100%;">
-                <canvas id="equity-chart-full"></canvas>
-                <div id="eq-empty-full" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#484f58;font-size:12px;">No closed trades today</div>
-            </div>
         </div>
     </div>
 
@@ -1431,8 +1391,6 @@ DASHBOARD_HTML = """
             // Pending orders
             updatePendingOrders(data.pending_orders || []);
 
-            // Recent orders (rejected/executed/cancelled)
-            updateRecentOrders(data.recent_orders || []);
 
             // Equity curve (fetched separately every 60s)
             if (data.equity_curve) updateEquityCharts(data.equity_curve);
@@ -1597,7 +1555,6 @@ DASHBOARD_HTML = """
 
         // ── Equity Curve ─────────────────────────────────────────────
         var _eqChart = null;
-        var _eqChartFull = null;
         var _eqData = [];  // [{time, pnl, cumulative, win}]
 
         function _buildEqChartConfig(canvasId, height) {
@@ -1660,9 +1617,7 @@ DASHBOARD_HTML = """
         function initEquityCharts() {
             if (typeof Chart === 'undefined') return;
             var c1 = document.getElementById('equity-chart');
-            var c2 = document.getElementById('equity-chart-full');
             if (c1 && !_eqChart) _eqChart = new Chart(c1, _buildEqChartConfig('equity-chart', 180));
-            if (c2 && !_eqChartFull) _eqChartFull = new Chart(c2, _buildEqChartConfig('equity-chart-full', 250));
         }
 
         function _applyEqData(chart, emptyId, summaryId, trades, floor) {
@@ -1715,7 +1670,6 @@ DASHBOARD_HTML = """
             var floor = eqData.floor || 0;
             _eqData = trades;
             _applyEqData(_eqChart, 'eq-empty', 'eq-summary', trades, floor);
-            _applyEqData(_eqChartFull, 'eq-empty-full', 'eq-summary-full', trades, floor);
         }
 
         // legacy stub — no-op (pnl-chart canvas removed)
