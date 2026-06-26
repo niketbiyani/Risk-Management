@@ -6032,9 +6032,8 @@ window.onload = function() {
 @app.route("/journal")
 def journal_page():
     # Redirect to trade-analyser running on port 5556
-    # Redirect via Nginx /analyser/ proxy (port 5556 is firewalled)
-    host = request.host  # preserve host+port as-is (works via IP or domain)
-    return redirect(f"http://{host}/analyser/", code=302)
+    host = request.host.split(":")[0]
+    return redirect(f"http://{host}:5556", code=302)
 
 
 @app.route("/mobile")
