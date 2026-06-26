@@ -6033,7 +6033,7 @@ window.onload = function() {
 def journal_page():
     # Redirect to trade-analyser running on port 5556
     host = request.host.split(":")[0]
-    return redirect(f"http://{host}:5556", code=302)
+    return redirect(f"http://{host}/analyser/", code=302)
 
 
 @app.route("/mobile")
