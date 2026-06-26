@@ -8,7 +8,7 @@ This file exists so a new Claude session can pick up exactly where the last one 
 
 A single-VPS trade management platform for **Nifty/SENSEX options scalping** on 15-second charts via Dhan broker. The user trades exclusively **two-legged credit spreads** (bear call, bull put) and occasional naked shorts.
 
-**Primary file:** `dashboard.py` — ~5700 lines, single file containing Flask backend + all inline HTML/CSS/JS.
+**Primary file:** `dashboard.py` — ~6200 lines, single file containing Flask backend + all inline HTML/CSS/JS.
 
 **Key files:**
 | File | Purpose |
@@ -32,6 +32,40 @@ A single-VPS trade management platform for **Nifty/SENSEX options scalping** on 
 
 ---
 
+## Infrastructure
+
+### VPS Access
+
+- Dashboard: `http://88.208.255.34` (port 80 via Nginx, password protected)
+- Trade Analyser: `http://88.208.255.34:5556` (port 5556, open)
+- Direct ports 5555 blocked by UFW firewall (Nginx proxies everything)
+
+### Nginx Setup
+
+- Config: `/etc/nginx/sites-available/trader`
+- Password file: `/etc/nginx/.htpasswd`
+- Proxies `/` → port 5555 (dashboard), `/analyser/` → port 5556 (trade analyser — has 404 issue, see below)
+- Reset password: `sudo htpasswd /etc/nginx/.htpasswd trader`
+
+### Firewall (UFW)
+
+- Port 22: ALLOW (SSH)
+- Port 80: ALLOW (Nginx)
+- Port 5555: DENY (direct access blocked)
+- Port 5556: ALLOW (trade analyser — direct until prefix routing fixed)
+
+### Services
+
+- `risk-manager` — main dashboard (port 5555)
+- `trade-analyser` — trade analyser (port 5556, `/root/trade-analyser/`)
+- `nginx` — reverse proxy + auth
+
+### Known Infrastructure Issue
+
+The trade-analyser app doesn't support a URL prefix (`/analyser/`), so Nginx proxying via `/analyser/` returns 404 for internal links. **Fix needed in the trade-analyser repo:** add `APPLICATION_ROOT = '/analyser'` config and `ProxyFix` middleware. Until then, trade-analyser is accessed directly at port 5556, and the `/journal` redirect points to `http://<host>:5556`.
+
+---
+
 ## Current Feature State
 
 ### Option Chain
@@ -50,6 +84,7 @@ A single-VPS trade management platform for **Nifty/SENSEX options scalping** on 
   - `force: true` flag sent by JS when underlying changes (NIFTY↔SENSEX)
   - `_oc_ltp_subscribed` set only grows (never-shrink keeps strikes warm)
 - **Known issue:** Some SENSEX ATM strikes return 0 from `ticker_data` — user types price manually in quick bar
+- **Mobile:** Option chain is hidden on screens <768px (`.desktop-only` CSS class)
 
 ### Spread Quick Bar (bottom of option chain panel)
 
@@ -104,6 +139,29 @@ After a spread fills, a `STOP_LOSS_MARKET` BUY sits live at Dhan as hard protect
 - All exit paths go through `_placeExitOrder(sid, exSeg, prodType, qty, direction, orderType, price, fullQty)`
 - `fullQty` determines whether to cancel_sl (full) or replace_sl (partial)
 
+### Equity Curve
+
+Replaced the old intraday P&L chart (tick-by-tick line) and Trade History card.
+
+- **Location:** Compact version (180px) sits next to the Trailing Drawdown panel in the `grid grid-detail` div
+- **Data source:** `/api/equity_curve` endpoint — fetches today's closed trades from trade-analyser, sorted by exit time
+- **Display:** One dot per closed trade (green = profit, red = loss), connected by blue cumulative realized P&L line
+- **Lockout floor:** Red dashed horizontal line shown when profit lock is active
+- **Summary:** Win/loss count + win rate shown in card header (e.g. `7W / 3L (70%)`)
+- **Refresh:** Every 60s independently of the 2s status poll (no tick noise — only updates when trades close)
+- **Canvas IDs:** `equity-chart` (compact), `equity-chart-full` removed (was duplicate)
+- **JS functions:** `initEquityCharts()`, `updateEquityCharts(eqData)`, `_applyEqData()`, `refreshEquityCurve()`
+
+### Trailing Drawdown Panel
+
+Redesigned to show "gap to lockout" as primary metric.
+
+- **Card IDs:** `dd-card`, `dd-badge`, `dd-inactive`, `dd-active`
+- **Key elements:** `dd-gap` (big number = how far total P&L is above the lockout floor), `dd-floor`, `dd-hwm`, `drawdown-bar`
+- **Color logic:** gap < 25% of limit → red, < 60% → amber, ≥ 60% → green
+- **Inactive state:** shown when realized P&L < `PROFIT_LOCK_THRESHOLD` (₹10,000)
+- **Active state:** shown once HWM established; bar fills left-to-right as gap shrinks
+
 ### WebSocket Integration
 
 **DepthWebSocket** (`dhan_api.py`) — single connection to `wss://depth-api-feed.dhan.co/twentydepth`:
@@ -141,7 +199,17 @@ All risk checks run in `evaluate_pnl(realized, unrealized)` every monitor cycle:
 - HWM tracks **realized P&L only** — `realized_pnl > hwm` → advance HWM
 - Drawdown is measured as `max(0, hwm - total_pnl)` — unrealized losses count against you
 - This prevents HWM from ratcheting up on paper gains (which would cause the display to jump and potentially trigger false lockouts when unrealized swings back)
-- Prior to this fix (pre June 2026), HWM used `total_pnl` — caused visible jumping on every tick
+- **Root cause of past false lockouts:** Dhan's `realizedProfit` field = `(sellAvg - buyAvg) × totalQty` — averages ALL buys/sells per instrument across the day, NOT FIFO. Inflates realized by ~40% on active scalping days. Fix: use trade-analyser FIFO calculation instead (see below)
+
+### Realized P&L Source (Critical)
+
+Dhan's `realizedProfit` is **unreliable for scalpers**. It computes `(sellAvg - buyAvg) × totalQty` — averaging all re-entries, not FIFO per trade. On active scalping days this inflates realized P&L by ~40%, causing false HWM advances and premature trailing drawdown lockouts.
+
+**Fix in `monitor.py`:**
+- `_refresh_analyser_realized()` — calls trade-analyser `/api/import` (POST) then `/api/trades?date=today`, sums `pnl` for `status == "CLOSED"` trades
+- Runs every 60s in a background thread
+- `_analyser_realized_pnl` used as realized P&L; Dhan's `unrealizedProfit` still used for unrealized
+- Falls back to Dhan `realizedProfit` if trade-analyser unavailable (`_analyser_realized_pnl is None`)
 
 ### State Management (state_manager.py)
 
@@ -150,6 +218,7 @@ All risk checks run in `evaluate_pnl(realized, unrealized)` every monitor cycle:
 - All `date.today()` replaced with `_today_ist()` in state comparisons
 - Lockout is permanent within the trading day — state cannot be tampered to bypass
 - Emergency override: `POST /api/admin/unlock` resets locked state (for testing only)
+- Surgical HWM reset: `POST /api/admin/reset_hwm` — resets only `high_water_mark`, `trailing_drawdown_active`, `profit_lock_active`, `profit_lock_floor`, `profit_lock_level` without clearing full state
 
 ### Auto-Journal (monitor.py)
 
@@ -183,13 +252,34 @@ The monitor automatically creates journal entries from live order data, with ful
 A separate app (`niketbiyani/trade-analyser`) handles all trade P&L analysis:
 - `GET /api/trades?date=YYYY-MM-DD` — list of trades with entry/exit prices, P&L, legs
 - `GET /api/dates` — dates for which trade data exists
-- `GET /api/import` — re-imports today's trades from Dhan trade book
+- `POST /api/import` — re-imports today's trades from Dhan trade book (requires `Content-Type: application/json` + `{}` body)
 
 **Dashboard integration:**
-- `/journal` route redirects to `http://<host>:5556` (302 redirect)
+- `/journal` route redirects to `http://<host>:5556` (302 redirect) — direct port, not via Nginx prefix
 - `ANALYSER_URL = "http://localhost:5556"` constant in dashboard.py
-- `_analyser_trades(days)` helper fetches from trade-analyser per day
-- `/api/journal/daily_summaries` and `/api/journal/analytics` compute from trade-analyser data
+- `_analyser_trades(days)` helper fetches from trade-analyser per day, auto-triggers import if today missing
+- `_analyser_import()` triggers import; safe to call any time
+- `/api/equity_curve` endpoint fetches today's closed trades from analyser for the equity curve chart
+- Analytics page fetches via `/api/analyser/dates` and `/api/analytics/day_trades?date=YYYY-MM-DD`
+
+### Analytics Page (`/analytics`)
+
+- **FY toggle** at top — shows stats for selected financial year (Apr–Mar). Defaults to current FY. Navigate with `‹` `›` arrows. Label format: `FY 2025-26`
+- **Stats cards** — Total Days, Total Trades, Overall P&L, Trade Win Rate, Day Win Rate, Avg Daily P&L, Profitable Days, Losing Days, Best Day, Worst Day — all filtered to selected FY
+- **Calendar** — monthly view, click any day to see day detail
+- **Day detail panel** — day stats + trade table with CE/PE filter tabs + equity curve at bottom
+- **Day equity curve** — one dot per closed trade (green/red), cumulative P&L line. Destroys and redraws on each day selection. Uses Chart.js loaded from CDN
+- **CE/PE tabs** — `filterDayTrades("all"|"CE"|"PE")` — uses `&quot;` HTML entity (not `\'`) due to triple-quoted Python string context
+- **Silent background refresh** — `setInterval(loadAll(true), 120000)` — refreshes data every 2 min without spinner
+- **Mobile responsive** — 2-column stat grid, compact calendar cells, smaller fonts on screens <600px
+
+### Mobile Support
+
+Two approaches available:
+
+1. **Auto-detect on main URL (`/`):** CSS `@media (max-width: 768px)` hides `.desktop-only` sections (option chain + DOM, Today's Trades table). Core cards (P&L, risk, positions, equity curve) remain visible. Positions, pending orders, equity curve all functional.
+
+2. **Dedicated mobile page (`/mobile`):** Purpose-built touch-optimised view. Single-column layout, large touch targets. Shows: P&L summary, trailing drawdown bar, positions with 50%/EXIT ALL buttons, pending spreads with cancel, equity curve chart. Auto-refreshes every 3s. No option chain, no DOM.
 
 ### CSV Import via Dashboard
 
@@ -206,7 +296,6 @@ Two-part system sharing one SQLite DB (`trade_journal.db`):
 **Part 1 — Analytics (dashboard sidebar):**
 - `trade_journal.py` `TradeJournal` class — `trades`, `daily_summary`, `pnl_snapshots` tables
 - Populated by `risk_engine.py` → `state_manager.record_trade()` when trades complete
-- Dashboard sidebar shows Today / History / Analytics tabs
 - Data now proxied from trade-analyser for accuracy
 
 **Part 2 — Detailed entries with screenshots:**
@@ -244,6 +333,7 @@ Two-part system sharing one SQLite DB (`trade_journal.db`):
 - Dhan error 805: "max active WS connections exceeded" — only one DepthWebSocket connection allowed. LTP feed and DOM feed merged into the same connection
 - Order book (`get_order_book`) includes CANCELLED and REJECTED orders (SL orders) — do not use for journal pairing. Use trade book (executed trades only)
 - Order book clears after market close — trade book (`get_trade_book`) persists and should be the primary source
+- `realizedProfit` from positions API is WRONG for scalpers — uses average price not FIFO. Use trade-analyser instead
 
 ### dashboard.py Structure
 
@@ -251,9 +341,9 @@ Two-part system sharing one SQLite DB (`trade_journal.db`):
 - CSS is inline in a `<style>` block
 - JS is inline in `<script>` blocks
 - Line numbers shift as you edit — always grep for function names rather than relying on line numbers
-- `_build_journal_page()` was a plain string (not f-string) to avoid `{{`/`}}` escaping — now replaced by redirect to port 5556
-- Onclick handlers with string args need `\\'` in Python to produce `\'` in JS: `onclick="fn(\\'val\\')"`
-- `/journal` route now does a 302 redirect to `http://<host>:5556`
+- Analytics page (`_build_analytics_page()`) is a plain `'''` string (not f-string) — `\'` inside it renders as literal backslash-quote in HTML, breaking JS. Use `&quot;` HTML entity for quoted strings inside onclick handlers in that context
+- Onclick handlers in f-string context need `\\'` in Python to produce `\'` in JS: `onclick="fn(\\'val\\')"`
+- `/journal` route redirects to `http://<host>:5556` (direct port, not Nginx proxy)
 
 ### monitor.py — _execute_spread() Flow
 
@@ -321,6 +411,14 @@ Before this fix: HWM used `total_pnl` (realized + unrealized). Every WebSocket t
 
 Now: HWM only advances when you close a winning trade. Unrealized gains don't move the HWM; unrealized losses still count in the drawdown calculation.
 
+Additionally: Dhan's `realizedProfit` was inflating HWM by using average-price math instead of FIFO. Fixed by sourcing realized P&L from trade-analyser instead.
+
+### Memory & System
+
+- VPS: 848MB total RAM, 1GB swap added
+- `risk_guardian` process was killed (not needed) — freed ~50MB
+- Logging: Python `FileHandler` writes to `platform.log`. systemd `StandardOutput` must NOT also point to `platform.log` — causes duplicate log lines. Check `/etc/systemd/system/risk-manager.service` to ensure `StandardOutput` is not set to the same file.
+
 ---
 
 ## Pending / Next Work
@@ -332,6 +430,7 @@ Now: HWM only advances when you close a winning trade. Unrealized gains don't mo
 - **Remove diagnostic logs** added for debugging: `ORDER BOOK RAW`, `TRADE BOOK RAW`, `ORDER TIME FIELDS` in monitor.py/dhan_api.py
 - **Journal: naked short entry** — SELL MKT button path not yet wired to `createJournalEntry()` (only spread EXECUTE is wired). Low priority
 - **SENSEX ATM price fallback** — when `ticker_data` returns 0 for ATM strikes, try `intraday_minute_data` last close
+- **Trade-analyser prefix fix** — add `APPLICATION_ROOT = '/analyser'` + `ProxyFix` to trade-analyser app so Nginx can proxy at `/analyser/` and port 5556 can be firewalled
 - **Hotkeys** — discussed but not started
 - **Spot price real-time** — index spot still updates every 2s via REST (low priority)
 
@@ -360,10 +459,21 @@ tail -f /root/Risk-Management/platform.log
 
 # Check if running
 sudo systemctl status risk-manager
+
+# Reset password
+sudo htpasswd /etc/nginx/.htpasswd trader
+
+# Check firewall
+sudo ufw status
+
+# Check memory
+free -h
 ```
 
-Dashboard: `http://YOUR_VPS_IP:5555`  
-Trade Analyser: `http://YOUR_VPS_IP:5556`
+Dashboard: `http://88.208.255.34` (via Nginx, password protected)
+Trade Analyser: `http://88.208.255.34:5556` (direct)
+Analytics: `http://88.208.255.34/analytics`
+Mobile view: `http://88.208.255.34/mobile`
 
 ---
 
