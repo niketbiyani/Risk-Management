@@ -6477,9 +6477,14 @@ tr:hover td{background:#1c2128;}
 </div>
 <div class="content">
 
-  <!-- Overall stats -->
+  <!-- Year toggle + Overall stats -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+    <button onclick="yearNav(-1)" style="background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:14px;">&#x2039;</button>
+    <span id="year-label" style="font-size:16px;font-weight:700;min-width:60px;text-align:center;"></span>
+    <button onclick="yearNav(1)" style="background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:14px;">&#x203A;</button>
+  </div>
   <div id="overall-stats" class="stat-grid">
-    <div class="spinner" style="grid-column:1/-1;">Loading...</div>
+    <div style="grid-column:1/-1;text-align:center;color:#8b949e;padding:20px;">Loading...</div>
   </div>
 
   <!-- Calendar nav -->
@@ -6516,6 +6521,7 @@ var _calYear = 0;
 var _calMonth = 0;      // 0-indexed
 var _selectedDate = null;
 var _todayStr = '';
+var _statsYear = 0;     // FY start year e.g. 2025 means FY 2025-26 (Apr 2025 – Mar 2026)
 
 function fmt(v) {
     if (v == null) return '-';
@@ -6529,12 +6535,22 @@ window.onload = function() {
     var now = new Date();
     _calYear  = now.getFullYear();
     _calMonth = now.getMonth();
-    // today string in YYYY-MM-DD (local)
-    _todayStr = now.getFullYear() + '-' +
-                String(now.getMonth()+1).padStart(2,'0') + '-' +
-                String(now.getDate()).padStart(2,'0');
+    // FY start year: if current month >= April (3), FY start = this year, else last year
+    _statsYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    _todayStr  = now.getFullYear() + '-' +
+                 String(now.getMonth()+1).padStart(2,'0') + '-' +
+                 String(now.getDate()).padStart(2,'0');
+    document.getElementById('year-label').textContent = fyLabel(_statsYear);
     loadAll();
 };
+
+function fyLabel(y) { return 'FY ' + y + '-' + String(y+1).slice(2); }
+
+function yearNav(dir) {
+    _statsYear += dir;
+    document.getElementById('year-label').textContent = fyLabel(_statsYear);
+    renderOverallStats(Object.values(_byDate));
+}
 
 function fetchWithTimeout(url, ms) {
     var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -6588,7 +6604,7 @@ function loadAll(silent) {
             summaries = (summaries || []).filter(function(s){ return s.total_trades > 0; });
             _byDate = {};
             summaries.forEach(function(s){ _byDate[s.date] = s; });
-            renderOverallStats(summaries);
+            renderOverallStats(Object.values(_byDate));
             renderCalendar();
         })
         .catch(function(e) {
@@ -6600,8 +6616,12 @@ function loadAll(silent) {
 // ── Overall stats ───────────────────────────────────────────────────
 function renderOverallStats(data) {
     var el = document.getElementById('overall-stats');
+    // Filter to selected FY (Apr _statsYear – Mar _statsYear+1)
+    var fyStart = String(_statsYear) + '-04-01';
+    var fyEnd   = String(_statsYear+1) + '-03-31';
+    data = (data || []).filter(function(d) { return d.date && d.date >= fyStart && d.date <= fyEnd; });
     if (!data || data.length === 0) {
-        el.innerHTML = '<div class="stat-card"><div class="stat-label">No data yet</div></div>';
+        el.innerHTML = '<div class="stat-card" style="grid-column:1/-1;text-align:center;"><div class="stat-label">No data for ' + fyLabel(_statsYear) + '</div></div>';
         return;
     }
     var totalTrades = 0, totalPnl = 0, winners = 0, losers = 0;
