@@ -6566,9 +6566,32 @@ tr:hover td{background:#1c2128;}
 
     <!-- Day equity curve -->
     <div id="day-eq-section" style="display:none;margin-top:18px;">
-      <div class="section-hdr" style="color:#58a6ff;">&#x1F4C8; Equity Curve</div>
+      <div class="section-hdr" style="color:#58a6ff;display:flex;align-items:center;justify-content:space-between;">
+        <span>&#x1F4C8; Equity Curve</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:9px;color:#484f58;font-weight:400;">scroll=zoom &middot; drag=pan &middot; dblclick=reset</span>
+          <button onclick="openEqModal()" style="background:none;border:1px solid #30363d;color:#8b949e;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;">&#x26F6; Expand</button>
+        </div>
+      </div>
       <div style="position:relative;height:200px;margin-top:10px;">
         <canvas id="day-eq-chart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Equity curve expand modal -->
+  <div id="eq-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:1000;align-items:center;justify-content:center;"
+       onclick="if(event.target===this)closeEqModal()">
+    <div style="background:#161b22;border:1px solid #30363d;border-radius:10px;width:92vw;max-width:1100px;padding:20px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 id="eq-modal-title" style="font-size:14px;font-weight:700;color:#58a6ff;">&#x1F4C8; Equity Curve</h3>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span style="font-size:9px;color:#484f58;">scroll=zoom &middot; drag=pan &middot; dblclick=reset</span>
+          <button onclick="closeEqModal()" style="background:none;border:none;color:#8b949e;font-size:20px;cursor:pointer;line-height:1;">&times;</button>
+        </div>
+      </div>
+      <div style="position:relative;height:62vh;">
+        <canvas id="day-eq-chart-full"></canvas>
       </div>
     </div>
   </div>
@@ -7060,31 +7083,12 @@ function renderClusters(trades) {
 
 // ── Day equity curve ────────────────────────────────────────────────
 var _dayEqChart = null;
+var _dayEqChartFull = null;
+var _dayEqClosed = [];
+var _dayEqLabels = [], _dayEqVals = [], _dayEqColors = [];
 
-function renderDayEquityCurve(trades) {
-    var section = document.getElementById('day-eq-section');
-    var closed = trades.filter(function(t){ return t.pnl != null && t.status !== 'OPEN'; });
-    if (!closed.length) { section.style.display = 'none'; return; }
-    section.style.display = 'block';
-
-    var labels = [], vals = [], colors = [], borders = [];
-    var cumul = 0;
-    closed.forEach(function(t) {
-        cumul += t.pnl || 0;
-        labels.push((t.exit_time || t.entry_time || '').substring(11,16));
-        vals.push(Math.round(cumul));
-        var win = (t.pnl || 0) >= 0;
-        colors.push(win ? '#3fb950' : '#f85149');
-        borders.push(win ? '#3fb950' : '#f85149');
-    });
-
-    if (typeof Chart === 'undefined') return;
-    var ctx = document.getElementById('day-eq-chart');
-    if (!ctx) return;
-
-    if (_dayEqChart) { _dayEqChart.destroy(); _dayEqChart = null; }
-
-    _dayEqChart = new Chart(ctx, {
+function _buildDayEqConfig(closedTrades, labels, vals, colors) {
+    return {
         type: 'line',
         data: {
             labels: labels,
@@ -7096,7 +7100,7 @@ function renderDayEquityCurve(trades) {
                 tension: 0.3,
                 pointRadius: 5,
                 pointBackgroundColor: colors,
-                pointBorderColor: borders,
+                pointBorderColor: colors,
             }]
         },
         options: {
@@ -7107,7 +7111,7 @@ function renderDayEquityCurve(trades) {
                 tooltip: {
                     callbacks: {
                         label: function(ctx) {
-                            var t = closed[ctx.dataIndex];
+                            var t = closedTrades[ctx.dataIndex];
                             var sign = (t.pnl||0) >= 0 ? '+' : '';
                             return 'Cumul: ₹' + ctx.parsed.y.toLocaleString('en-IN') + '  (trade: ' + sign + Math.round(t.pnl||0) + ')';
                         }
@@ -7125,8 +7129,49 @@ function renderDayEquityCurve(trades) {
             },
             animation: { duration: 0 }
         }
+    };
+}
+
+function renderDayEquityCurve(trades) {
+    var section = document.getElementById('day-eq-section');
+    _dayEqClosed = trades.filter(function(t){ return t.pnl != null && t.status !== 'OPEN'; });
+    if (!_dayEqClosed.length) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    _dayEqLabels = []; _dayEqVals = []; _dayEqColors = [];
+    var cumul = 0;
+    _dayEqClosed.forEach(function(t) {
+        cumul += t.pnl || 0;
+        _dayEqLabels.push((t.exit_time || t.entry_time || '').substring(11,16));
+        _dayEqVals.push(Math.round(cumul));
+        _dayEqColors.push((t.pnl || 0) >= 0 ? '#3fb950' : '#f85149');
     });
+
+    if (typeof Chart === 'undefined') return;
+    var ctx = document.getElementById('day-eq-chart');
+    if (!ctx) return;
+
+    if (_dayEqChart) { _dayEqChart.destroy(); _dayEqChart = null; }
+    _dayEqChart = new Chart(ctx, _buildDayEqConfig(_dayEqClosed, _dayEqLabels, _dayEqVals, _dayEqColors));
     ctx.addEventListener('dblclick', function(){ _dayEqChart && _dayEqChart.resetZoom(); });
+}
+
+function openEqModal() {
+    var modal = document.getElementById('eq-modal');
+    var title = document.getElementById('day-detail-title');
+    document.getElementById('eq-modal-title').textContent = '📈 Equity Curve — ' + (title ? title.textContent : '');
+    modal.style.display = 'flex';
+    if (_dayEqChartFull) { _dayEqChartFull.destroy(); _dayEqChartFull = null; }
+    setTimeout(function() {
+        var ctx = document.getElementById('day-eq-chart-full');
+        if (!ctx || !_dayEqClosed.length) return;
+        _dayEqChartFull = new Chart(ctx, _buildDayEqConfig(_dayEqClosed, _dayEqLabels, _dayEqVals, _dayEqColors));
+        ctx.addEventListener('dblclick', function(){ _dayEqChartFull && _dayEqChartFull.resetZoom(); });
+    }, 50);
+}
+
+function closeEqModal() {
+    document.getElementById('eq-modal').style.display = 'none';
 }
 </script>
 </body>
