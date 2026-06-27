@@ -147,10 +147,14 @@ Replaced the old intraday P&L chart (tick-by-tick line) and Trade History card.
 - **Data source:** `/api/equity_curve` endpoint — fetches today's closed trades from trade-analyser, sorted by exit time
 - **Display:** One dot per closed trade (green = profit, red = loss), connected by blue cumulative realized P&L line
 - **Lockout floor:** Red dashed horizontal line shown when profit lock is active
+- **Time labels:** Trade exit time (HH:MM) shown on x-axis, max 12 ticks, no rotation
 - **Summary:** Win/loss count + win rate shown in card header (e.g. `7W / 3L (70%)`)
 - **Refresh:** Every 60s independently of the 2s status poll (no tick noise — only updates when trades close)
+- **Zoom/pan:** Mouse wheel zooms x-axis, click-drag pans, double-click resets to full view, pinch zoom on mobile
+- **Plugins:** `hammerjs@2.0.8` + `chartjs-plugin-zoom@2.0.1` loaded async after Chart.js via `loadScript` chain
 - **Canvas IDs:** `equity-chart` (compact), `equity-chart-full` removed (was duplicate)
 - **JS functions:** `initEquityCharts()`, `updateEquityCharts(eqData)`, `_applyEqData()`, `refreshEquityCurve()`
+- **Hint text** in card header: `scroll=zoom · drag=pan · dblclick=reset`
 
 ### Trailing Drawdown Panel
 

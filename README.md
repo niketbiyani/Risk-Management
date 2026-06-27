@@ -135,11 +135,14 @@ Shows "gap to lockout" as the primary metric:
 
 Replaces the old tick-by-tick intraday P&L chart:
 - One dot per closed trade (green = profit, red = loss)
-- Cumulative realized P&L line
+- Cumulative realized P&L line in blue
 - Red dashed lockout floor line when profit lock is active
-- Win/loss count + win rate in header
-- Refreshes every 60s (not on every tick)
-- Data from trade-analyser FIFO calculation
+- **Time labels** on x-axis showing trade exit time (HH:MM)
+- **Zoom:** mouse wheel zooms x-axis, click-drag pans, double-click resets, pinch zoom on mobile
+- Win/loss count + win rate in card header
+- Refreshes every 60s — only updates when trades close, no tick noise
+- Data from trade-analyser FIFO calculation (not Dhan's inflated average-price figure)
+- CDN dependencies: `hammerjs@2.0.8` + `chartjs-plugin-zoom@2.0.1` loaded after Chart.js
 
 ### Snapshot Chart (DOM Panel)
 
