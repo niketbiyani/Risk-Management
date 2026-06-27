@@ -62,6 +62,9 @@ DASHBOARD_HTML = """
     <meta http-equiv="Expires" content="0">
     <title>Trade Risk Management</title>
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -6451,6 +6454,8 @@ def _build_analytics_page():
 <title>Analytics</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh;}
@@ -7107,6 +7112,11 @@ function renderDayEquityCurve(trades) {
                             return 'Cumul: ₹' + ctx.parsed.y.toLocaleString('en-IN') + '  (trade: ' + sign + Math.round(t.pnl||0) + ')';
                         }
                     }
+                },
+                zoom: {
+                    zoom: { wheel: { enabled: true, speed: 0.1 }, pinch: { enabled: true }, mode: 'x' },
+                    pan: { enabled: true, mode: 'x' },
+                    limits: { x: { minRange: 2 } }
                 }
             },
             scales: {
@@ -7116,6 +7126,7 @@ function renderDayEquityCurve(trades) {
             animation: { duration: 0 }
         }
     });
+    ctx.addEventListener('dblclick', function(){ _dayEqChart && _dayEqChart.resetZoom(); });
 }
 </script>
 </body>
