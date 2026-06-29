@@ -6851,7 +6851,7 @@ function filterDayTrades(tab) {
     if (active) { active.style.borderBottom = '2px solid #3fb950'; active.style.color = '#e6edf3'; active.style.fontWeight = '700'; }
     var filtered = tab === 'all' ? _allDayTrades :
                    _allDayTrades.filter(function(t){ return (t.option_type||'').toUpperCase() === tab.toUpperCase(); });
-    document.getElementById('day-detail-trades').innerHTML = tradeTable(filtered);
+    document.getElementById('trade-table-body').innerHTML = tradeTable(filtered);
 }
 
 function renderDayTrades(trades) {
@@ -6867,12 +6867,14 @@ function renderDayTrades(trades) {
     // Inject tabs above table
     var ceCount = sorted.filter(function(t){ return (t.option_type||'').toUpperCase()==='CE'; }).length;
     var peCount = sorted.filter(function(t){ return (t.option_type||'').toUpperCase()==='PE'; }).length;
-    var tabBar = '<div style="display:flex;gap:4px;margin-bottom:8px;border-bottom:1px solid #21262d;">'
+    var tabBar = '<div id="trade-tab-bar" style="display:flex;gap:4px;margin-bottom:8px;border-bottom:1px solid #21262d;">'
         + '<button id="tab-all" class="trade-type-tab" onclick="filterDayTrades(&quot;all&quot;)" style="background:none;border:none;padding:6px 12px;cursor:pointer;font-size:12px;border-bottom:2px solid #3fb950;color:#e6edf3;font-weight:700;">All ('+sorted.length+')</button>'
         + '<button id="tab-CE" class="trade-type-tab" onclick="filterDayTrades(&quot;CE&quot;)" style="background:none;border:none;padding:6px 12px;cursor:pointer;font-size:12px;border-bottom:2px solid transparent;color:#8b949e;">CE ('+ceCount+')</button>'
         + '<button id="tab-PE" class="trade-type-tab" onclick="filterDayTrades(&quot;PE&quot;)" style="background:none;border:none;padding:6px 12px;cursor:pointer;font-size:12px;border-bottom:2px solid transparent;color:#8b949e;">PE ('+peCount+')</button>'
-        + '</div>';
-    el.innerHTML = tabBar + tradeTable(sorted);
+        + '</div>'
+        + '<div id="trade-table-body"></div>';
+    el.innerHTML = tabBar;
+    document.getElementById('trade-table-body').innerHTML = tradeTable(sorted);
     renderThrashSessions(sorted);
     renderClusters(sorted);
     renderDayEquityCurve(sorted);
