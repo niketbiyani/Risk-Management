@@ -191,12 +191,12 @@ class PositionMonitor:
             for pos in positions:
                 net_qty = pos.get("netQty", 0) or 0
                 if net_qty != 0:
+                    logger.debug("POSITION FIELDS: %s", {k: v for k, v in pos.items()})
                     ltp = pos.get("lastTradedPrice") or pos.get("ltp") or 0
                     avg = pos.get("avgPrice") or pos.get("costPrice") or 0
                     if ltp and avg:
                         u_pnl = (ltp - avg) * net_qty
                     else:
-                        # Fall back to Dhan's field if prices missing
                         u_pnl = pos.get("unrealizedProfit", 0) or 0
                     unrealized_pnl += u_pnl
                     open_position_count += 1

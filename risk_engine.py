@@ -133,12 +133,10 @@ class RiskEngine:
         self.state.update_pnl(realized_pnl, unrealized_pnl)
         total_pnl = realized_pnl + unrealized_pnl
 
-        # ── Check daily max loss (realized only) ──────────────────────
-        # Unrealized P&L from Dhan uses blended average-price across re-entries
-        # and is unreliable for scalpers — only lock out on closed losses.
-        if realized_pnl <= -Config.DAILY_MAX_LOSS:
+        # ── Check daily max loss (total P&L) ──────────────────────────
+        if total_pnl <= -Config.DAILY_MAX_LOSS:
             self.state.activate_lockout(
-                f"Daily loss limit hit: ₹{realized_pnl:,.0f} realized "
+                f"Daily loss limit hit: ₹{total_pnl:,.0f} "
                 f"(limit: ₹{-Config.DAILY_MAX_LOSS:,.0f})")
             return "lockout_max_loss"
 
@@ -199,11 +197,11 @@ class RiskEngine:
     # ── Private Rule Checks ────────────────────────────────────────────
 
     def _check_daily_loss(self) -> RiskDecision:
-        """Check if daily loss limit is breached (realized only)."""
-        realized = self.state.realized_pnl
-        if realized <= -Config.DAILY_MAX_LOSS:
+        """Check if daily loss limit is breached."""
+        total = self.state.total_pnl
+        if total <= -Config.DAILY_MAX_LOSS:
             self.state.activate_lockout(
-                f"Daily loss limit: ₹{realized:,.0f} realized")
+                f"Daily loss limit: ₹{total:,.0f}")
             return RiskDecision(False, "Daily loss limit breached", "lockout")
         return RiskDecision(True)
 
@@ -247,7 +245,7 @@ class RiskEngine:
         total = realized + unrealized
 
         # Calculate distances to limits
-        loss_remaining = max(0, Config.DAILY_MAX_LOSS + realized)
+        loss_remaining = max(0, Config.DAILY_MAX_LOSS + total)
         profit_remaining = Config.DAILY_PROFIT_TARGET - realized if Config.DAILY_PROFIT_TARGET > 0 else None
 
         # Profit lock info
