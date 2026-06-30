@@ -3630,9 +3630,37 @@ def api_admin_unlock():
         _monitor.state._reset_state()
         _monitor._lockout_executed = False
         logger.warning("MANUAL UNLOCK: daily state force-reset via admin endpoint")
-        return jsonify({"status": "ok", "message": "State reset. Platform unlocked for today."})
+        # Also deactivate Dhan kill switch if it was activated during lockout
+        ks_msg = ""
+        try:
+            ks_result = _monitor.api.deactivate_kill_switch()
+            if isinstance(ks_result, dict) and ks_result.get("status") == "success":
+                ks_msg = " Kill switch deactivated on Dhan."
+            else:
+                ks_msg = f" Kill switch response: {ks_result}"
+        except Exception as ke:
+            ks_msg = f" Kill switch deactivation failed: {ke}"
+        logger.warning("MANUAL UNLOCK: kill switch deactivation result:%s", ks_msg)
+        return jsonify({"status": "ok", "message": f"State reset. Platform unlocked for today.{ks_msg}"})
     except Exception as e:
         logger.error("Admin unlock failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/admin/kill_switch", methods=["POST"])
+def api_admin_kill_switch():
+    """Activate or deactivate Dhan kill switch. Body: {"action": "activate"|"deactivate"}"""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "monitor not ready"}), 503
+    data = request.get_json(silent=True) or {}
+    action = data.get("action", "deactivate").lower()
+    try:
+        if action == "activate":
+            result = _monitor.api.activate_kill_switch()
+        else:
+            result = _monitor.api.deactivate_kill_switch()
+        return jsonify({"status": "ok", "result": result})
+    except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
