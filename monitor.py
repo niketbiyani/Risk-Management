@@ -53,6 +53,7 @@ class PositionMonitor:
         self._prev_realized_pnl = 0.0
         self._lockout_executed = False
         self._unlock_grace_until: float = 0.0  # epoch time; lockout suppressed until then
+        self._position_change_skip: int = 0   # skip N evaluation cycles after position change
         self._analyser_realized_pnl: float | None = None  # True realized from trade-analyser
         self._analyser_last_import: float = 0.0           # Timestamp of last import
         self._analyser_import_interval: float = 60.0      # Re-import every 60s
@@ -331,7 +332,8 @@ class PositionMonitor:
         if new_set == old_set:
             return
 
-        logger.info("Position change detected — refreshing MarketFeed subscriptions")
+        logger.info("Position change detected — refreshing MarketFeed subscriptions, skipping 2 eval cycles")
+        self._position_change_skip = 2  # Dhan unrealized is stale for 1-2 cycles after position change
         self._subscribed_instruments = new_pos
         # Merge with extra (OC) instruments, dedup by (seg, sid)
         merged = list(new_pos)
