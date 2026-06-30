@@ -54,9 +54,11 @@ class PositionMonitor:
         self._lockout_executed = False
         self._unlock_grace_until: float = 0.0  # epoch time; lockout suppressed until then
         self._position_change_skip: int = 0   # skip N evaluation cycles after position change
-        self._analyser_realized_pnl: float | None = None  # True realized from trade-analyser
-        self._analyser_last_import: float = 0.0           # Timestamp of last import
-        self._analyser_import_interval: float = 60.0      # Re-import every 60s
+        self._analyser_realized_pnl: float = 0.0   # sum of closed trade P&L from analyser
+        self._analyser_open_trades: list = []       # open trades with entry prices from analyser
+        self._ltp_cache: dict = {}                  # security_id -> latest LTP from WebSocket
+        self._analyser_last_import: float = 0.0
+        self._analyser_import_interval: float = 60.0  # fallback periodic refresh
         self._journaled_order_ids: set = set()  # prevent duplicate journal entries
         self._order_cache_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "order_cache.json"
@@ -109,6 +111,9 @@ class PositionMonitor:
                 self._auto_journal_orders(orders)
         except Exception as e:
             logger.warning("Startup journal backfill failed: %s", e)
+
+        # Prime trade cache on startup
+        threading.Thread(target=self._refresh_trade_cache, args=("startup",), daemon=True).start()
 
         self._monitor_loop()
 
@@ -176,40 +181,19 @@ class PositionMonitor:
             # Re-subscribe MarketFeed if open positions changed
             self._refresh_market_feed(positions)
 
-            # Refresh true realized P&L from trade-analyser every 60s
+            # Periodic fallback refresh (every 60s) in case fill events were missed
             now = time.time()
             if now - self._analyser_last_import >= self._analyser_import_interval:
                 self._analyser_last_import = now
-                threading.Thread(target=self._refresh_analyser_realized, daemon=True).start()
+                threading.Thread(target=self._refresh_trade_cache, daemon=True).start()
 
-            # Calculate unrealized P&L from open positions; use analyser for realized.
-            # Do NOT use Dhan's unrealizedProfit — it blends the current open leg with
-            # historical avg price across all re-entries, giving wrong unrealized on active days.
-            # Instead compute: (LTP - avgPrice) * netQty for each open position.
-            # netQty < 0 means short (sold); avgPrice is the average price of the open leg only.
-            unrealized_pnl = 0.0
-            open_position_count = 0
+            # Realized P&L: sum of closed trades from our cache (updated on every fill)
+            realized_pnl = self._analyser_realized_pnl
 
-            for pos in positions:
-                net_qty = pos.get("netQty", 0) or 0
-                if net_qty != 0:
-                    logger.warning("POSITION FIELDS: %s", {k: v for k, v in pos.items()})
-                    ltp = pos.get("lastTradedPrice") or pos.get("ltp") or 0
-                    avg = pos.get("avgPrice") or pos.get("costPrice") or 0
-                    if ltp and avg:
-                        u_pnl = (ltp - avg) * net_qty
-                    else:
-                        u_pnl = pos.get("unrealizedProfit", 0) or 0
-                    unrealized_pnl += u_pnl
-                    open_position_count += 1
-
-            # Use trade-analyser realized if available, else fall back to Dhan's field.
-            # Dhan's realizedProfit = (sellAvg - buyAvg) * totalQty — inflated on active
-            # scalping days because it averages across all re-entries, not FIFO per trade.
-            if self._analyser_realized_pnl is not None:
-                realized_pnl = self._analyser_realized_pnl
-            else:
-                realized_pnl = sum((pos.get("realizedProfit", 0) or 0) for pos in positions)
+            # Unrealized P&L: calculated from our own open trade cache + WebSocket LTP.
+            # Never use Dhan's unrealizedProfit — it blends all re-entries via average price.
+            unrealized_pnl = self._calc_unrealized()
+            open_position_count = sum(1 for p in positions if (p.get("netQty", 0) or 0) != 0)
 
             # Detect spreads
             spreads = self.trade_mgr.detect_spreads(positions)
@@ -369,6 +353,9 @@ class PositionMonitor:
             if not security_id or ltp <= 0:
                 return
 
+            # Cache LTP for our own unrealized calculation
+            self._ltp_cache[security_id] = ltp
+
             # Push LTP to option chain UI
             try:
                 from dashboard import emit_oc_ltp, _oc_ltp_subscribed
@@ -441,14 +428,22 @@ class PositionMonitor:
             except Exception:
                 pass
 
+            # Refresh trade cache on fill so realized + open trades update immediately
+            if status in ("TRADED", "PART_TRADED", "TRANSIT"):
+                threading.Thread(
+                    target=self._refresh_trade_cache, args=("fill",), daemon=True
+                ).start()
+
         except Exception as e:
             logger.error("Error in order update callback: %s", e)
 
-    def _refresh_analyser_realized(self):
-        """Import latest trades from Dhan into trade-analyser, then sum closed P&L."""
+    def _refresh_trade_cache(self, trigger: str = "periodic"):
+        """
+        Fetch today's trades from trade-analyser and update realized + open trade caches.
+        Triggers: 'startup', 'fill' (order fill detected), 'periodic' (60s fallback).
+        """
         analyser = "http://localhost:5556"
         try:
-            # Trigger re-import
             req = urllib.request.Request(
                 f"{analyser}/api/import",
                 data=b"{}",
@@ -457,20 +452,47 @@ class PositionMonitor:
             )
             urllib.request.urlopen(req, timeout=5)
         except Exception as e:
-            logger.warning("Trade-analyser import failed: %s", e)
-            return  # Keep previous value
+            logger.warning("Trade-analyser import failed (%s): %s", trigger, e)
+            return
 
         try:
             from datetime import date as _date
             today = str(_date.today())
-            url = f"{analyser}/api/trades?date={today}"
-            with urllib.request.urlopen(url, timeout=5) as resp:
+            with urllib.request.urlopen(f"{analyser}/api/trades?date={today}", timeout=5) as resp:
                 trades = json.loads(resp.read())
-            realized = sum(t.get("pnl", 0) or 0 for t in trades if t.get("status") == "CLOSED")
-            self._analyser_realized_pnl = realized
-            logger.debug("Analyser realized P&L: ₹%.0f (%d closed trades)", realized, sum(1 for t in trades if t.get("status") == "CLOSED"))
+
+            closed = [t for t in trades if t.get("status") == "CLOSED"]
+            open_t = [t for t in trades if t.get("status") == "OPEN"]
+
+            self._analyser_realized_pnl = sum(t.get("pnl", 0) or 0 for t in closed)
+            self._analyser_open_trades = open_t
+
+            logger.info("Trade cache refreshed (%s): realized=₹%.0f closed=%d open=%d",
+                        trigger, self._analyser_realized_pnl, len(closed), len(open_t))
         except Exception as e:
-            logger.warning("Trade-analyser fetch failed: %s", e)
+            logger.warning("Trade-analyser fetch failed (%s): %s", trigger, e)
+
+    def _calc_unrealized(self) -> float:
+        """
+        Calculate unrealized P&L from our own open trade cache + WebSocket LTP.
+        For SHORT trades: unrealized = (entry_price - ltp) * quantity
+        For LONG trades:  unrealized = (ltp - entry_price) * quantity
+        Returns 0 if no open trades or no LTP available yet.
+        """
+        total = 0.0
+        for t in self._analyser_open_trades:
+            sid = str(t.get("security_id", ""))
+            ltp = self._ltp_cache.get(sid)
+            if not ltp:
+                continue
+            entry = t.get("entry_price") or 0
+            qty = t.get("quantity") or 0
+            direction = (t.get("direction") or "SHORT").upper()
+            if direction == "SHORT":
+                total += (entry - ltp) * qty
+            else:
+                total += (ltp - entry) * qty
+        return total
 
     def _persist_order_cache(self, orders: list):
         """Save today's order list to disk so backfill works after service restart."""
