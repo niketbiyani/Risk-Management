@@ -3629,7 +3629,8 @@ def api_admin_unlock():
     try:
         _monitor.state._reset_state()
         _monitor._lockout_executed = False
-        logger.warning("MANUAL UNLOCK: daily state force-reset via admin endpoint")
+        _monitor._unlock_grace_until = time.time() + 60  # 60s grace — prevents immediate re-lock from stale Dhan data
+        logger.warning("MANUAL UNLOCK: daily state force-reset via admin endpoint (60s grace period started)")
         # Also deactivate Dhan kill switch if it was activated during lockout
         ks_msg = ""
         try:

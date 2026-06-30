@@ -52,6 +52,7 @@ class PositionMonitor:
         self._last_trade_count = 0
         self._prev_realized_pnl = 0.0
         self._lockout_executed = False
+        self._unlock_grace_until: float = 0.0  # epoch time; lockout suppressed until then
         self._analyser_realized_pnl: float | None = None  # True realized from trade-analyser
         self._analyser_last_import: float = 0.0           # Timestamp of last import
         self._analyser_import_interval: float = 60.0      # Re-import every 60s
@@ -239,8 +240,12 @@ class PositionMonitor:
             except Exception:
                 pass  # Keep previous orders on failure
 
-            # Evaluate P&L against risk rules
-            action = self.risk.evaluate_pnl(realized_pnl, unrealized_pnl)
+            # Evaluate P&L against risk rules (skip during post-unlock grace period)
+            if time.time() < self._unlock_grace_until:
+                logger.info("Post-unlock grace period active — skipping risk evaluation")
+                action = None
+            else:
+                action = self.risk.evaluate_pnl(realized_pnl, unrealized_pnl)
 
             # Check trade-level SL/TP
             sl_tp_triggers = self.trade_mgr.check_sl_tp_triggers(positions)
