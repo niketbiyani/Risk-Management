@@ -191,7 +191,7 @@ class PositionMonitor:
             for pos in positions:
                 net_qty = pos.get("netQty", 0) or 0
                 if net_qty != 0:
-                    logger.debug("POSITION FIELDS: %s", {k: v for k, v in pos.items()})
+                    logger.warning("POSITION FIELDS: %s", {k: v for k, v in pos.items()})
                     ltp = pos.get("lastTradedPrice") or pos.get("ltp") or 0
                     avg = pos.get("avgPrice") or pos.get("costPrice") or 0
                     if ltp and avg:
