@@ -7172,7 +7172,8 @@ function renderDayEquityCurve(trades) {
     var cumul = 0;
     _dayEqClosed.forEach(function(t) {
         cumul += t.pnl || 0;
-        _dayEqLabels.push((t.exit_time || t.entry_time || '').substring(11,16));
+        var raw = t.exit_time || t.entry_time || '';
+        _dayEqLabels.push(raw.length > 8 ? raw.substring(11,16) : raw.substring(0,5));
         _dayEqVals.push(Math.round(cumul));
         _dayEqColors.push((t.pnl || 0) >= 0 ? '#3fb950' : '#f85149');
     });
