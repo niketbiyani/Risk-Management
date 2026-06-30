@@ -450,8 +450,9 @@ class PositionMonitor:
             return
 
         try:
-            from datetime import date as _date
-            today = str(_date.today())
+            from datetime import timezone as _tz, timedelta as _td
+            ist = _tz((_td(hours=5, minutes=30)))
+            today = datetime.now(ist).strftime("%Y-%m-%d")
             with urllib.request.urlopen(f"{analyser}/api/trades?date={today}", timeout=5) as resp:
                 trades = json.loads(resp.read())
 
