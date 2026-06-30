@@ -1079,6 +1079,9 @@ class PositionMonitor:
         logger.warning("Reason: %s", self.state.get("lockout_reason"))
         logger.warning("=" * 60)
 
+        # Set flag immediately so re-entrant monitor cycles skip evaluation
+        self._lockout_executed = True
+
         try:
             # Step 1: Cancel all pending orders
             logger.warning("Step 1: Cancelling all pending orders...")
