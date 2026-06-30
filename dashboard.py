@@ -7154,7 +7154,7 @@ function _buildDayEqConfig(closedTrades, labels, vals, colors) {
                 }
             },
             scales: {
-                x: { ticks: { color: '#484f58', font: { size: 10 }, maxTicksLimit: 12 }, grid: { color: '#161b22' } },
+                x: { ticks: { color: '#8b949e', font: { size: 10 }, maxTicksLimit: 12, maxRotation: 0 }, grid: { color: '#161b22' } },
                 y: { ticks: { color: '#8b949e', font: { size: 10 }, callback: function(v){ return '₹' + v.toLocaleString('en-IN'); } }, grid: { color: '#21262d' } }
             },
             animation: { duration: 0 }
