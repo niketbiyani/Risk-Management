@@ -180,14 +180,25 @@ class PositionMonitor:
                 self._analyser_last_import = now
                 threading.Thread(target=self._refresh_analyser_realized, daemon=True).start()
 
-            # Calculate unrealized P&L from open positions; use analyser for realized
+            # Calculate unrealized P&L from open positions; use analyser for realized.
+            # Do NOT use Dhan's unrealizedProfit — it blends the current open leg with
+            # historical avg price across all re-entries, giving wrong unrealized on active days.
+            # Instead compute: (LTP - avgPrice) * netQty for each open position.
+            # netQty < 0 means short (sold); avgPrice is the average price of the open leg only.
             unrealized_pnl = 0.0
             open_position_count = 0
 
             for pos in positions:
-                u_pnl = pos.get("unrealizedProfit", 0) or 0
-                unrealized_pnl += u_pnl
-                if pos.get("netQty", 0) != 0:
+                net_qty = pos.get("netQty", 0) or 0
+                if net_qty != 0:
+                    ltp = pos.get("lastTradedPrice") or pos.get("ltp") or 0
+                    avg = pos.get("avgPrice") or pos.get("costPrice") or 0
+                    if ltp and avg:
+                        u_pnl = (ltp - avg) * net_qty
+                    else:
+                        # Fall back to Dhan's field if prices missing
+                        u_pnl = pos.get("unrealizedProfit", 0) or 0
+                    unrealized_pnl += u_pnl
                     open_position_count += 1
 
             # Use trade-analyser realized if available, else fall back to Dhan's field.
