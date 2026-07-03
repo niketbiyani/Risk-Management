@@ -5431,19 +5431,23 @@ def api_straddle_chart():
         return result
 
     def fetch_candles(sec_id):
-        try:
-            from_date = (today_d - timedelta(days=35)).strftime("%Y-%m-%d")
-            raw = _monitor.api.get_chart_data(
-                security_id=sec_id,
-                exchange_segment=exchange_segment,
-                instrument_type="OPTIDX",
-                from_date=from_date,
-                to_date=today_d.strftime("%Y-%m-%d"),
-            )
-            return _parse_raw(raw)
-        except Exception as e:
-            logger.warning("straddle fetch_candles %s: %s", sec_id, e)
-            return {}
+        # Dhan intraday_minute_data only reliably returns single-day data.
+        # Fetch yesterday + today separately (same as DOM panel chart).
+        result = {}
+        for d in (prev_d, today_d):
+            date_str = d.strftime("%Y-%m-%d")
+            try:
+                raw = _monitor.api.get_chart_data(
+                    security_id=sec_id,
+                    exchange_segment=exchange_segment,
+                    instrument_type="OPTIDX",
+                    from_date=date_str,
+                    to_date=date_str,
+                )
+                result.update(_parse_raw(raw))
+            except Exception as e:
+                logger.warning("straddle fetch_candles %s %s: %s", sec_id, date_str, e)
+        return result
 
     ce_bars = fetch_candles(ce_id)
     pe_bars = fetch_candles(pe_id)
