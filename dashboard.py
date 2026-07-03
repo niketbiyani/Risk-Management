@@ -5431,8 +5431,6 @@ def api_straddle_chart():
         return result
 
     def fetch_candles(sec_id):
-        # Dhan intraday_minute_data only reliably returns single-day data.
-        # Fetch yesterday + today separately (same as DOM panel chart).
         result = {}
         for d in (prev_d, today_d):
             date_str = d.strftime("%Y-%m-%d")
@@ -5444,13 +5442,21 @@ def api_straddle_chart():
                     from_date=date_str,
                     to_date=date_str,
                 )
-                result.update(_parse_raw(raw))
+                logger.warning("STRADDLE RAW %s %s: keys=%s top=%s", sec_id, date_str,
+                               list(raw.keys()) if isinstance(raw, dict) else type(raw),
+                               str(raw)[:300])
+                parsed = _parse_raw(raw)
+                logger.warning("STRADDLE PARSED %s %s: %d bars", sec_id, date_str, len(parsed))
+                result.update(parsed)
             except Exception as e:
                 logger.warning("straddle fetch_candles %s %s: %s", sec_id, date_str, e)
         return result
 
     ce_bars = fetch_candles(ce_id)
     pe_bars = fetch_candles(pe_id)
+    logger.warning("STRADDLE MERGE: ce=%d pe=%d common=%d ce_id=%s pe_id=%s exseg=%s",
+                   len(ce_bars), len(pe_bars), len(set(ce_bars) & set(pe_bars)),
+                   ce_id, pe_id, exchange_segment)
 
     # Merge on common timestamps
     common_ts = sorted(set(ce_bars) & set(pe_bars))
