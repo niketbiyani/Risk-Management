@@ -5383,9 +5383,6 @@ def api_straddle_chart():
             elif inst.option_type == "PE" and abs(inst.strike_price - pe_strike) < 0.01:
                 pe_id = inst.security_id
 
-    logger.warning("STRADDLE LOOKUP: underlying=%s exchange=%s exseg=%s expiry=%s ce_strike=%s pe_strike=%s ce_id=%s pe_id=%s cache_size=%s",
-                   underlying, exchange, exchange_segment, expiry, ce_strike, pe_strike, ce_id, pe_id,
-                   len(_instrument_cache._instruments) if _instrument_cache else 0)
     if not ce_id or not pe_id:
         return jsonify({"error": f"Could not find instruments: CE {underlying} {ce_strike} / PE {underlying} {pe_strike} exp {expiry}"}), 404
 
@@ -5434,32 +5431,38 @@ def api_straddle_chart():
         return result
 
     def fetch_candles(sec_id):
+        import time as _time
         result = {}
         for d in (prev_d, today_d):
             date_str = d.strftime("%Y-%m-%d")
-            try:
-                raw = _monitor.api.get_chart_data(
-                    security_id=sec_id,
-                    exchange_segment=exchange_segment,
-                    instrument_type="OPTIDX",
-                    from_date=date_str,
-                    to_date=date_str,
-                )
-                logger.warning("STRADDLE RAW %s %s: keys=%s top=%s", sec_id, date_str,
-                               list(raw.keys()) if isinstance(raw, dict) else type(raw),
-                               str(raw)[:300])
-                parsed = _parse_raw(raw)
-                logger.warning("STRADDLE PARSED %s %s: %d bars", sec_id, date_str, len(parsed))
-                result.update(parsed)
-            except Exception as e:
-                logger.warning("straddle fetch_candles %s %s: %s", sec_id, date_str, e)
+            for attempt in range(3):
+                try:
+                    if attempt:
+                        _time.sleep(attempt * 1.5)
+                    raw = _monitor.api.get_chart_data(
+                        security_id=sec_id,
+                        exchange_segment=exchange_segment,
+                        instrument_type="OPTIDX",
+                        from_date=date_str,
+                        to_date=date_str,
+                    )
+                    # Retry on rate limit
+                    if isinstance(raw, dict) and raw.get("status") == "failure":
+                        err = (raw.get("remarks") or {}).get("error_code", "")
+                        if err == "DH-904" and attempt < 2:
+                            logger.warning("straddle rate-limit %s %s, retry %d", sec_id, date_str, attempt + 1)
+                            continue
+                    result.update(_parse_raw(raw))
+                    break
+                except Exception as e:
+                    logger.warning("straddle fetch_candles %s %s: %s", sec_id, date_str, e)
+                    break
+            _time.sleep(0.4)  # space out calls to stay under rate limit
         return result
 
     ce_bars = fetch_candles(ce_id)
     pe_bars = fetch_candles(pe_id)
-    logger.warning("STRADDLE MERGE: ce=%d pe=%d common=%d ce_id=%s pe_id=%s exseg=%s",
-                   len(ce_bars), len(pe_bars), len(set(ce_bars) & set(pe_bars)),
-                   ce_id, pe_id, exchange_segment)
+    logger.info("straddle chart: ce=%d bars pe=%d bars common=%d", len(ce_bars), len(pe_bars), len(set(ce_bars) & set(pe_bars)))
 
     # Merge on common timestamps
     common_ts = sorted(set(ce_bars) & set(pe_bars))
