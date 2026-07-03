@@ -5383,6 +5383,9 @@ def api_straddle_chart():
             elif inst.option_type == "PE" and abs(inst.strike_price - pe_strike) < 0.01:
                 pe_id = inst.security_id
 
+    logger.warning("STRADDLE LOOKUP: underlying=%s exchange=%s exseg=%s expiry=%s ce_strike=%s pe_strike=%s ce_id=%s pe_id=%s cache_size=%s",
+                   underlying, exchange, exchange_segment, expiry, ce_strike, pe_strike, ce_id, pe_id,
+                   len(_instrument_cache._instruments) if _instrument_cache else 0)
     if not ce_id or not pe_id:
         return jsonify({"error": f"Could not find instruments: CE {underlying} {ce_strike} / PE {underlying} {pe_strike} exp {expiry}"}), 404
 
