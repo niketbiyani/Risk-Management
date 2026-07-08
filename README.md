@@ -373,3 +373,81 @@ sudo htpasswd /etc/nginx/.htpasswd trader
 |----------|--------|-------------|
 | `/api/admin/unlock` | POST | Emergency state reset (bypasses lockout) |
 | `/api/admin/reset_hwm` | POST | Reset HWM + profit lock without clearing full state |
+
+---
+
+## Troubleshooting
+
+### 1. Disk Exhaustion (`No space left on device`)
+* **Symptom:** The service exits immediately on startup with `status=1/FAILURE`. Checking logs using `sudo journalctl -u risk-manager.service -n 50` shows a traceback containing:
+  ```
+  OSError: [Errno 28] No space left on device
+  ```
+* **Cause:** The server disk is 100% full, preventing the application or systemd from writing log files (`platform.log` or system journal). This also crashes token refresh attempts, which truncates the `.env` file to `0` bytes.
+* **Resolution:**
+  1. Check disk space distribution:
+     ```bash
+     df -h
+     ```
+  2. Locate the largest folders inside `/root` (or top-level) without writing to temporary storage:
+     ```bash
+     du -h --max-depth=1 /
+     du -h --max-depth=1 /root
+     ```
+  3. Clean up space immediately:
+     * Truncate large platform logs:
+       ```bash
+       > /root/Risk-Management/platform.log
+       ```
+     * Vacuum system journals (keeping only last 100MB):
+       ```bash
+       sudo journalctl --vacuum-size=100M
+       ```
+     * Clean package manager cache:
+       ```bash
+       sudo apt-get clean
+       ```
+     * Remove unused folders (e.g., old projects or backups):
+       ```bash
+       rm -rf /root/risk_guardian /root/dom-analyzer
+       rm -rf /root/backups/*
+       ```
+
+### 2. Empty / Corrupted `.env` File
+* **Symptom:** The service logs error messages stating:
+  ```
+  Config error: DHAN_CLIENT_ID is required
+  Config error: DHAN_ACCESS_TOKEN is required
+  ```
+* **Cause:** When the disk runs out of space, the automated token manager attempting to write a renewed token to `.env` truncates the file to 0 bytes but fails to write the contents, leaving the file completely empty.
+* **Resolution:**
+  1. Verify if `.env` is empty:
+     ```bash
+     cat /root/Risk-Management/.env
+     ```
+  2. Copy settings from the `trade-analyser` project if available:
+     ```bash
+     cp /root/trade-analyser/.env /root/Risk-Management/.env
+     ```
+  3. Edit `.env` to configure port `5555`:
+     ```bash
+     nano /root/Risk-Management/.env
+     ```
+     * Ensure `DASHBOARD_PORT=5555` is set.
+     * Ensure risk parameters (e.g., `DAILY_MAX_LOSS=5000`) are appended to the bottom.
+
+### 3. API Invalid Warnings (Expired/Missing Token)
+* **Symptom:** Quotes do not load or the UI throws an "api invalid" warning.
+* **Cause:** Your Dhan access token is expired or invalid.
+* **Resolution (Manual):**
+  * Generate a new access token on `web.dhan.co` -> Profile -> DhanHQ Trading APIs.
+  * Update `DHAN_ACCESS_TOKEN=your_new_token` in `/root/Risk-Management/.env` and run `sudo systemctl restart risk-manager`.
+* **Resolution (Automatic - Recommended):**
+  * Set up TOTP on `web.dhan.co` -> Profile -> DhanHQ Trading APIs -> Setup TOTP.
+  * Paste your 6-digit PIN and the TOTP alphanumeric secret key into your `.env`:
+    ```env
+    DHAN_PIN=your_dhan_pin
+    DHAN_TOTP_SECRET=your_totp_secret
+    ```
+  * Restart the service. The system will automatically fetch a fresh token on startup and renew it every 12 hours.
+
