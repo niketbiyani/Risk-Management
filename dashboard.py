@@ -2747,6 +2747,18 @@ DASHBOARD_HTML = """
             var body = document.getElementById('oc-body');
             var spot = d.spot || 0;
             _ocLotSize = d.lot_size || 75;
+            
+            // Adjust input step and min values based on active lot size
+            var qtyOverride = document.getElementById('sqb-qty-override');
+            if (qtyOverride) {
+                qtyOverride.step = _ocLotSize;
+                qtyOverride.min = _ocLotSize;
+            }
+            var tagQtyInput = document.getElementById('chart-tag-breakout-qty-input');
+            if (tagQtyInput) {
+                tagQtyInput.step = _ocLotSize;
+                tagQtyInput.min = _ocLotSize;
+            }
             var now = new Date();
             var timeStr = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0') + ':' + now.getSeconds().toString().padStart(2,'0');
             document.getElementById('oc-spot').textContent = 'Spot: \\u20B9' + (spot > 0 ? spot.toFixed(2) : '--') + '  |  Expiry: ' + expiry + '  |  Lot: ' + _ocLotSize + '  |  ' + timeStr;
@@ -3118,11 +3130,25 @@ DASHBOARD_HTML = """
                 nc.style.color = net >= 0 ? '#3fb950' : '#f85149';
             } else { nc.textContent = ''; }
 
-            // Auto-qty from SL risk: lots = floor(maxLoss / ((sl - sellPrice) * lotSize))
+            // Auto-qty from SL risk: lots = floor(maxLoss / (risk_points * lotSize))
             var qtyEl  = document.getElementById('sqb-qty');
             var lotsEl = document.getElementById('sqb-lots');
             var autoQty = 0;
-            if (sl > sellPrice && sellPrice > 0 && maxLoss > 0) {
+
+            // Check if we are focusing on Chart trading prices
+            var chartBreakout = parseFloat(document.getElementById('chart-breakout-val').value) || 0;
+            var chartSL = parseFloat(document.getElementById('chart-sl-val').value) || 0;
+
+            if (chartBreakout > 0 && chartSL > 0 && maxLoss > 0) {
+                var diff = Math.abs(chartBreakout - chartSL);
+                if (diff > 0) {
+                    var riskPerLot = diff * lotSize;
+                    var lots = Math.floor(maxLoss / riskPerLot);
+                    autoQty = lots * lotSize;
+                    qtyEl.textContent  = autoQty > 0 ? autoQty : '-';
+                    lotsEl.textContent = lots > 0 ? '(' + lots + ' lots)' : '';
+                }
+            } else if (sl > sellPrice && sellPrice > 0 && maxLoss > 0) {
                 var riskPerLot = (sl - sellPrice) * lotSize;
                 var lots = Math.floor(maxLoss / riskPerLot);
                 autoQty = lots * lotSize;
@@ -3710,6 +3736,7 @@ DASHBOARD_HTML = """
                     axisLabelVisible: true,
                     title: title,
                 });
+                if (typeof sqbAutoCalc === 'function') sqbAutoCalc();
                 window.repositionChartTags();
             }
         };
