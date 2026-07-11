@@ -678,11 +678,12 @@ DASHBOARD_HTML = """
                             <div style="display:flex;gap:2px;align-items:center;">
                                 <button id="dom-tab-depth" onclick="switchDomTab('depth')" style="background:none;border:none;color:#3fb950;cursor:pointer;font-size:11px;font-weight:700;padding:2px 8px;border-bottom:2px solid #3fb950;">Depth</button>
                                 <button id="dom-tab-chart" onclick="switchDomTab('chart')" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:11px;font-weight:400;padding:2px 8px;border-bottom:2px solid transparent;">Chart</button>
-                                <select id="chart-timeframe" class="form-input" style="display:none;width:55px;padding:2px 4px;font-size:10px;height:20px;margin-left:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#8b949e;" onchange="changeChartTimeframe()" title="Chart Timeframe">
-                                    <option value="60">1m</option>
-                                    <option value="15">15s</option>
-                                    <option value="5">5s</option>
-                                </select>
+                                <div id="chart-timeframe-group" style="display:none;gap:4px;align-items:center;margin-left:6px;">
+                                    <button id="tf-btn-60" onclick="setChartTimeframe(60)" class="btn-xs btn-neutral" style="padding:2px 6px;font-size:10px;font-weight:700;background:#238636;border-color:#238636;color:#ffffff;line-height:1.2;">1m</button>
+                                    <button id="tf-btn-15" onclick="setChartTimeframe(15)" class="btn-xs btn-neutral" style="padding:2px 6px;font-size:10px;font-weight:700;background:#21262d;border-color:#30363d;color:#8b949e;line-height:1.2;">15s</button>
+                                    <button id="tf-btn-5" onclick="setChartTimeframe(5)" class="btn-xs btn-neutral" style="padding:2px 6px;font-size:10px;font-weight:700;background:#21262d;border-color:#30363d;color:#8b949e;line-height:1.2;">5s</button>
+                                </div>
+                                <input type="hidden" id="chart-timeframe" value="60">
                             </div>
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
@@ -3580,11 +3581,11 @@ DASHBOARD_HTML = """
             var canvasDiv = document.getElementById('dom-chart-canvas');
             var depthBtn = document.getElementById('dom-tab-depth');
             var chartBtn = document.getElementById('dom-tab-chart');
-            var tfSelect = document.getElementById('chart-timeframe');
+            var tfSelect = document.getElementById('chart-timeframe-group');
             if (tab === 'chart') {
                 depthDiv.style.display = 'none';
                 chartDiv.style.display = 'block';
-                if (tfSelect) tfSelect.style.display = 'inline-block';
+                if (tfSelect) tfSelect.style.display = 'flex';
                 depthBtn.style.fontWeight = '400'; depthBtn.style.borderBottomColor = 'transparent'; depthBtn.style.color = '#8b949e';
                 chartBtn.style.fontWeight = '700'; chartBtn.style.borderBottomColor = '#3fb950';    chartBtn.style.color = '#3fb950';
                 
@@ -3605,6 +3606,27 @@ DASHBOARD_HTML = """
             _liveBarTime = 0; _liveBarOpen = 0; _liveBarHigh = 0; _liveBarLow = Infinity;
             _refreshChart();
             showToast('Timeframe changed. Live ticks will aggregate to ' + document.getElementById('chart-timeframe').value + 's bars.', 'info');
+        };
+
+        window.setChartTimeframe = function(seconds) {
+            var el = document.getElementById('chart-timeframe');
+            if (el) el.value = seconds;
+            var tfs = [60, 15, 5];
+            tfs.forEach(function(t) {
+                var btn = document.getElementById('tf-btn-' + t);
+                if (btn) {
+                    if (t === seconds) {
+                        btn.style.background = '#238636';
+                        btn.style.borderColor = '#238636';
+                        btn.style.color = '#ffffff';
+                    } else {
+                        btn.style.background = '#21262d';
+                        btn.style.borderColor = '#30363d';
+                        btn.style.color = '#8b949e';
+                    }
+                }
+            });
+            window.changeChartTimeframe();
         };
 
         // ── Maximization Toggle ──
