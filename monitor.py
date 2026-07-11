@@ -177,10 +177,14 @@ class PositionMonitor:
             # Lot size violation checks
             self._evaluate_lot_size_violations(positions or [])
             
-            # Update total executions count for brokerage calculation
+            # Update total executions count (counting unique filled or partially filled orders)
             try:
-                tradebook = self.api.get_trade_book() or []
-                self.state.set("total_executions", len(tradebook))
+                orders = self.api.get_order_book() or []
+                filled_order_ids = {
+                    str(o["orderId"]) for o in orders 
+                    if o.get("orderStatus") in ("TRADED", "PARTIALLY_TRADED") and "orderId" in o
+                }
+                self.state.set("total_executions", len(filled_order_ids))
             except Exception as e:
                 logger.debug("Failed to update total_executions: %s", e)
 

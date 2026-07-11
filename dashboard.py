@@ -591,7 +591,6 @@ DASHBOARD_HTML = """
                             <select id="oc-expiry" class="form-input" style="width:120px;padding:4px 8px;font-size:12px;" onchange="loadOptionChain()">
                                 <option value="">Loading...</option>
                             </select>
-                            <button onclick="loadOptionChain()" class="btn-neutral" style="padding:4px 10px;font-size:11px;">Refresh</button>
                             <span id="oc-auto-status" style="font-size:10px;color:#3fb950;margin-left:6px;">Auto 2s</span>
                         </div>
                     </div>
@@ -3440,7 +3439,21 @@ DASHBOARD_HTML = """
                 grid:   { vertLines:{color:'#21262d'}, horzLines:{color:'#21262d'} },
                 crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
                 rightPriceScale: { borderColor:'#30363d' },
-                timeScale: { borderColor:'#30363d', timeVisible:true, secondsVisible:false },
+                timeScale: { 
+                    borderColor:'#30363d', 
+                    timeVisible:true, 
+                    secondsVisible:false,
+                    tickMarkFormatter: function(time, tickMarkType, locale) {
+                        var date = new Date(time * 1000);
+                        return date.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+                    }
+                },
+                localization: {
+                    timeFormatter: function(timestamp) {
+                        var date = new Date(timestamp * 1000);
+                        return date.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+                    }
+                }
             });
             _lwSeries = _lwChart.addCandlestickSeries({
                 upColor:'#3fb950', downColor:'#f85149',
@@ -3631,7 +3644,9 @@ DASHBOARD_HTML = """
                     if (labelEl) {
                         if (breakoutPrice > 0) {
                             var diff = slPrice - breakoutPrice;
-                            labelEl.textContent = 'STOP LOSS LIMIT (' + (diff >= 0 ? '+' : '') + diff.toFixed(2) + ' pts)';
+                            var qty = parseFloat(document.getElementById('sqb-qty-override').value) || parseFloat(document.getElementById('sqb-qty').textContent) || 50;
+                            var totalLoss = Math.abs(diff) * qty;
+                            labelEl.textContent = 'STOP LOSS LIMIT (' + (diff >= 0 ? '+' : '') + diff.toFixed(2) + ' pts | -₹' + totalLoss.toFixed(2) + ')';
                         } else {
                             labelEl.textContent = 'STOP LOSS LIMIT';
                         }
@@ -4142,14 +4157,11 @@ DASHBOARD_HTML = """
             if (price <= 0) return;
             
             if (type === 'breakout') {
-                document.getElementById('chart-breakout-val').value = price.toFixed(2);
-                window.updateBreakoutLine(price);
+                window.setPriceLineValue('breakout', price);
             } else if (type === 'sl') {
-                document.getElementById('chart-sl-val').value = price.toFixed(2);
-                window.updateSlLine(price);
+                window.setPriceLineValue('sl', price);
             } else if (type === 'tp') {
-                document.getElementById('chart-tp-val').value = price.toFixed(2);
-                window.updateTpLine(price);
+                window.setPriceLineValue('tp', price);
             }
             showToast('Placed ' + type.toUpperCase() + ' line at ' + price.toFixed(2), 'success');
         };

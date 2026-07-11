@@ -159,15 +159,24 @@ class RiskEngine:
                 f"(limit: ₹{-Config.DAILY_MAX_LOSS:,.0f})")
             return "lockout_max_loss"
 
-        # ── Check profit lock activation ───────────────────────────────
-        if (not self.state.profit_lock_active and
-                realized_pnl >= Config.PROFIT_LOCK_THRESHOLD):
+        # ── Check profit lock activation & trailing ratchet ───────────
+        if realized_pnl >= Config.PROFIT_LOCK_THRESHOLD:
             lock_pct = Config.PROFIT_LOCK_PERCENTAGE / 100
-            floor = realized_pnl * lock_pct
-            self.state.activate_profit_lock(realized_pnl, floor)
-            logger.info("Profit lock triggered at ₹%.0f, floor set to ₹%.0f",
-                        realized_pnl, floor)
-            return "profit_lock_activated"
+            new_floor = realized_pnl * lock_pct
+            
+            # If not yet active, activate it
+            if not self.state.profit_lock_active:
+                self.state.activate_profit_lock(realized_pnl, new_floor)
+                logger.info("Profit lock triggered at ₹%.0f, floor set to ₹%.0f",
+                            realized_pnl, new_floor)
+                return "profit_lock_activated"
+            
+            # If active, ratchet up the floor if current realized_pnl exceeds the previous lock level HWM
+            elif realized_pnl > self.state.get("profit_lock_level", 0.0):
+                self.state.activate_profit_lock(realized_pnl, new_floor)
+                logger.info("Profit lock ratcheted up to new peak ₹%.0f, floor set to ₹%.0f",
+                            realized_pnl, new_floor)
+                return "profit_lock_ratcheted"
 
         # ── Check profit lock floor breach ─────────────────────────────
         if self.state.profit_lock_active:
