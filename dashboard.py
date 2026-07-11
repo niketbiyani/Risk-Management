@@ -55,6 +55,11 @@ DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+        if (window.location.pathname.indexOf('chart-trading') >= 0) {
+            document.documentElement.classList.add('chart-trading-mode');
+        }
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -244,6 +249,22 @@ DASHBOARD_HTML = """
         .oc-b-btn:hover, .oc-b-active { background:#1a4d1a !important; }
         .oc-leg-sell-selected { background:#2d1117 !important; }
         .oc-leg-buy-selected  { background:#0d2117 !important; }
+
+        /* ── Chart Trading Fullscreen Overrides ────────────────── */
+        .chart-trading-mode .header { display: none !important; }
+        .chart-trading-mode .grid { display: none !important; }
+        .chart-trading-mode .desktop-only { display: none !important; }
+        .chart-trading-mode #trading-desktop-container { display: block !important; }
+        .chart-trading-mode #oc-scroll-container {
+            max-height: none !important;
+            height: calc(100vh - 100px) !important;
+        }
+        .chart-trading-mode #dom-chart-canvas {
+            height: calc(100vh - 180px) !important;
+        }
+        .chart-trading-mode body {
+            padding: 8px 0 !important;
+        }
 
         /* ── Mobile responsive ───────────────────────────────────── */
         @media (max-width: 768px) {
@@ -555,7 +576,7 @@ DASHBOARD_HTML = """
     </div>
 
     <!-- Option Chain + Depth of Market (side by side) -->
-    <div class="desktop-only" style="padding:0 24px;margin-top:16px;">
+    <div id="trading-desktop-container" class="desktop-only" style="padding:0 24px;margin-top:16px;">
         <div id="trading-workspace" style="display:flex;gap:16px;transition:all 0.2s;">
             <!-- Left: Option Chain -->
             <div id="oc-workspace-col" style="flex:0 0 38%;min-width:0;transition:all 0.2s;">
