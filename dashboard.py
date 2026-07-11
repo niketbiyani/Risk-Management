@@ -3494,6 +3494,7 @@ DASHBOARD_HTML = """
                  initialHeight = window.innerHeight - 180;
                  if (initialHeight < 300) initialHeight = 300;
              }
+             container.style.height = initialHeight + 'px';
              _lwChart = LightweightCharts.createChart(container, {
                 width:  container.clientWidth || 600,
                 height: initialHeight,
@@ -4856,10 +4857,20 @@ def api_option_chain_data():
                             if isinstance(outer, dict) and "data" in outer:
                                 outer = outer["data"]
                             if isinstance(outer, dict):
-                                for seg in outer.values():
-                                    if isinstance(seg, dict):
-                                        for sid, info in seg.items():
-                                            result[str(sid)] = (info.get("last_price", 0) if isinstance(info, dict) else (info or 0)) or 0
+                                for key, val in outer.items():
+                                    if isinstance(val, dict):
+                                        # Case 1: Direct key matching {"123": {"last_price": 100}}
+                                        if "last_price" in val:
+                                            result[str(key)] = float(val.get("last_price", 0) or 0)
+                                        else:
+                                            # Case 2: Segment-keyed nesting {"BSE_FNO": {"123": {"last_price": 100}}}
+                                            for sub_key, sub_val in val.items():
+                                                if isinstance(sub_val, dict) and "last_price" in sub_val:
+                                                    result[str(sub_key)] = float(sub_val.get("last_price", 0) or 0)
+                                                elif isinstance(sub_val, (int, float)):
+                                                    result[str(sub_key)] = float(sub_val or 0)
+                                    elif isinstance(val, (int, float)):
+                                        result[str(key)] = float(val or 0)
                         return result
 
                     # Pass 1: sample every 10th strike to find approximate ATM
