@@ -46,7 +46,11 @@ class InstrumentCache:
         self.count: int = 0
 
     def load(self) -> int:
-        """Download and parse the Dhan scrip master CSV."""
+        """Download and parse the scrip master CSV based on the active broker."""
+        from config import Config
+        if Config.ACTIVE_BROKER == "KOTAK":
+            return self.load_kotak()
+
         logger.info("Downloading instrument data from Dhan...")
         start = time.time()
 
@@ -122,6 +126,136 @@ class InstrumentCache:
 
         elapsed = time.time() - start
         logger.info("Loaded %d instruments in %.1fs", self.count, elapsed)
+        return self.count
+
+    def load_kotak(self) -> int:
+        """Download and parse Kotak Neo master scrips for NSE/BSE Equity & Derivatives."""
+        logger.info("Initializing Kotak Neo scrip master download...")
+        start = time.time()
+        
+        csv_data_list = []
+        
+        # 1. Download via SDK or read locally cached files
+        try:
+            from kotak_api import KotakNeoAPI
+            api = KotakNeoAPI()
+            if api.client:
+                logger.info("Downloading Kotak Neo scrip master files via SDK...")
+                for segment in ("nse_cm", "nse_fo", "bse_fo"):
+                    try:
+                        res = api.client.scrip_master(exchange_segment=segment)
+                        if isinstance(res, str) and res.endswith(".csv"):
+                            with open(res, "r", encoding="utf-8") as f:
+                                csv_data_list.append(f.read())
+                        elif isinstance(res, str):
+                            csv_data_list.append(res)
+                    except Exception as ex:
+                        logger.warning("Failed to download Kotak segment %s: %s", segment, ex)
+        except Exception as e:
+            logger.warning("Could not download Kotak scrips dynamically: %s. Attempting to load from local cache.", e)
+
+        # 2. Local fallback if no dynamic data
+        if not csv_data_list:
+            for fname in ("nse_cm.csv", "nse_fo.csv", "bse_fo.csv"):
+                if os.path.exists(fname):
+                    logger.info("Found local cached Kotak scrip file: %s", fname)
+                    with open(fname, "r", encoding="utf-8") as f:
+                        csv_data_list.append(f.read())
+        
+        if not csv_data_list:
+            logger.error("No Kotak scrip master files available (neither dynamic download nor local files found).")
+            return 0
+
+        # 3. Parse the CSV files
+        instruments = []
+        for csv_text in csv_data_list:
+            reader = csv.DictReader(io.StringIO(csv_text))
+            for row in reader:
+                row_lower = {k.lower(): v for k, v in row.items() if k is not None}
+                
+                security_id = row_lower.get("psymbol", row_lower.get("instrument_token", row_lower.get("security_id", "")))
+                trading_symbol = row_lower.get("ptrdsymbol", row_lower.get("trading_symbol", ""))
+                symbol_name = row_lower.get("psymbolname", row_lower.get("symbol_name", ""))
+                exchange = row_lower.get("pexchange", row_lower.get("exchange", "NSE")).upper()
+                segment = row_lower.get("psegment", row_lower.get("segment", "nse_fo")).lower()
+                inst_type = row_lower.get("pinsttype", row_lower.get("instrument_name", "OPTIDX")).upper()
+                
+                if not security_id or not trading_symbol:
+                    continue
+                
+                if exchange not in ("NSE", "BSE"):
+                    continue
+                if inst_type not in ("OPTIDX", "OPTSTK", "FUTIDX", "FUTSTK", "EQUITY", "ETF"):
+                    continue
+                
+                if segment == "nse_fo":
+                    exchange_segment = "NSE_FNO"
+                elif segment == "bse_fo":
+                    exchange_segment = "BSE_FNO"
+                elif segment == "nse_cm":
+                    exchange_segment = "NSE_EQ"
+                elif segment == "bse_cm":
+                    exchange_segment = "BSE_EQ"
+                else:
+                    exchange_segment = "NSE_FNO"
+                
+                if symbol_name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY") and inst_type == "OPTIDX":
+                    exchange_segment = "NSE_FNO"
+                elif symbol_name == "SENSEX" and inst_type == "OPTIDX":
+                    exchange_segment = "BSE_FNO"
+                
+                try:
+                    lot_size = int(float(row_lower.get("plotsize", row_lower.get("lot_size", row_lower.get("lot_units", "1"))) or "1"))
+                except (ValueError, TypeError):
+                    lot_size = 1
+                
+                try:
+                    strike = float(row_lower.get("pstrikeprice", row_lower.get("strike_price", "0")) or "0")
+                except (ValueError, TypeError):
+                    strike = 0.0
+                
+                try:
+                    tick = float(row_lower.get("pticksize", row_lower.get("tick_size", "0.05")) or "0.05")
+                except (ValueError, TypeError):
+                    tick = 0.05
+                
+                expiry_raw = row_lower.get("pexpirydate", row_lower.get("expiry_date", ""))
+                expiry_date = ""
+                if expiry_raw:
+                    try:
+                        dt = datetime.strptime(expiry_raw.strip(), "%d-%b-%Y")
+                        expiry_date = dt.strftime("%Y-%m-%d")
+                    except Exception:
+                        try:
+                            dt = datetime.strptime(expiry_raw.strip(), "%Y-%m-%d")
+                            expiry_date = dt.strftime("%Y-%m-%d")
+                        except Exception:
+                            expiry_date = expiry_raw
+                
+                inst = Instrument(
+                    security_id=str(security_id),
+                    trading_symbol=trading_symbol,
+                    custom_symbol="",
+                    symbol_name=symbol_name,
+                    exchange=exchange,
+                    segment=segment,
+                    instrument_type=inst_type,
+                    lot_size=lot_size,
+                    expiry_date=expiry_date,
+                    strike_price=strike,
+                    option_type=row_lower.get("poptiontype", row_lower.get("option_type", "XX")).upper(),
+                    tick_size=tick,
+                    exchange_segment=exchange_segment
+                )
+                instruments.append(inst)
+
+        self._instruments = instruments
+        self._by_id = {inst.security_id: inst for inst in instruments}
+        self._loaded_at = time.time()
+        self.count = len(instruments)
+
+        elapsed = time.time() - start
+        logger.info("Loaded %d Kotak instruments in %.1fs", self.count, elapsed)
         return self.count
 
     def reload(self) -> int:

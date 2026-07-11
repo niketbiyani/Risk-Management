@@ -20,7 +20,7 @@ import threading
 import time
 
 from config import Config
-from dhan_api import DhanAPI
+
 from state_manager import StateManager
 from risk_engine import RiskEngine
 from monitor import PositionMonitor
@@ -103,7 +103,7 @@ def auto_refresh_token_on_startup():
         return
 
     logger.info("Auto-refreshing API token on startup...")
-    success = refresh_token()
+    success = refresh_token(max_retries=1)
     if success:
         # Reload config so Config class picks up the new token
         from dotenv import load_dotenv

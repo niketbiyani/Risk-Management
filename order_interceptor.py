@@ -15,7 +15,7 @@ import logging
 from typing import Optional
 
 from config import Config
-from dhan_api import DhanAPI
+from broker_api import BrokerAPI
 from risk_engine import RiskEngine, RiskDecision
 from state_manager import StateManager
 
@@ -24,11 +24,11 @@ logger = logging.getLogger(__name__)
 
 class OrderInterceptor:
     """
-    Wraps DhanAPI to enforce risk checks before every order.
-    Use this instead of DhanAPI directly for risk-checked order placement.
+    Wraps BrokerAPI to enforce risk checks before every order.
+    Use this instead of BrokerAPI directly for risk-checked order placement.
     """
 
-    def __init__(self, api: DhanAPI, risk: RiskEngine, state: StateManager):
+    def __init__(self, api: BrokerAPI, risk: RiskEngine, state: StateManager):
         self.api = api
         self.risk = risk
         self.state = state

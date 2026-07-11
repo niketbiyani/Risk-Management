@@ -10,3 +10,5 @@ gevent>=23.0.0
 gevent-websocket>=0.10.1
 pyotp>=2.9.0
 websocket-client>=1.6.0
+neo-api-client @ git+https://github.com/Kotak-Neo/Kotak-neo-api-v2.git@v2.0.2
+

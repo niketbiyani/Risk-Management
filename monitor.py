@@ -21,7 +21,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone, time as dtime
 
 from config import Config
-from dhan_api import DhanAPI
+from broker_api import BrokerAPI
 from state_manager import StateManager
 from risk_engine import RiskEngine
 from trade_manager import TradeManager
@@ -38,7 +38,7 @@ class PositionMonitor:
     """
 
     def __init__(self):
-        self.api = DhanAPI()
+        self.api = BrokerAPI()
         self.state = StateManager()
         self.risk = RiskEngine(self.state)
         self.trade_mgr = TradeManager(self.api)
@@ -172,6 +172,43 @@ class PositionMonitor:
             # Fetch current positions
             positions = self.api.get_positions()
             self._last_positions = positions
+
+            # Auto-place protection orders from chart triggers
+            if hasattr(self, "chart_sl_tp") and self.chart_sl_tp:
+                for pos in positions:
+                    sid = str(pos["securityId"])
+                    if sid in self.chart_sl_tp:
+                        trigger = self.chart_sl_tp[sid]
+                        if pos["netQty"] != 0:
+                            orders = self.api.get_order_book()
+                            has_sl = False
+                            for o in orders:
+                                if str(o.get("securityId", "")) == sid and o.get("orderStatus", "") == "PENDING" and o.get("triggerPrice", 0) > 0:
+                                    has_sl = True
+                                    break
+                            
+                            if not has_sl:
+                                sl_price = trigger["sl"]
+                                if sl_price > 0:
+                                    tx_type = "SELL" if pos["netQty"] > 0 else "BUY"
+                                    qty = abs(pos["netQty"])
+                                    logger.info("Auto-placing Stop Loss protection order for %s at %.2f (qty: %d)", sid, sl_price, qty)
+                                    # Calculate limit price with buffer to prevent execution slippage (STOP_LOSS_LIMIT)
+                                    buffer = round(max(0.50, sl_price * 0.01) * 20) / 20
+                                    limit_price = sl_price + buffer if tx_type == "BUY" else max(0.05, sl_price - buffer)
+                                    try:
+                                        self.api.place_order(
+                                            security_id=sid,
+                                            exchange_segment=pos["exchangeSegment"],
+                                            transaction_type=tx_type,
+                                            quantity=qty,
+                                            order_type="STOP_LOSS_LIMIT",
+                                            product_type=pos["productType"],
+                                            price=limit_price,
+                                            trigger_price=sl_price
+                                        )
+                                    except Exception as ex:
+                                        logger.error("Failed to auto-place Stop Loss: %s", ex)
 
             # Keep position cache fresh for WebSocket SL/TP callback
             self.trade_mgr.update_position_cache(positions)

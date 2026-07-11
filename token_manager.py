@@ -143,7 +143,7 @@ def generate_fresh_token(client_id: str, pin: str, totp_secret: str, max_retries
     return None
 
 
-def refresh_token(dhan_api=None) -> bool:
+def refresh_token(dhan_api=None, max_retries: int = 3) -> bool:
     """
     Main entry point: refresh the Dhan access token.
 
@@ -153,6 +153,7 @@ def refresh_token(dhan_api=None) -> bool:
 
     Args:
         dhan_api: Optional live DhanAPI instance to reinitialize with new credentials.
+        max_retries: Maximum attempts to try token generation on rate limits.
 
     Returns:
         True if token was refreshed successfully, False otherwise.
@@ -176,7 +177,7 @@ def refresh_token(dhan_api=None) -> bool:
     if not new_token:
         logger.info("Attempting fresh token generation via PIN + TOTP...")
         new_token = generate_fresh_token(
-            creds["client_id"], creds["pin"], creds["totp_secret"]
+            creds["client_id"], creds["pin"], creds["totp_secret"], max_retries=max_retries
         )
         if new_token:
             logger.info("Fresh token generated successfully")

@@ -14,7 +14,7 @@ from flask import Flask, render_template_string, jsonify, request, redirect
 from flask_socketio import SocketIO
 
 from config import Config
-from dhan_api import DepthWebSocket
+from broker_api import DepthWebSocket
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def set_monitor(monitor):
     _start_bse_spot_updater()
     # Create depth WS now so OC LTP subscribe works even before DOM is opened
     if _depth_ws is None:
-        from dhan_api import DepthWebSocket
+        from broker_api import DepthWebSocket
         token = monitor.api._context.get_access_token()
         client_id = monitor.api._context.get_client_id()
         _depth_ws = DepthWebSocket(token, client_id)
@@ -448,6 +448,11 @@ DASHBOARD_HTML = """
             <a href="/journal" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Open Trade Journal">&#x1F4D3; Journal</a>
             <a href="/analytics" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Analytics">&#x1F4CA; Analytics</a>
             <a href="/straddle" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Strangle Chart">&#x1F4C8; Strangle</a>
+            <!-- Broker Toggle Switch -->
+            <div class="broker-toggle" style="display:flex;align-items:center;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:2px;gap:2px;">
+                <button id="broker-dhan" onclick="toggleBroker('DHAN')" style="background:#21262d;border:none;color:#c9d1d9;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;transition:all 0.2s;">Dhan</button>
+                <button id="broker-kotak" onclick="toggleBroker('KOTAK')" style="background:none;border:none;color:#8b949e;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;transition:all 0.2s;">Kotak Neo</button>
+            </div>
             <span id="token-status" style="font-size:12px;padding:4px 10px;border-radius:12px;cursor:pointer;border:1px solid #30363d;color:#8b949e;" onclick="refreshToken()" title="Click to refresh token">API: ...</span>
             <span id="status-badge" class="status-badge status-active">ACTIVE</span>
         </div>
@@ -551,9 +556,9 @@ DASHBOARD_HTML = """
 
     <!-- Option Chain + Depth of Market (side by side) -->
     <div class="desktop-only" style="padding:0 24px;margin-top:16px;">
-        <div style="display:flex;gap:16px;">
+        <div id="trading-workspace" style="display:flex;gap:16px;transition:all 0.2s;">
             <!-- Left: Option Chain -->
-            <div style="flex:0 0 38%;min-width:0;">
+            <div id="oc-workspace-col" style="flex:0 0 38%;min-width:0;transition:all 0.2s;">
                 <div class="card">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                         <h3 style="margin:0;">Option Chain</h3>
@@ -646,6 +651,7 @@ DASHBOARD_HTML = """
                         <div style="display:flex;align-items:center;gap:8px;">
                             <span id="dom-instrument" style="font-size:12px;color:#8b949e;">Select an option from the chain</span>
                             <span id="dom-status" style="display:none;font-size:10px;padding:2px 6px;border-radius:8px;background:#0d4429;color:#3fb950;font-weight:600;">LIVE</span>
+                            <button id="dom-maximize-btn" onclick="toggleMaximizeChart()" style="background:none;border:1px solid #30363d;color:#8b949e;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px;margin-right:4px;" title="Maximize/Stretched View">&#x1f5d6; Maximize</button>
                             <button id="dom-close-btn" onclick="domClose()" style="display:none;background:none;border:1px solid #30363d;color:#8b949e;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px;" title="Close DOM panel">✕</button>
                         </div>
                     </div>
@@ -696,7 +702,40 @@ DASHBOARD_HTML = """
                     </div>
 
                     <!-- Chart Canvas (hidden by default, shown on Chart tab) -->
-                    <div id="dom-chart-canvas" style="display:none;height:480px;width:100%;"></div>
+                    <!-- Chart Canvas (hidden by default, shown on Chart tab) -->
+                    <div id="dom-chart-canvas-container" style="display:none;position:relative;">
+                        <div id="dom-chart-canvas" style="height:420px;width:100%;"></div>
+                        
+                        <!-- Floating TV-style Order Placer Tags -->
+                        <div id="chart-tag-breakout" style="display:none;position:absolute;right:80px;background:rgba(255,153,0,0.9);border:1px solid #ff9900;border-radius:4px;padding:3px 8px;z-index:50;color:#0d1117;font-family:monospace;font-size:10px;font-weight:bold;box-shadow:0 2px 5px rgba(0,0,0,0.5);display:flex;align-items:center;gap:6px;">
+                            <span>BREAKOUT LIMIT: <span id="chart-tag-breakout-price">0.00</span></span>
+                            <button onclick="submitChartTriggerOrders()" style="background:#0d1117;color:#ff9900;border:none;border-radius:3px;padding:1px 5px;cursor:pointer;font-size:9px;font-weight:bold;">⚡ TRANSMIT</button>
+                        </div>
+                        
+                        <div id="chart-tag-sl" style="display:none;position:absolute;right:80px;background:rgba(248,81,73,0.9);border:1px solid #f85149;border-radius:4px;padding:3px 8px;z-index:50;color:#ffffff;font-family:monospace;font-size:10px;font-weight:bold;box-shadow:0 2px 5px rgba(0,0,0,0.5);display:flex;align-items:center;gap:6px;">
+                            <span>STOP LOSS LIMIT: <span id="chart-tag-sl-price">0.00</span></span>
+                            <button onclick="submitStopLoss1Click()" style="background:#ffffff;color:#f85149;border:none;border-radius:3px;padding:1px 5px;cursor:pointer;font-size:9px;font-weight:bold;">⚡ PLACE SL</button>
+                        </div>
+                        <!-- Chart Price Controls -->
+                        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px;background:#161b22;border:1px solid #30363d;border-radius:6px;margin-top:6px;gap:6px;flex-wrap:wrap;">
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span style="font-size:11px;color:#8b949e;font-weight:600;">Breakout:</span>
+                                <input id="chart-breakout-val" type="number" step="0.05" style="width:75px;font-size:11px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:3px;height:24px;" onchange="updatePriceLineFromInput('breakout')">
+                                <button onclick="chartClickPlacement('breakout')" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;font-size:10px;padding:3px 6px;border-radius:4px;cursor:pointer;height:24px;" title="Click on chart to set Breakout trigger">&#x1f570; Place</button>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span style="font-size:11px;color:#8b949e;font-weight:600;">Stop Loss:</span>
+                                <input id="chart-sl-val" type="number" step="0.05" style="width:75px;font-size:11px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:3px;height:24px;" onchange="updatePriceLineFromInput('sl')">
+                                <button onclick="chartClickPlacement('sl')" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;font-size:10px;padding:3px 6px;border-radius:4px;cursor:pointer;height:24px;" title="Click on chart to set Stop Loss">&#x1f570; Place</button>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span style="font-size:11px;color:#8b949e;font-weight:600;">Take Profit:</span>
+                                <input id="chart-tp-val" type="number" step="0.05" style="width:75px;font-size:11px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:3px;height:24px;" onchange="updatePriceLineFromInput('tp')">
+                                <button onclick="chartClickPlacement('tp')" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;font-size:10px;padding:3px 6px;border-radius:4px;cursor:pointer;height:24px;" title="Click on chart to set Take Profit">&#x1f570; Place</button>
+                            </div>
+                            <button id="chart-submit-orders" onclick="submitChartTriggerOrders()" style="background:#238636;border:none;color:#ffffff;font-size:11px;font-weight:700;padding:4px 10px;border-radius:4px;cursor:pointer;height:24px;" title="Send trigger order to broker">&#9889; Transmit</button>
+                        </div>
+                    </div>
 
                     <!-- Depth Chart -->
                     <div id="dom-chart" style="overflow-y:auto;">
@@ -2550,6 +2589,60 @@ DASHBOARD_HTML = """
         checkTokenStatus();
         setInterval(checkTokenStatus, 300000);
 
+        function updateBrokerUI(activeBroker) {
+            var dhanBtn = document.getElementById('broker-dhan');
+            var kotakBtn = document.getElementById('broker-kotak');
+            if (!dhanBtn || !kotakBtn) return;
+            
+            if (activeBroker === 'DHAN') {
+                dhanBtn.style.background = '#21262d';
+                dhanBtn.style.color = '#c9d1d9';
+                kotakBtn.style.background = 'none';
+                kotakBtn.style.color = '#8b949e';
+            } else {
+                kotakBtn.style.background = '#21262d';
+                kotakBtn.style.color = '#c9d1d9';
+                dhanBtn.style.background = 'none';
+                dhanBtn.style.color = '#8b949e';
+            }
+        }
+
+        function fetchActiveBroker() {
+            fetch('/api/broker/active')
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (d.status === 'ok') {
+                        updateBrokerUI(d.active_broker);
+                    }
+                })
+                .catch(function(e) { console.error('Error fetching active broker:', e); });
+        }
+
+        window.toggleBroker = function(broker) {
+            showToast('Switching broker to ' + broker + '...', 'info');
+            fetch('/api/broker/toggle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ broker: broker })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.status === 'ok') {
+                    showToast('Broker switched to ' + broker + '!', 'success');
+                    updateBrokerUI(broker);
+                    setTimeout(function() { window.location.reload(); }, 800);
+                } else {
+                    showToast('Broker switch failed: ' + (d.message || 'Error'), 'error');
+                }
+            })
+            .catch(function(e) {
+                showToast('Broker switch request failed: ' + e, 'error');
+            });
+        };
+
+        // Fetch active broker on load
+        fetchActiveBroker();
+
         // ── Option Chain ─────────────────────────────────────────────
         var _ocLotSize = 75;
 
@@ -3264,9 +3357,9 @@ DASHBOARD_HTML = """
                 return;
             }
             container.innerHTML = '';
-            _lwChart = LightweightCharts.createChart(container, {
+             _lwChart = LightweightCharts.createChart(container, {
                 width:  container.clientWidth || 600,
-                height: 480,
+                height: 420,
                 layout: { background: {color:'#0d1117'}, textColor:'#8b949e' },
                 grid:   { vertLines:{color:'#21262d'}, horzLines:{color:'#21262d'} },
                 crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -3277,6 +3370,38 @@ DASHBOARD_HTML = """
                 upColor:'#3fb950', downColor:'#f85149',
                 borderUpColor:'#3fb950', borderDownColor:'#f85149',
                 wickUpColor:'#3fb950', wickDownColor:'#f85149',
+            });
+            
+            _lwChart.subscribeClick(function(param) {
+                if (!param || !param.point) return;
+                var clickedPrice = _lwSeries.coordinateToPrice(param.point.y);
+                if (!clickedPrice) return;
+                
+                if (window._placementActiveMode) {
+                    var price = Math.round(clickedPrice * 20) / 20;
+                    window.setPriceLineValue(window._placementActiveMode, price);
+                    window._placementActiveMode = null;
+                    document.getElementById('dom-chart-canvas').style.cursor = 'default';
+                    return;
+                }
+                
+                // Click near existing line to edit it
+                var breakoutPrice = parseFloat(document.getElementById('chart-breakout-val').value) || 0;
+                var slPrice = parseFloat(document.getElementById('chart-sl-val').value) || 0;
+                var tpPrice = parseFloat(document.getElementById('chart-tp-val').value) || 0;
+                var tolerance = clickedPrice * 0.008; // 0.8% Y-axis threshold
+                
+                if (breakoutPrice > 0 && Math.abs(clickedPrice - breakoutPrice) < tolerance) {
+                    window.chartClickPlacement('breakout');
+                } else if (slPrice > 0 && Math.abs(clickedPrice - slPrice) < tolerance) {
+                    window.chartClickPlacement('sl');
+                } else if (tpPrice > 0 && Math.abs(clickedPrice - tpPrice) < tolerance) {
+                    window.chartClickPlacement('tp');
+                }
+            });
+
+            _lwChart.subscribeCrosshairMove(function(param) {
+                window.repositionChartTags();
             });
         }
 
@@ -3305,6 +3430,7 @@ DASHBOARD_HTML = """
                     if (d.candles && d.candles.length > 0) {
                         _lwSeries.setData(d.candles);
                         _lwChart.timeScale().scrollToRealTime();
+                        setTimeout(window.repositionChartTags, 100);
                     }
                 })
                 .catch(function(e) { console.error('Chart refresh error:', e); });
@@ -3312,7 +3438,8 @@ DASHBOARD_HTML = """
 
         function switchDomTab(tab) {
             var depthDiv = document.getElementById('dom-chart');
-            var chartDiv = document.getElementById('dom-chart-canvas');
+            var chartDiv = document.getElementById('dom-chart-canvas-container');
+            var canvasDiv = document.getElementById('dom-chart-canvas');
             var depthBtn = document.getElementById('dom-tab-depth');
             var chartBtn = document.getElementById('dom-tab-chart');
             if (tab === 'chart') {
@@ -3320,7 +3447,11 @@ DASHBOARD_HTML = """
                 chartDiv.style.display = 'block';
                 depthBtn.style.fontWeight = '400'; depthBtn.style.borderBottomColor = 'transparent'; depthBtn.style.color = '#8b949e';
                 chartBtn.style.fontWeight = '700'; chartBtn.style.borderBottomColor = '#3fb950';    chartBtn.style.color = '#3fb950';
-                if (_lwChart) _lwChart.applyOptions({width: chartDiv.clientWidth || 600, height: 480});
+                
+                var h = window._chartMaximized ? 550 : 420;
+                canvasDiv.style.height = h + 'px';
+                if (_lwChart) _lwChart.applyOptions({width: canvasDiv.clientWidth || 600, height: h});
+                setTimeout(window.repositionChartTags, 150);
             } else {
                 depthDiv.style.display = 'block';
                 chartDiv.style.display = 'none';
@@ -3328,6 +3459,226 @@ DASHBOARD_HTML = """
                 chartBtn.style.fontWeight = '400'; chartBtn.style.borderBottomColor = 'transparent'; chartBtn.style.color = '#8b949e';
             }
         }
+
+        // ── Maximization Toggle ──
+        window._chartMaximized = false;
+        window.toggleMaximizeChart = function() {
+            var ocCol = document.getElementById('oc-workspace-col');
+            var maxBtn = document.getElementById('dom-maximize-btn');
+            var canvasDiv = document.getElementById('dom-chart-canvas');
+            
+            window._chartMaximized = !window._chartMaximized;
+            
+            if (window._chartMaximized) {
+                if (ocCol) ocCol.style.display = 'none';
+                maxBtn.textContent = '🗗 Minimize';
+                maxBtn.style.background = '#21262d';
+                canvasDiv.style.height = '550px';
+                if (_lwChart) {
+                    _lwChart.applyOptions({
+                        width: document.getElementById('dom-chart-canvas-container').clientWidth || 1000,
+                        height: 550
+                    });
+                }
+            } else {
+                if (ocCol) ocCol.style.display = 'block';
+                maxBtn.textContent = '🗖 Maximize';
+                maxBtn.style.background = 'none';
+                canvasDiv.style.height = '420px';
+                if (_lwChart) {
+                    _lwChart.applyOptions({
+                        width: document.getElementById('dom-chart-canvas-container').clientWidth || 600,
+                        height: 420
+                    });
+                }
+            }
+            setTimeout(window.repositionChartTags, 150);
+        };
+
+        // ── Floating Order Tags Repositioning ──
+        window.repositionChartTags = function() {
+            if (!_lwSeries || !_lwChart) return;
+            
+            var breakoutPrice = parseFloat(document.getElementById('chart-breakout-val').value) || 0;
+            var slPrice = parseFloat(document.getElementById('chart-sl-val').value) || 0;
+            
+            var tagBreakout = document.getElementById('chart-tag-breakout');
+            var tagSL = document.getElementById('chart-tag-sl');
+            var canvasDiv = document.getElementById('dom-chart-canvas');
+            var maxHeight = canvasDiv ? (canvasDiv.clientHeight || 420) : 420;
+            
+            if (breakoutPrice > 0 && tagBreakout) {
+                var y = _lwSeries.priceToCoordinate(breakoutPrice);
+                if (y !== null && y >= 0 && y <= maxHeight) {
+                    tagBreakout.style.display = 'flex';
+                    tagBreakout.style.top = (y - 12) + 'px';
+                    document.getElementById('chart-tag-breakout-price').textContent = breakoutPrice.toFixed(2);
+                } else {
+                    tagBreakout.style.display = 'none';
+                }
+            } else if (tagBreakout) {
+                tagBreakout.style.display = 'none';
+            }
+            
+            if (slPrice > 0 && tagSL) {
+                var y = _lwSeries.priceToCoordinate(slPrice);
+                if (y !== null && y >= 0 && y <= maxHeight) {
+                    tagSL.style.display = 'flex';
+                    tagSL.style.top = (y - 12) + 'px';
+                    document.getElementById('chart-tag-sl-price').textContent = slPrice.toFixed(2);
+                } else {
+                    tagSL.style.display = 'none';
+                }
+            } else if (tagSL) {
+                tagSL.style.display = 'none';
+            }
+        };
+
+        // ── Chart Price Line Controls ──────────────────────────
+        window._placementActiveMode = null;
+        window._priceLine_breakout = null;
+        window._priceLine_sl = null;
+        window._priceLine_tp = null;
+
+        window.setPriceLineValue = function(mode, price) {
+            var inputId = 'chart-' + mode + '-val';
+            var input = document.getElementById(inputId);
+            if (input) input.value = price.toFixed(2);
+            
+            var color = '#ff9900';
+            var title = 'Breakout';
+            if (mode === 'sl') { color = '#f85149'; title = 'Stop Loss'; }
+            if (mode === 'tp') { color = '#3fb950'; title = 'Take Profit'; }
+            
+            var lineVar = '_priceLine_' + mode;
+            if (window[lineVar]) {
+                try {
+                    _lwSeries.removePriceLine(window[lineVar]);
+                } catch (e) {}
+                window[lineVar] = null;
+            }
+            
+            if (_lwSeries) {
+                window[lineVar] = _lwSeries.createPriceLine({
+                    price: price,
+                    color: color,
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: title,
+                });
+                window.repositionChartTags();
+            }
+        };
+
+        window.updatePriceLineFromInput = function(mode) {
+            var input = document.getElementById('chart-' + mode + '-val');
+            if (input && input.value) {
+                var price = parseFloat(input.value);
+                window.setPriceLineValue(mode, price);
+            }
+        };
+
+        window.chartClickPlacement = function(mode) {
+            window._placementActiveMode = mode;
+            var canvas = document.getElementById('dom-chart-canvas');
+            if (canvas) canvas.style.cursor = 'crosshair';
+            showToast('Click on the chart to place ' + mode.toUpperCase() + ' line', 'info');
+        };
+
+        window.submitChartTriggerOrders = function() {
+            var breakout = parseFloat(document.getElementById('chart-breakout-val').value) || 0;
+            var sl = parseFloat(document.getElementById('chart-sl-val').value) || 0;
+            var tp = parseFloat(document.getElementById('chart-tp-val').value) || 0;
+            
+            if (breakout <= 0) {
+                showToast('Please set a valid Breakout trigger price first!', 'error');
+                return;
+            }
+            
+            showToast('Transmitting trigger orders...', 'info');
+            
+            var payload = {
+                security_id: _lwCurrentSecurity,
+                exchange_segment: _lwExchangeSegment,
+                breakout_price: breakout,
+                sl_price: sl,
+                tp_price: tp,
+                quantity: parseFloat(document.getElementById('sqb-qty-override').value) || parseFloat(document.getElementById('sqb-qty').textContent) || 0
+            };
+            
+            if (payload.quantity <= 0) {
+                showToast('Please specify order quantity (override or calculation)', 'error');
+                return;
+            }
+            
+            fetch('/api/order/place_trigger_chart', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.status === 'success') {
+                    showToast('Trigger orders placed successfully!', 'success');
+                } else {
+                    showToast('Failed: ' + (d.message || 'Error'), 'error');
+                }
+            })
+            .catch(function(e) {
+                showToast('Request failed: ' + e, 'error');
+            });
+        };
+
+        window.submitStopLoss1Click = function() {
+            var slPrice = parseFloat(document.getElementById('chart-sl-val').value) || 0;
+            if (slPrice <= 0) {
+                showToast('Please set a valid Stop Loss price line first!', 'error');
+                return;
+            }
+            
+            showToast('1-Click SL Triggered! Submitting native exchange SL order...', 'info');
+            
+            var payload = {
+                security_id: _lwCurrentSecurity,
+                exchange_segment: _lwExchangeSegment,
+                sl_price: slPrice,
+                quantity: parseFloat(document.getElementById('sqb-qty-override').value) || parseFloat(document.getElementById('sqb-qty').textContent) || 0
+            };
+            
+            if (payload.quantity <= 0) {
+                showToast('Please specify quantity first!', 'error');
+                return;
+            }
+            
+            fetch('/api/order/submit_sl_1click', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.status === 'success') {
+                    showToast('Stop Loss order submitted successfully!', 'success');
+                } else {
+                    showToast('Failed to place SL order: ' + (d.message || 'Error'), 'error');
+                }
+            })
+            .catch(function(e) {
+                showToast('Request failed: ' + e, 'error');
+            });
+        };
+
+        // Keyboard Shortcut Listener: Spacebar -> 1-Click SL
+        document.addEventListener('keydown', function(e) {
+            if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+                return;
+            }
+            if (e.code === 'Space') {
+                e.preventDefault();
+                window.submitStopLoss1Click();
+            }
+        });
 
         // ── Depth of Market ─────────────────────────────────────────────
         var _domCurrentSecurity = null;
@@ -3597,6 +3948,155 @@ DASHBOARD_HTML = """
 </body>
 </html>
 """
+
+
+@app.route("/api/broker/active")
+def api_broker_active():
+    """Get active broker."""
+    return jsonify({"status": "ok", "active_broker": Config.ACTIVE_BROKER})
+
+
+@app.route("/api/broker/toggle", methods=["POST"])
+def api_broker_toggle():
+    """Toggle the active broker at runtime."""
+    data = request.json or {}
+    broker = data.get("broker", "DHAN").upper()
+    if broker not in ("DHAN", "KOTAK"):
+        return jsonify({"status": "error", "message": "Invalid broker name"}), 400
+
+    # Switch in BrokerAPI router
+    success = _monitor.api.set_active_broker(broker) if _monitor else False
+    if not success:
+        # Fallback to direct config switch if monitor not initialized
+        Config.ACTIVE_BROKER = broker
+        success = True
+
+    # Reload the instrument cache for the new broker!
+    try:
+        global _instrument_cache
+        _instrument_cache = InstrumentCache()
+        _instrument_cache.load()
+        set_instrument_cache(_instrument_cache)
+        logger.info("Instrument cache reloaded successfully on toggle to: %s", broker)
+    except Exception as e:
+        logger.error("Failed to reload instrument cache: %s", e)
+
+    # Force reset the depth WS on next load
+    global _depth_ws
+    if _depth_ws:
+        try:
+            _depth_ws.stop()
+        except Exception:
+            pass
+        _depth_ws = None
+
+    return jsonify({"status": "ok", "active_broker": broker})
+
+
+@app.route("/api/order/place_trigger_chart", methods=["POST"])
+def place_trigger_chart():
+    """Submit breakout entry order at exchange and save SL/TP protective targets in memory."""
+    data = request.json or {}
+    security_id = data.get("security_id")
+    segment = data.get("exchange_segment", "NSE_FNO")
+    breakout = float(data.get("breakout_price", 0))
+    sl = float(data.get("sl_price", 0))
+    tp = float(data.get("tp_price", 0))
+    qty = int(data.get("quantity", 0))
+    
+    if not security_id or breakout <= 0 or qty <= 0:
+        return jsonify({"status": "error", "message": "Invalid parameters"}), 400
+        
+    # Get current LTP to determine transaction direction
+    try:
+        res = _monitor.api.get_ltp({segment: [int(security_id)]})
+        ltp = float(res.get(security_id, 0) or 0)
+    except Exception:
+        ltp = 0.0
+        
+    if ltp <= 0:
+        ltp = breakout  # fallback
+        
+    tx_type = "BUY" if breakout > ltp else "SELL"
+    
+    # Store SL and TP in monitor state for auto-placement on fill
+    if not hasattr(_monitor, "chart_sl_tp"):
+        _monitor.chart_sl_tp = {}
+    _monitor.chart_sl_tp[str(security_id)] = {
+        "sl": sl,
+        "tp": tp,
+        "qty": qty,
+        "tx_type": tx_type
+    }
+    
+    # Calculate limit price with buffer to prevent execution slippage (STOP_LOSS_LIMIT)
+    buffer = round(max(0.50, breakout * 0.01) * 20) / 20
+    limit_price = breakout + buffer if tx_type == "BUY" else max(0.05, breakout - buffer)
+    
+    try:
+        res_order = _monitor.api.place_order(
+            security_id=security_id,
+            exchange_segment=segment,
+            transaction_type=tx_type,
+            quantity=qty,
+            order_type="STOP_LOSS_LIMIT",
+            product_type="MARGIN",
+            price=limit_price,
+            trigger_price=breakout
+        )
+        return jsonify({"status": "success", "data": res_order})
+    except Exception as e:
+        logger.error("Failed to place chart breakout order: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/order/submit_sl_1click", methods=["POST"])
+def submit_sl_1click():
+    """Instantly submit native Stop Loss order for the open position at the specified trigger price."""
+    data = request.json or {}
+    security_id = data.get("security_id")
+    segment = data.get("exchange_segment", "NSE_FNO")
+    sl = float(data.get("sl_price", 0))
+    qty = int(data.get("quantity", 0))
+    
+    if not security_id or sl <= 0 or qty <= 0:
+        return jsonify({"status": "error", "message": "Invalid parameters"}), 400
+        
+    # Determine transaction direction based on current position
+    positions = _monitor.api.get_positions() if _monitor else []
+    pos_qty = 0
+    product_type = "MARGIN"
+    for p in positions:
+        if str(p["securityId"]) == str(security_id):
+            pos_qty = p["netQty"]
+            product_type = p.get("productType", "MARGIN")
+            break
+            
+    if pos_qty == 0:
+        tx_type = "SELL"
+    else:
+        tx_type = "SELL" if pos_qty > 0 else "BUY"
+        qty = abs(pos_qty)
+        
+    # Calculate limit price with buffer to prevent execution slippage (STOP_LOSS_LIMIT)
+    buffer = round(max(0.50, sl * 0.01) * 20) / 20
+    limit_price = sl + buffer if tx_type == "BUY" else max(0.05, sl - buffer)
+        
+    try:
+        res_order = _monitor.api.place_order(
+            security_id=security_id,
+            exchange_segment=segment,
+            transaction_type=tx_type,
+            quantity=qty,
+            order_type="STOP_LOSS_LIMIT",
+            product_type=product_type,
+            price=limit_price,
+            trigger_price=sl
+        )
+        return jsonify({"status": "success", "data": res_order})
+    except Exception as e:
+        logger.error("Failed to place 1-Click SL: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/")

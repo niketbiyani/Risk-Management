@@ -10,6 +10,9 @@ load_dotenv()
 
 
 class Config:
+    # Active Broker Toggle ('DHAN' or 'KOTAK')
+    ACTIVE_BROKER: str = os.getenv("ACTIVE_BROKER", "DHAN").upper()
+
     # Dhan API
     DHAN_CLIENT_ID: str = os.getenv("DHAN_CLIENT_ID", "")
     DHAN_ACCESS_TOKEN: str = os.getenv("DHAN_ACCESS_TOKEN", "")
@@ -17,6 +20,13 @@ class Config:
     # Auto Token Refresh
     DHAN_PIN: str = os.getenv("DHAN_PIN", "")
     DHAN_TOTP_SECRET: str = os.getenv("DHAN_TOTP_SECRET", "")
+
+    # Kotak Neo API Credentials
+    KOTAK_CONSUMER_KEY: str = os.getenv("KOTAK_CONSUMER_KEY", "")
+    KOTAK_MOBILE_NUMBER: str = os.getenv("KOTAK_MOBILE_NUMBER", "")
+    KOTAK_UCC: str = os.getenv("KOTAK_UCC", "")
+    KOTAK_PIN: str = os.getenv("KOTAK_PIN", "")
+    KOTAK_TOTP_SECRET: str = os.getenv("KOTAK_TOTP_SECRET", "")
 
     # Risk Limits (INR)
     DAILY_MAX_LOSS: float = float(os.getenv("DAILY_MAX_LOSS", "5000"))
@@ -62,10 +72,23 @@ class Config:
     def validate(cls) -> list[str]:
         """Validate required configuration. Returns list of errors."""
         errors = []
-        if not cls.DHAN_CLIENT_ID:
-            errors.append("DHAN_CLIENT_ID is required")
-        if not cls.DHAN_ACCESS_TOKEN:
-            errors.append("DHAN_ACCESS_TOKEN is required")
+        if cls.ACTIVE_BROKER == "DHAN":
+            if not cls.DHAN_CLIENT_ID:
+                errors.append("DHAN_CLIENT_ID is required when ACTIVE_BROKER is DHAN")
+            if not cls.DHAN_ACCESS_TOKEN:
+                errors.append("DHAN_ACCESS_TOKEN is required when ACTIVE_BROKER is DHAN")
+        elif cls.ACTIVE_BROKER == "KOTAK":
+            if not cls.KOTAK_CONSUMER_KEY:
+                errors.append("KOTAK_CONSUMER_KEY is required when ACTIVE_BROKER is KOTAK")
+            if not cls.KOTAK_MOBILE_NUMBER:
+                errors.append("KOTAK_MOBILE_NUMBER is required when ACTIVE_BROKER is KOTAK")
+            if not cls.KOTAK_UCC:
+                errors.append("KOTAK_UCC is required when ACTIVE_BROKER is KOTAK")
+            if not cls.KOTAK_PIN:
+                errors.append("KOTAK_PIN is required when ACTIVE_BROKER is KOTAK")
+        else:
+            errors.append("ACTIVE_BROKER must be either 'DHAN' or 'KOTAK'")
+
         if cls.DAILY_MAX_LOSS <= 0:
             errors.append("DAILY_MAX_LOSS must be positive")
         if cls.PROFIT_LOCK_PERCENTAGE < 0 or cls.PROFIT_LOCK_PERCENTAGE > 100:
