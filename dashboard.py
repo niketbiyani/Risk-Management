@@ -579,7 +579,7 @@ DASHBOARD_HTML = """
     <div id="trading-desktop-container" class="desktop-only" style="padding:0 24px;margin-top:16px;">
         <div id="trading-workspace" style="display:flex;gap:16px;transition:all 0.2s;">
             <!-- Left: Option Chain -->
-            <div id="oc-workspace-col" style="flex:0 0 24%;min-width:0;transition:all 0.2s;">
+            <div id="oc-workspace-col" style="flex:0 0 280px;width:280px;min-width:0;transition:all 0.2s;">
                 <div class="card">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                         <h3 style="margin:0;">Option Chain</h3>
@@ -2753,11 +2753,17 @@ DASHBOARD_HTML = """
             if (qtyOverride) {
                 qtyOverride.step = _ocLotSize;
                 qtyOverride.min = _ocLotSize;
+                if (!qtyOverride.value || qtyOverride.value === "50" || qtyOverride.value === "75") {
+                    qtyOverride.value = _ocLotSize;
+                }
             }
             var tagQtyInput = document.getElementById('chart-tag-breakout-qty-input');
             if (tagQtyInput) {
                 tagQtyInput.step = _ocLotSize;
                 tagQtyInput.min = _ocLotSize;
+                if (!tagQtyInput.value || tagQtyInput.value === "50" || tagQtyInput.value === "75") {
+                    tagQtyInput.value = _ocLotSize;
+                }
             }
             var now = new Date();
             var timeStr = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0') + ':' + now.getSeconds().toString().padStart(2,'0');
