@@ -1312,6 +1312,18 @@ DASHBOARD_HTML = """
                 socket.on('status_update', safeUpdate);
             }
             socket.on('oc_ltp', function(data) {
+                // Closed Market / Holiday Filter (IST checks)
+                var now = new Date();
+                var utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                var istTime = new Date(utc + (3600000 * 5.5));
+                var day = istTime.getDay();
+                var hour = istTime.getHours();
+                var min = istTime.getMinutes();
+                var timeVal = hour * 100 + min;
+                var isHoliday = (day === 0 || day === 6);
+                var isMarketOpen = (!isHoliday && timeVal >= 915 && timeVal <= 1530);
+                if (!isMarketOpen) return;
+
                 // Only cache non-zero prices — zero bid means no active market
                 var ltp = parseFloat(data.ltp);
                 if (!ltp || ltp <= 0) return;
