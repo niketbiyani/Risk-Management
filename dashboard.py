@@ -3489,9 +3489,14 @@ DASHBOARD_HTML = """
                 return;
             }
             container.innerHTML = '';
+             var initialHeight = 420;
+             if (document.documentElement.classList.contains('chart-trading-mode')) {
+                 initialHeight = window.innerHeight - 180;
+                 if (initialHeight < 300) initialHeight = 300;
+             }
              _lwChart = LightweightCharts.createChart(container, {
                 width:  container.clientWidth || 600,
-                height: 420,
+                height: initialHeight,
                 layout: { background: {color:'#0d1117'}, textColor:'#8b949e' },
                 grid:   { vertLines:{color:'#21262d'}, horzLines:{color:'#21262d'} },
                 crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -6669,6 +6674,21 @@ function resizeAll() {
     if (_cMain) _cMain.resize(w, mainH);
     if (_cMacd) _cMacd.resize(w, macdH);
     if (_cRsi)  _cRsi.resize(w, rsiH);
+
+    // Also resize Lightweight Chart inside Option Chain workspace if visible
+    var canvasDiv = document.getElementById('dom-chart-canvas');
+    if (canvasDiv && _lwChart) {
+        var canvasW = canvasDiv.clientWidth || 600;
+        var canvasH = 420;
+        if (document.documentElement.classList.contains('chart-trading-mode')) {
+            canvasH = window.innerHeight - 180;
+            if (canvasH < 300) canvasH = 300;
+        } else if (window._chartMaximized) {
+            canvasH = 550;
+        }
+        canvasDiv.style.height = canvasH + 'px';
+        _lwChart.resize(canvasW, canvasH);
+    }
 }
 
 // ── Drag-to-resize handles ────────────────────────────────────────
