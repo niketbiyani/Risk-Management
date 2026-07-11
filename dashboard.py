@@ -273,6 +273,9 @@ DASHBOARD_HTML = """
         .chart-trading-mode #dom-tab-depth { display: none !important; }
         .chart-trading-mode #dom-tab-chart { display: none !important; }
         .chart-trading-mode #dom-chart { display: none !important; }
+        .chart-trading-mode #dom-analysis { display: none !important; }
+        .chart-trading-mode #dom-title-text { display: none !important; }
+        .chart-trading-mode #chart-title-text { display: block !important; }
 
         /* ── Mobile responsive ───────────────────────────────────── */
         @media (max-width: 768px) {
@@ -670,7 +673,8 @@ DASHBOARD_HTML = """
                 <div class="card" id="dom-panel" style="padding:12px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <div style="display:flex;align-items:center;gap:10px;">
-                            <h3 style="margin:0;">Depth of Market</h3>
+                            <h3 id="dom-title-text" style="margin:0;">Depth of Market</h3>
+                            <h3 id="chart-title-text" style="margin:0;display:none;">Option Chart</h3>
                             <div style="display:flex;gap:2px;align-items:center;">
                                 <button id="dom-tab-depth" onclick="switchDomTab('depth')" style="background:none;border:none;color:#3fb950;cursor:pointer;font-size:11px;font-weight:700;padding:2px 8px;border-bottom:2px solid #3fb950;">Depth</button>
                                 <button id="dom-tab-chart" onclick="switchDomTab('chart')" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:11px;font-weight:400;padding:2px 8px;border-bottom:2px solid transparent;">Chart</button>
