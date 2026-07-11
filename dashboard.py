@@ -708,12 +708,12 @@ DASHBOARD_HTML = """
                         
                         <!-- Floating TV-style Order Placer Tags -->
                         <div id="chart-tag-breakout" style="display:none;position:absolute;right:80px;background:rgba(255,153,0,0.9);border:1px solid #ff9900;border-radius:4px;padding:3px 8px;z-index:50;color:#0d1117;font-family:monospace;font-size:10px;font-weight:bold;box-shadow:0 2px 5px rgba(0,0,0,0.5);display:flex;align-items:center;gap:6px;">
-                            <span>BREAKOUT LIMIT: <span id="chart-tag-breakout-price">0.00</span></span>
+                            <span>BREAKOUT LIMIT: <input id="chart-tag-breakout-input" type="number" step="0.05" style="width:65px;font-size:10px;background:#0d1117;color:#ff9900;border:1px solid #ff9900;border-radius:3px;padding:1px;text-align:center;font-weight:bold;margin:0 4px;" onchange="updatePriceFromTag('breakout')"></span>
                             <button onclick="submitChartTriggerOrders()" style="background:#0d1117;color:#ff9900;border:none;border-radius:3px;padding:1px 5px;cursor:pointer;font-size:9px;font-weight:bold;">⚡ TRANSMIT</button>
                         </div>
                         
                         <div id="chart-tag-sl" style="display:none;position:absolute;right:80px;background:rgba(248,81,73,0.9);border:1px solid #f85149;border-radius:4px;padding:3px 8px;z-index:50;color:#ffffff;font-family:monospace;font-size:10px;font-weight:bold;box-shadow:0 2px 5px rgba(0,0,0,0.5);display:flex;align-items:center;gap:6px;">
-                            <span>STOP LOSS LIMIT: <span id="chart-tag-sl-price">0.00</span></span>
+                            <span>STOP LOSS LIMIT: <input id="chart-tag-sl-input" type="number" step="0.05" style="width:65px;font-size:10px;background:#0d1117;color:#f85149;border:1px solid #f85149;border-radius:3px;padding:1px;text-align:center;font-weight:bold;margin:0 4px;" onchange="updatePriceFromTag('sl')"></span>
                             <button onclick="submitStopLoss1Click()" style="background:#ffffff;color:#f85149;border:none;border-radius:3px;padding:1px 5px;cursor:pointer;font-size:9px;font-weight:bold;">⚡ PLACE SL</button>
                         </div>
                         <!-- Chart Price Controls -->
@@ -3389,7 +3389,7 @@ DASHBOARD_HTML = """
                 var breakoutPrice = parseFloat(document.getElementById('chart-breakout-val').value) || 0;
                 var slPrice = parseFloat(document.getElementById('chart-sl-val').value) || 0;
                 var tpPrice = parseFloat(document.getElementById('chart-tp-val').value) || 0;
-                var tolerance = clickedPrice * 0.008; // 0.8% Y-axis threshold
+                var tolerance = Math.max(1.5, clickedPrice * 0.025); // Forgiving 2.5% or 1.5 points minimum tolerance
                 
                 if (breakoutPrice > 0 && Math.abs(clickedPrice - breakoutPrice) < tolerance) {
                     window.chartClickPlacement('breakout');
@@ -3407,11 +3407,13 @@ DASHBOARD_HTML = """
 
         var _lwRefreshTimer = null;
         var _lwExchangeSegment = 'NSE_FNO';
+        window._lwFirstLoad = true;
 
         function loadChart(securityId, exchangeSegment) {
             _lwCurrentSecurity = securityId;
             _lwExchangeSegment = exchangeSegment || 'NSE_FNO';
             _liveBarTime = 0; _liveBarOpen = 0; _liveBarHigh = 0; _liveBarLow = Infinity;
+            window._lwFirstLoad = true;
             if (!_lwChart) initLightweightChart();
             if (!_lwChart) return;
             _refreshChart();
@@ -3429,7 +3431,10 @@ DASHBOARD_HTML = """
                     if (!container || !_lwSeries) return;
                     if (d.candles && d.candles.length > 0) {
                         _lwSeries.setData(d.candles);
-                        _lwChart.timeScale().scrollToRealTime();
+                        if (window._lwFirstLoad) {
+                            _lwChart.timeScale().scrollToRealTime();
+                            window._lwFirstLoad = false;
+                        }
                         setTimeout(window.repositionChartTags, 100);
                     }
                 })
@@ -3512,7 +3517,10 @@ DASHBOARD_HTML = """
                 if (y !== null && y >= 0 && y <= maxHeight) {
                     tagBreakout.style.display = 'flex';
                     tagBreakout.style.top = (y - 12) + 'px';
-                    document.getElementById('chart-tag-breakout-price').textContent = breakoutPrice.toFixed(2);
+                    var inputEl = document.getElementById('chart-tag-breakout-input');
+                    if (inputEl && document.activeElement !== inputEl) {
+                        inputEl.value = breakoutPrice.toFixed(2);
+                    }
                 } else {
                     tagBreakout.style.display = 'none';
                 }
@@ -3525,12 +3533,23 @@ DASHBOARD_HTML = """
                 if (y !== null && y >= 0 && y <= maxHeight) {
                     tagSL.style.display = 'flex';
                     tagSL.style.top = (y - 12) + 'px';
-                    document.getElementById('chart-tag-sl-price').textContent = slPrice.toFixed(2);
+                    var inputEl = document.getElementById('chart-tag-sl-input');
+                    if (inputEl && document.activeElement !== inputEl) {
+                        inputEl.value = slPrice.toFixed(2);
+                    }
                 } else {
                     tagSL.style.display = 'none';
                 }
             } else if (tagSL) {
                 tagSL.style.display = 'none';
+            }
+        };
+
+        window.updatePriceFromTag = function(mode) {
+            var val = parseFloat(document.getElementById('chart-tag-' + mode + '-input').value) || 0;
+            if (val > 0) {
+                var price = Math.round(val * 20) / 20; // round to nearest tick
+                window.setPriceLineValue(mode, price);
             }
         };
 
@@ -4097,6 +4116,28 @@ def submit_sl_1click():
     except Exception as e:
         logger.error("Failed to place 1-Click SL: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/chart-trading")
+def chart_trading():
+    def fmt_inr(n):
+        """Format number as INR for HTML template."""
+        return "\u20B9{:,.0f}".format(abs(n))
+    from flask import make_response
+    resp = make_response(render_template_string(
+        DASHBOARD_HTML,
+        interval=Config.MONITOR_INTERVAL,
+        default_risk=int(Config.DEFAULT_RISK_AMOUNT),
+        quick_sl_offsets=json.dumps(Config.QUICK_SL_OFFSETS),
+        quick_tp_offsets=json.dumps(Config.QUICK_TP_OFFSETS),
+        loss_limit_fmt=fmt_inr(Config.DAILY_MAX_LOSS),
+        profit_lock_threshold_fmt=fmt_inr(Config.PROFIT_LOCK_THRESHOLD),
+        profit_lock_distance_fmt=fmt_inr(Config.PROFIT_LOCK_THRESHOLD),
+    ))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/")
@@ -6601,6 +6642,35 @@ window.onload = function() {
     onUlChange();
     window.addEventListener('resize', resizeAll);
     setInterval(pollSpot, 5000);
+    
+    // Intercept full-screen chart trading page
+    if (window.location.pathname === '/chart-trading') {
+        var header = document.querySelector('.header') || document.querySelector('header');
+        if (header) header.style.display = 'none';
+        var grid = document.querySelector('.grid');
+        if (grid) grid.style.display = 'none';
+        var desktopOnlies = document.querySelectorAll('.desktop-only');
+        desktopOnlies.forEach(function(el) {
+            if (!el.querySelector('#trading-workspace')) el.style.display = 'none';
+        });
+        var ocScroll = document.getElementById('oc-scroll-container');
+        if (ocScroll) {
+            ocScroll.style.maxHeight = 'none';
+            ocScroll.style.height = 'calc(100vh - 100px)';
+        }
+        window._chartMaximized = true;
+        var maxBtn = document.getElementById('dom-maximize-btn');
+        if (maxBtn) {
+            maxBtn.textContent = '🗗 Minimize';
+            maxBtn.style.background = '#21262d';
+        }
+        var canvasDiv = document.getElementById('dom-chart-canvas');
+        if (canvasDiv) {
+            canvasDiv.style.height = 'calc(100vh - 180px)';
+        }
+        document.body.style.padding = '8px 0';
+        switchDomTab('chart');
+    }
 };
 </script>
 </body>
