@@ -484,9 +484,15 @@ class KotakNeoAPI:
         spot = 0.0
         try:
             res = self.get_ltp({spot_ex: [spot_token]})
-            # Extract price
+            # Extract price from flat or nested response
             if isinstance(res, dict):
-                spot = float(res.get(spot_token, 0) or 0)
+                if spot_token in res:
+                    spot = float(res[spot_token] or 0)
+                elif "data" in res:
+                    inner = res["data"]
+                    if isinstance(inner, dict) and spot_token in inner:
+                        val = inner[spot_token]
+                        spot = float(val.get("last_price", 0) if isinstance(val, dict) else (val or 0))
         except Exception as e:
             logger.error("Failed to fetch underlying spot for option chain: %s", e)
 
@@ -502,15 +508,13 @@ class KotakNeoAPI:
 
     def get_ltp(self, securities: dict) -> dict:
         """
-        Fetch LTP of instruments.
+        Fetch LTP of instruments mimicking the Dhan nested structure.
         securities format: {"NSE_FNO": [123, 456], "NSE_EQ": [789]}
-        Returns format: {"123": 150.50, "456": 200.10}
         """
         if not self.client:
             return {}
         try:
             # Map request format to Kotak Neo request format
-            # Kotak Neo `quotes` takes list of dicts: [{'instrument_token': '123', 'exchange_segment': 'nse_fo'}]
             tokens = []
             for seg, ids in securities.items():
                 kotak_seg = self._map_segment(seg)
@@ -528,14 +532,17 @@ class KotakNeoAPI:
                 else:
                     return {}
 
-            result = {}
+            segment_data = {}
             for q in quotes:
                 if isinstance(q, dict):
                     tok = str(q.get("instrumentToken", q.get("tok", "")))
                     ltp = q.get("lastTradedPrice", q.get("lp", 0))
                     if tok:
-                        result[tok] = float(ltp or 0)
-            return result
+                        segment_data[tok] = {"last_price": float(ltp or 0)}
+            return {
+                "status": "success",
+                "data": segment_data
+            }
         except Exception as e:
             logger.error("Failed to get Kotak LTP: %s", e)
             return {}

@@ -58,6 +58,11 @@ DASHBOARD_HTML = """
     <script>
         if (window.location.pathname.indexOf('chart-trading') >= 0) {
             document.documentElement.classList.add('chart-trading-mode');
+            window.addEventListener('DOMContentLoaded', function() {
+                if (typeof switchDomTab === 'function') {
+                    switchDomTab('chart');
+                }
+            });
         }
     </script>
     <meta charset="UTF-8">
@@ -265,6 +270,9 @@ DASHBOARD_HTML = """
         .chart-trading-mode body {
             padding: 8px 0 !important;
         }
+        .chart-trading-mode #dom-tab-depth { display: none !important; }
+        .chart-trading-mode #dom-tab-chart { display: none !important; }
+        .chart-trading-mode #dom-chart { display: none !important; }
 
         /* ── Mobile responsive ───────────────────────────────────── */
         @media (max-width: 768px) {
