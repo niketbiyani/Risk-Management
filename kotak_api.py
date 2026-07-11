@@ -538,10 +538,18 @@ class KotakNeoAPI:
                     tok = str(q.get("instrumentToken", q.get("tok", "")))
                     ltp = q.get("lastTradedPrice", q.get("lp", 0))
                     if tok:
-                        segment_data[tok] = {"last_price": float(ltp or 0)}
+                        # Find the requested segment name for this token ID
+                        seg_name = "NSE_FNO"
+                        for s_name, s_ids in securities.items():
+                            if int(tok) in s_ids or str(tok) in s_ids or tok in s_ids:
+                                seg_name = s_name
+                                break
+                        segment_data.setdefault(seg_name, {})[tok] = {"last_price": float(ltp or 0)}
             return {
                 "status": "success",
-                "data": segment_data
+                "data": {
+                    "data": segment_data
+                }
             }
         except Exception as e:
             logger.error("Failed to get Kotak LTP: %s", e)
