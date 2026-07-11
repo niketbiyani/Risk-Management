@@ -664,9 +664,14 @@ DASHBOARD_HTML = """
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <div style="display:flex;align-items:center;gap:10px;">
                             <h3 style="margin:0;">Depth of Market</h3>
-                            <div style="display:flex;gap:2px;">
+                            <div style="display:flex;gap:2px;align-items:center;">
                                 <button id="dom-tab-depth" onclick="switchDomTab('depth')" style="background:none;border:none;color:#3fb950;cursor:pointer;font-size:11px;font-weight:700;padding:2px 8px;border-bottom:2px solid #3fb950;">Depth</button>
                                 <button id="dom-tab-chart" onclick="switchDomTab('chart')" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:11px;font-weight:400;padding:2px 8px;border-bottom:2px solid transparent;">Chart</button>
+                                <select id="chart-timeframe" class="form-input" style="display:none;width:55px;padding:2px 4px;font-size:10px;height:20px;margin-left:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#8b949e;" onchange="changeChartTimeframe()" title="Chart Timeframe">
+                                    <option value="60">1m</option>
+                                    <option value="15">15s</option>
+                                    <option value="5">5s</option>
+                                </select>
                             </div>
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
@@ -1311,7 +1316,9 @@ DASHBOARD_HTML = """
                     // Update live chart bar
                     if (_lwSeries && _lwCurrentSecurity === _spreadSellLeg.securityId) {
                         var nowSec = Math.floor(Date.now() / 1000);
-                        var barSec = nowSec - (nowSec % 60);
+                        var tfEl = document.getElementById('chart-timeframe');
+                        var interval = tfEl ? parseInt(tfEl.value) : 60;
+                        var barSec = nowSec - (nowSec % interval);
                         var ltp = data.ltp;
                         if (barSec !== _liveBarTime) {
                             _liveBarTime = barSec; _liveBarOpen = ltp;
@@ -2868,7 +2875,9 @@ DASHBOARD_HTML = """
                                 updateSpreadQuickBar();
                                 // Push live LTP into the current 1-min bar with proper OHLC
                                 var nowSec = Math.floor(Date.now() / 1000);
-                                var barSec = nowSec - (nowSec % 60);
+                                var tfEl = document.getElementById('chart-timeframe');
+                                var interval = tfEl ? parseInt(tfEl.value) : 60;
+                                var barSec = nowSec - (nowSec % interval);
                                 if (barSec !== _liveBarTime) {
                                     _liveBarTime = barSec; _liveBarOpen = ltp;
                                     _liveBarHigh = ltp;    _liveBarLow  = ltp;
@@ -3468,9 +3477,11 @@ DASHBOARD_HTML = """
             var canvasDiv = document.getElementById('dom-chart-canvas');
             var depthBtn = document.getElementById('dom-tab-depth');
             var chartBtn = document.getElementById('dom-tab-chart');
+            var tfSelect = document.getElementById('chart-timeframe');
             if (tab === 'chart') {
                 depthDiv.style.display = 'none';
                 chartDiv.style.display = 'block';
+                if (tfSelect) tfSelect.style.display = 'inline-block';
                 depthBtn.style.fontWeight = '400'; depthBtn.style.borderBottomColor = 'transparent'; depthBtn.style.color = '#8b949e';
                 chartBtn.style.fontWeight = '700'; chartBtn.style.borderBottomColor = '#3fb950';    chartBtn.style.color = '#3fb950';
                 
@@ -3481,10 +3492,17 @@ DASHBOARD_HTML = """
             } else {
                 depthDiv.style.display = 'block';
                 chartDiv.style.display = 'none';
+                if (tfSelect) tfSelect.style.display = 'none';
                 depthBtn.style.fontWeight = '700'; depthBtn.style.borderBottomColor = '#3fb950';    depthBtn.style.color = '#3fb950';
                 chartBtn.style.fontWeight = '400'; chartBtn.style.borderBottomColor = 'transparent'; chartBtn.style.color = '#8b949e';
             }
         }
+
+        window.changeChartTimeframe = function() {
+            _liveBarTime = 0; _liveBarOpen = 0; _liveBarHigh = 0; _liveBarLow = Infinity;
+            _refreshChart();
+            showToast('Timeframe changed. Live ticks will aggregate to ' + document.getElementById('chart-timeframe').value + 's bars.', 'info');
+        };
 
         // ── Maximization Toggle ──
         window._chartMaximized = false;
