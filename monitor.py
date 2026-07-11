@@ -63,6 +63,7 @@ class PositionMonitor:
         )
         # Load persisted order cache from previous session if available
         self._last_orders = self._load_order_cache()
+        self._lot_violation_start = {}
 
         # WebSocket state
         self._market_feed_thread: threading.Thread | None = None
@@ -172,6 +173,16 @@ class PositionMonitor:
             # Fetch current positions
             positions = self.api.get_positions()
             self._last_positions = positions
+            
+            # Lot size violation checks
+            self._evaluate_lot_size_violations(positions or [])
+            
+            # Update total executions count for brokerage calculation
+            try:
+                tradebook = self.api.get_trade_book() or []
+                self.state.set("total_executions", len(tradebook))
+            except Exception as e:
+                logger.debug("Failed to update total_executions: %s", e)
 
             # Auto-place protection orders from chart triggers
             if hasattr(self, "chart_sl_tp") and self.chart_sl_tp:
@@ -1255,7 +1266,92 @@ class PositionMonitor:
             result["recent_orders"] = self._get_recent_orders()
         except Exception as e:
             logger.debug("get_status: recent_orders error: %s", e)
+            
+        # Inject lot warning state keys
+        for k, v in self.state.get_all().items():
+            if k.startswith("lot_warn_") and v is not None:
+                result[k] = v
         return result
+
+    def _evaluate_lot_size_violations(self, positions: list[dict]):
+        """Detect lot size violations and trigger warnings/auto-liquidation."""
+        current_violations = {}
+        now = time.time()
+        
+        for pos in positions:
+            sid = str(pos["securityId"])
+            symbol = pos.get("tradingSymbol", "").upper()
+            qty = abs(pos["netQty"])
+            
+            limit = None
+            if "NIFTY" in symbol:
+                limit = 195
+            elif "SENSEX" in symbol:
+                limit = 80
+                
+            if limit and qty > limit:
+                current_violations[sid] = {
+                    "symbol": symbol,
+                    "qty": qty,
+                    "limit": limit,
+                    "segment": pos["exchangeSegment"],
+                    "product": pos["productType"],
+                    "net_qty_raw": pos["netQty"]
+                }
+                
+        # Clear resolved violations
+        resolved = []
+        for sid in list(self._lot_violation_start.keys()):
+            if sid not in current_violations:
+                resolved.append(sid)
+                
+        for sid in resolved:
+            del self._lot_violation_start[sid]
+            self.state.set(f"lot_warn_{sid}", None)
+            logger.info("Lot size violation resolved for security ID %s", sid)
+            
+        # Process active violations
+        for sid, viol in current_violations.items():
+            if sid not in self._lot_violation_start:
+                self._lot_violation_start[sid] = now
+                logger.warning("LOT SIZE VIOLATION: %s has qty %d (limit: %d). Starting countdown.",
+                               viol["symbol"], viol["qty"], viol["limit"])
+                
+            elapsed = now - self._lot_violation_start[sid]
+            
+            # Set state for frontend warning modal (starts at 5s elapsed)
+            if elapsed >= 5.0 and elapsed < 30.0:
+                seconds_left = int(max(0, 30.0 - elapsed))
+                warn_data = {
+                    "security_id": sid,
+                    "symbol": viol["symbol"],
+                    "qty": viol["qty"],
+                    "limit": viol["limit"],
+                    "seconds_left": seconds_left
+                }
+                self.state.set(f"lot_warn_{sid}", warn_data)
+                
+            elif elapsed >= 30.0:
+                # auto-liquidate
+                logger.warning("LOT SIZE AUTO-LIQUIDATION: %s has been violating for 30 seconds. Closing position.",
+                               viol["symbol"])
+                try:
+                    tx_type = "SELL" if viol["net_qty_raw"] > 0 else "BUY"
+                    self.api.place_order(
+                        security_id=sid,
+                        exchange_segment=viol["segment"],
+                        transaction_type=tx_type,
+                        quantity=viol["qty"],
+                        order_type="MARKET",
+                        product_type=viol["product"]
+                    )
+                    logger.warning("Liquidation order sent successfully for %s", viol["symbol"])
+                except Exception as ex:
+                    logger.error("Failed to auto-liquidate position %s: %s", viol["symbol"], ex)
+                
+                # Clear state violation
+                del self._lot_violation_start[sid]
+                self.state.set(f"lot_warn_{sid}", None)
 
 
 def run_monitor():

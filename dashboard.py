@@ -579,7 +579,7 @@ DASHBOARD_HTML = """
     <div id="trading-desktop-container" class="desktop-only" style="padding:0 24px;margin-top:16px;">
         <div id="trading-workspace" style="display:flex;gap:16px;transition:all 0.2s;">
             <!-- Left: Option Chain -->
-            <div id="oc-workspace-col" style="flex:0 0 38%;min-width:0;transition:all 0.2s;">
+            <div id="oc-workspace-col" style="flex:0 0 24%;min-width:0;transition:all 0.2s;">
                 <div class="card">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                         <h3 style="margin:0;">Option Chain</h3>
@@ -735,11 +735,12 @@ DASHBOARD_HTML = """
                         <!-- Floating TV-style Order Placer Tags -->
                         <div id="chart-tag-breakout" style="display:none;position:absolute;right:80px;background:rgba(255,153,0,0.9);border:1px solid #ff9900;border-radius:4px;padding:3px 8px;z-index:50;color:#0d1117;font-family:monospace;font-size:10px;font-weight:bold;box-shadow:0 2px 5px rgba(0,0,0,0.5);display:flex;align-items:center;gap:6px;">
                             <span>BREAKOUT LIMIT: <input id="chart-tag-breakout-input" type="number" step="0.05" style="width:65px;font-size:10px;background:#0d1117;color:#ff9900;border:1px solid #ff9900;border-radius:3px;padding:1px;text-align:center;font-weight:bold;margin:0 4px;" onchange="updatePriceFromTag('breakout')"></span>
+                            <span>Qty: <input id="chart-tag-breakout-qty-input" type="number" style="width:50px;font-size:10px;background:#0d1117;color:#ff9900;border:1px solid #ff9900;border-radius:3px;padding:1px;text-align:center;font-weight:bold;margin:0 4px;" onchange="updateQtyFromTag()"></span>
                             <button onclick="submitChartTriggerOrders()" style="background:#0d1117;color:#ff9900;border:none;border-radius:3px;padding:1px 5px;cursor:pointer;font-size:9px;font-weight:bold;">⚡ TRANSMIT</button>
                         </div>
                         
                         <div id="chart-tag-sl" style="display:none;position:absolute;right:80px;background:rgba(248,81,73,0.9);border:1px solid #f85149;border-radius:4px;padding:3px 8px;z-index:50;color:#ffffff;font-family:monospace;font-size:10px;font-weight:bold;box-shadow:0 2px 5px rgba(0,0,0,0.5);display:flex;align-items:center;gap:6px;">
-                            <span>STOP LOSS LIMIT: <input id="chart-tag-sl-input" type="number" step="0.05" style="width:65px;font-size:10px;background:#0d1117;color:#f85149;border:1px solid #f85149;border-radius:3px;padding:1px;text-align:center;font-weight:bold;margin:0 4px;" onchange="updatePriceFromTag('sl')"></span>
+                            <span><span id="chart-tag-sl-label">STOP LOSS LIMIT</span>: <input id="chart-tag-sl-input" type="number" step="0.05" style="width:65px;font-size:10px;background:#0d1117;color:#f85149;border:1px solid #f85149;border-radius:3px;padding:1px;text-align:center;font-weight:bold;margin:0 4px;" onchange="updatePriceFromTag('sl')"></span>
                             <button onclick="submitStopLoss1Click()" style="background:#ffffff;color:#f85149;border:none;border-radius:3px;padding:1px 5px;cursor:pointer;font-size:9px;font-weight:bold;">⚡ PLACE SL</button>
                         </div>
                         <!-- Chart Price Controls -->
@@ -1315,6 +1316,18 @@ DASHBOARD_HTML = """
                     }
                     // Update live chart bar
                     if (_lwSeries && _lwCurrentSecurity === _spreadSellLeg.securityId) {
+                        // Closed Market / Holiday Filter (IST checks)
+                        var now = new Date();
+                        var utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                        var istTime = new Date(utc + (3600000 * 5.5));
+                        var day = istTime.getDay();
+                        var hour = istTime.getHours();
+                        var min = istTime.getMinutes();
+                        var timeVal = hour * 100 + min;
+                        var isHoliday = (day === 0 || day === 6);
+                        var isMarketOpen = (!isHoliday && timeVal >= 915 && timeVal <= 1530);
+                        if (!isMarketOpen) return;
+
                         var nowSec = Math.floor(Date.now() / 1000);
                         var tfEl = document.getElementById('chart-timeframe');
                         var interval = tfEl ? parseInt(tfEl.value) : 60;
@@ -1393,13 +1406,34 @@ DASHBOARD_HTML = """
                 cdBanner.classList.remove('active');
             }
 
+            // Check for lot size warnings
+            var activeWarn = null;
+            for (var k in data) {
+                if (k.startsWith('lot_warn_') && data[k] !== null && data[k] !== undefined) {
+                    activeWarn = data[k];
+                    break;
+                }
+            }
+            var warnModal = document.getElementById('lot-warn-modal');
+            if (activeWarn && warnModal) {
+                document.getElementById('lot-warn-symbol').textContent = activeWarn.symbol;
+                document.getElementById('lot-warn-qty').textContent = activeWarn.qty;
+                document.getElementById('lot-warn-limit').textContent = activeWarn.limit;
+                document.getElementById('lot-warn-timer').textContent = activeWarn.seconds_left + 's';
+                warnModal.style.display = 'flex';
+            } else if (warnModal) {
+                warnModal.style.display = 'none';
+            }
+
             // P&L cards
-            var totalPnl = data.pnl.total;
+            var totalPnl = data.pnl.net_total !== undefined ? data.pnl.net_total : data.pnl.total;
             var totalEl = document.getElementById('total-pnl');
             totalEl.textContent = fmt(totalPnl);
             totalEl.className = 'value ' + (totalPnl >= 0 ? 'positive' : 'negative');
+            
+            var charges = data.pnl.brokerage || 0;
             document.getElementById('pnl-breakdown').textContent =
-                'R: ' + fmt(data.pnl.realized) + ' | U: ' + fmt(data.pnl.unrealized);
+                'R: ' + fmt(data.pnl.realized) + ' | U: ' + fmt(data.pnl.unrealized) + ' | Charges: ' + fmt(charges);
 
             // Loss buffer
             var lossRemaining = data.limits.loss_remaining;
@@ -2873,7 +2907,19 @@ DASHBOARD_HTML = """
                             if (ltp > 0) {
                                 _spreadSellLeg.ltp = ltp;
                                 updateSpreadQuickBar();
-                                // Push live LTP into the current 1-min bar with proper OHLC
+                                // Closed Market / Holiday Filter (IST checks)
+                                var now = new Date();
+                                var utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                                var istTime = new Date(utc + (3600000 * 5.5));
+                                var day = istTime.getDay();
+                                var hour = istTime.getHours();
+                                var min = istTime.getMinutes();
+                                var timeVal = hour * 100 + min;
+                                var isHoliday = (day === 0 || day === 6);
+                                var isMarketOpen = (!isHoliday && timeVal >= 915 && timeVal <= 1530);
+                                if (!isMarketOpen) return;
+
+                                // Push live LTP into the current bar
                                 var nowSec = Math.floor(Date.now() / 1000);
                                 var tfEl = document.getElementById('chart-timeframe');
                                 var interval = tfEl ? parseInt(tfEl.value) : 60;
@@ -3560,6 +3606,11 @@ DASHBOARD_HTML = """
                     if (inputEl && document.activeElement !== inputEl) {
                         inputEl.value = breakoutPrice.toFixed(2);
                     }
+                    var qtyEl = document.getElementById('chart-tag-breakout-qty-input');
+                    var currentQty = parseFloat(document.getElementById('sqb-qty-override').value) || parseFloat(document.getElementById('sqb-qty').textContent) || 50;
+                    if (qtyEl && document.activeElement !== qtyEl) {
+                        qtyEl.value = currentQty;
+                    }
                 } else {
                     tagBreakout.style.display = 'none';
                 }
@@ -3576,11 +3627,30 @@ DASHBOARD_HTML = """
                     if (inputEl && document.activeElement !== inputEl) {
                         inputEl.value = slPrice.toFixed(2);
                     }
+                    var labelEl = document.getElementById('chart-tag-sl-label');
+                    if (labelEl) {
+                        if (breakoutPrice > 0) {
+                            var diff = slPrice - breakoutPrice;
+                            labelEl.textContent = 'STOP LOSS LIMIT (' + (diff >= 0 ? '+' : '') + diff.toFixed(2) + ' pts)';
+                        } else {
+                            labelEl.textContent = 'STOP LOSS LIMIT';
+                        }
+                    }
                 } else {
                     tagSL.style.display = 'none';
                 }
             } else if (tagSL) {
                 tagSL.style.display = 'none';
+            }
+        };
+
+        window.updateQtyFromTag = function() {
+            var val = parseInt(document.getElementById('chart-tag-breakout-qty-input').value) || 0;
+            if (val > 0) {
+                var overrideInput = document.getElementById('sqb-qty-override');
+                if (overrideInput) {
+                    overrideInput.value = val;
+                }
             }
         };
 
@@ -4002,6 +4072,87 @@ DASHBOARD_HTML = """
         };
         // If socket is already connected, set up now
         if (socket) setupDepthListener();
+    </script>
+
+    <!-- Lot Size Warning Overlay Modal -->
+    <div id="lot-warn-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:99999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+        <div style="background:#161b22;border:2px solid #f85149;border-radius:12px;padding:24px;width:90%;max-width:420px;text-align:center;box-shadow:0 10px 25px rgba(0,0,0,0.8);">
+            <div style="font-size:48px;color:#f85149;margin-bottom:12px;">⚠</div>
+            <h2 style="color:#f85149;margin:0 0 12px;font-size:20px;text-transform:uppercase;letter-spacing:1px;font-family:sans-serif;">Position Limit Exceeded</h2>
+            <p style="font-size:14px;color:#c9d1d9;line-height:1.5;margin-bottom:16px;font-family:sans-serif;">
+                Your open position for <strong id="lot-warn-symbol" style="color:#ffffff;">--</strong> has <strong id="lot-warn-qty" style="color:#ffffff;">0</strong> quantity. 
+                This exceeds your safety limit of <strong id="lot-warn-limit" style="color:#ffffff;">0</strong>.
+            </p>
+            <div style="background:#21262d;border:1px solid #30363d;border-radius:8px;padding:12px;font-size:13px;color:#8b949e;margin-bottom:20px;font-family:sans-serif;">
+                Reduce or close this position immediately or it will be auto-liquidated in:
+                <div id="lot-warn-timer" style="font-size:32px;font-weight:700;color:#f85149;margin-top:8px;font-family:monospace;">25s</div>
+            </div>
+            <p style="font-size:11px;color:#484f58;margin:0;font-family:sans-serif;">(Direct terminal execution limit enforcement)</p>
+        </div>
+    </div>
+
+    <!-- Right-Click Context Menu -->
+    <div id="chart-context-menu" style="display:none;position:fixed;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px 0;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.6);width:170px;user-select:none;font-family:sans-serif;">
+        <div onclick="selectContextAction('breakout')" style="padding:8px 14px;font-size:12px;color:#ff9900;cursor:pointer;font-weight:600;" onmouseover="this.style.background='#21262d'" onmouseout="this.style.background='none'">Place Breakout here</div>
+        <div onclick="selectContextAction('sl')" style="padding:8px 14px;font-size:12px;color:#f85149;cursor:pointer;font-weight:600;" onmouseover="this.style.background='#21262d'" onmouseout="this.style.background='none'">Place Stop Loss here</div>
+        <div onclick="selectContextAction('tp')" style="padding:8px 14px;font-size:12px;color:#3fb950;cursor:pointer;font-weight:600;" onmouseover="this.style.background='#21262d'" onmouseout="this.style.background='none'">Place Take Profit here</div>
+    </div>
+
+    <script>
+        // Context menu pricing state
+        window._ctxPrice = 0;
+        
+        // Listen to right-click on the chart canvas container
+        setTimeout(function() {
+            var chartCanvas = document.getElementById('dom-chart-canvas');
+            if (chartCanvas) {
+                chartCanvas.addEventListener('contextmenu', function(e) {
+                    e.preventDefault();
+                    if (!_lwSeries || !_lwChart) return;
+                    
+                    var rect = chartCanvas.getBoundingClientRect();
+                    var y = e.clientY - rect.top;
+                    var price = _lwSeries.coordinateToPrice(y);
+                    
+                    if (price) {
+                        window._ctxPrice = Math.round(price * 20) / 20; // round to 0.05
+                        var menu = document.getElementById('chart-context-menu');
+                        if (menu) {
+                            menu.style.left = e.clientX + 'px';
+                            menu.style.top = e.clientY + 'px';
+                            menu.style.display = 'block';
+                        }
+                    }
+                });
+            }
+        }, 1000);
+        
+        // Hide menu when clicking elsewhere
+        document.addEventListener('click', function(e) {
+            var menu = document.getElementById('chart-context-menu');
+            if (menu && !menu.contains(e.target)) {
+                menu.style.display = 'none';
+            }
+        });
+        
+        window.selectContextAction = function(type) {
+            var price = window._ctxPrice;
+            var menu = document.getElementById('chart-context-menu');
+            if (menu) menu.style.display = 'none';
+            if (price <= 0) return;
+            
+            if (type === 'breakout') {
+                document.getElementById('chart-breakout-val').value = price.toFixed(2);
+                window.updateBreakoutLine(price);
+            } else if (type === 'sl') {
+                document.getElementById('chart-sl-val').value = price.toFixed(2);
+                window.updateSlLine(price);
+            } else if (type === 'tp') {
+                document.getElementById('chart-tp-val').value = price.toFixed(2);
+                window.updateTpLine(price);
+            }
+            showToast('Placed ' + type.toUpperCase() + ' line at ' + price.toFixed(2), 'success');
+        };
     </script>
 </body>
 </html>
@@ -5278,9 +5429,10 @@ def api_chart(security_id):
             closes = data.get("close", [])
             result = []
             for i, ts in enumerate(timestamps):
-                # Parse IST string as-if-UTC so chart displays correct IST times
                 try:
-                    unix_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp())
+                    from datetime import timezone, timedelta
+                    ist_tz = timezone(timedelta(hours=5, minutes=30))
+                    unix_ts = int(_dt.strptime(str(ts), "%Y-%m-%d %H:%M:%S").replace(tzinfo=ist_tz).timestamp())
                 except (ValueError, TypeError):
                     try:
                         unix_ts = int(ts)

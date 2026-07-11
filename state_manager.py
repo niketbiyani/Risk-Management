@@ -153,6 +153,11 @@ class StateManager:
     def get(self, key: str, default: Any = None) -> Any:
         return self._state.get(key, default)
 
+    def set(self, key: str, value: Any):
+        """Set a custom state value and save immediately."""
+        self._state[key] = value
+        self._save()
+
     def get_all(self) -> dict:
         """Return full state (read-only copy)."""
         return dict(self._state)

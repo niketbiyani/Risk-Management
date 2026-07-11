@@ -29,11 +29,13 @@ class Config:
     KOTAK_TOTP_SECRET: str = os.getenv("KOTAK_TOTP_SECRET", "")
 
     # Risk Limits (INR)
-    DAILY_MAX_LOSS: float = float(os.getenv("DAILY_MAX_LOSS", "5000"))
+    DAILY_MAX_LOSS: float = float(os.getenv("DAILY_MAX_LOSS", "3500"))
     DAILY_PROFIT_TARGET: float = float(os.getenv("DAILY_PROFIT_TARGET", "20000"))
     MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
     MAX_SINGLE_TRADE_RISK: float = float(os.getenv("MAX_SINGLE_TRADE_RISK", "2000"))
     MAX_ORDER_QUANTITY: int = int(os.getenv("MAX_ORDER_QUANTITY", "1800"))
+    MAX_DAILY_TRADES: int = int(os.getenv("MAX_DAILY_TRADES", "35"))
+    BROKERAGE_PER_ORDER: float = float(os.getenv("BROKERAGE_PER_ORDER", "20"))
 
     # Profit Lock
     PROFIT_LOCK_THRESHOLD: float = float(os.getenv("PROFIT_LOCK_THRESHOLD", "10000"))

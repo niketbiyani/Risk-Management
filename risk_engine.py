@@ -66,6 +66,13 @@ class RiskEngine:
             return RiskDecision(False, f"Locked out: {self.state.get('lockout_reason')}",
                                 "lockout")
 
+        # 1b. Check daily trade count limit
+        total_trades = self.state.get("total_trades", 0)
+        if total_trades >= Config.MAX_DAILY_TRADES:
+            self.state.activate_lockout(
+                f"Daily trade limit hit: {total_trades} trades (limit: {Config.MAX_DAILY_TRADES})")
+            return RiskDecision(False, "Daily trade count limit reached", "lockout")
+
         # 2. Daily max loss breached
         loss_check = self._check_daily_loss()
         if not loss_check:
@@ -131,12 +138,24 @@ class RiskEngine:
         Returns action taken or None.
         """
         self.state.update_pnl(realized_pnl, unrealized_pnl)
+        
+        # Calculate brokerage and net P&L
+        executions = self.state.get("total_executions", 0)
+        brokerage = executions * Config.BROKERAGE_PER_ORDER
         total_pnl = realized_pnl + unrealized_pnl
+        net_total = total_pnl - brokerage
 
-        # ── Check daily max loss (total P&L) ──────────────────────────
-        if total_pnl <= -Config.DAILY_MAX_LOSS:
+        # Check daily trade limit lockout
+        total_trades = self.state.get("total_trades", 0)
+        if total_trades >= Config.MAX_DAILY_TRADES:
             self.state.activate_lockout(
-                f"Daily loss limit hit: ₹{total_pnl:,.0f} "
+                f"Daily trade limit hit: {total_trades} trades (limit: {Config.MAX_DAILY_TRADES})")
+            return "lockout_max_trades"
+
+        # ── Check daily max loss (total P&L including brokerage) ──────
+        if net_total <= -Config.DAILY_MAX_LOSS:
+            self.state.activate_lockout(
+                f"Daily loss limit hit (including brokerage charges): ₹{net_total:,.0f} "
                 f"(limit: ₹{-Config.DAILY_MAX_LOSS:,.0f})")
             return "lockout_max_loss"
 
@@ -199,9 +218,12 @@ class RiskEngine:
     def _check_daily_loss(self) -> RiskDecision:
         """Check if daily loss limit is breached."""
         total = self.state.total_pnl
-        if total <= -Config.DAILY_MAX_LOSS:
+        executions = self.state.get("total_executions", 0)
+        brokerage = executions * Config.BROKERAGE_PER_ORDER
+        net_total = total - brokerage
+        if net_total <= -Config.DAILY_MAX_LOSS:
             self.state.activate_lockout(
-                f"Daily loss limit: ₹{total:,.0f}")
+                f"Daily loss limit (including brokerage charges): ₹{net_total:,.0f}")
             return RiskDecision(False, "Daily loss limit breached", "lockout")
         return RiskDecision(True)
 
@@ -244,8 +266,12 @@ class RiskEngine:
         unrealized = self.state.unrealized_pnl
         total = realized + unrealized
 
+        executions = self.state.get("total_executions", 0)
+        brokerage = executions * Config.BROKERAGE_PER_ORDER
+        net_total = total - brokerage
+
         # Calculate distances to limits
-        loss_remaining = max(0, Config.DAILY_MAX_LOSS + total)
+        loss_remaining = max(0, Config.DAILY_MAX_LOSS + net_total)
         profit_remaining = Config.DAILY_PROFIT_TARGET - realized if Config.DAILY_PROFIT_TARGET > 0 else None
 
         # Profit lock info
@@ -295,6 +321,8 @@ class RiskEngine:
                 "realized": realized,
                 "unrealized": unrealized,
                 "total": total,
+                "brokerage": brokerage,
+                "net_total": net_total,
                 "peak": self.state.get("peak_pnl", 0),
             },
             "limits": {
