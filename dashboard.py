@@ -4272,7 +4272,27 @@ def place_trigger_chart():
     # Get current LTP to determine transaction direction
     try:
         res = _monitor.api.get_ltp({segment: [int(security_id)]})
-        ltp = float(res.get(security_id, 0) or 0)
+        ltp = 0.0
+        if isinstance(res, dict):
+            # Flat dictionary
+            if security_id in res:
+                ltp = float(res[security_id] or 0)
+            elif str(security_id) in res:
+                ltp = float(res[str(security_id)] or 0)
+            # Dhan/nested format
+            elif "data" in res:
+                inner = res["data"]
+                if isinstance(inner, dict) and "data" in inner:
+                    inner = inner["data"]
+                if isinstance(inner, dict):
+                    for seg_key, seg_val in inner.items():
+                        if str(seg_key) == str(security_id):
+                            ltp = float(seg_val.get("last_price", 0) if isinstance(seg_val, dict) else (seg_val or 0))
+                            break
+                        elif isinstance(seg_val, dict) and str(security_id) in seg_val:
+                            val = seg_val[str(security_id)]
+                            ltp = float(val.get("last_price", 0) if isinstance(val, dict) else (val or 0))
+                            break
     except Exception:
         ltp = 0.0
         
@@ -5333,16 +5353,25 @@ def api_quick_sl():
             break
 
     if ltp is None or ltp == 0:
-        # Fallback to API
+        # Fallback to API (handles both Dhan and Kotak nested formats)
         try:
             ltp_data = _monitor.api.get_ltp({exchange_segment: [security_id]})
             if isinstance(ltp_data, dict) and "data" in ltp_data:
-                for key, val in ltp_data["data"].items():
-                    if isinstance(val, dict):
-                        ltp = val.get("last_price", 0)
+                inner = ltp_data["data"]
+                if isinstance(inner, dict) and "data" in inner:
+                    inner = inner["data"]
+                if isinstance(inner, dict):
+                    # Check for direct key match (e.g. flat under "data")
+                    if security_id in inner:
+                        val = inner[security_id]
+                        ltp = val.get("last_price", 0) if isinstance(val, dict) else val
                     else:
-                        ltp = val
-                    break
+                        # Scan nested segment dicts
+                        for seg_val in inner.values():
+                            if isinstance(seg_val, dict) and security_id in seg_val:
+                                val = seg_val[security_id]
+                                ltp = val.get("last_price", 0) if isinstance(val, dict) else val
+                                break
         except Exception:
             pass
 
