@@ -166,8 +166,36 @@ class PositionMonitor:
     def _tick(self):
         """Single monitoring cycle."""
         with self._lock:
-            # If already locked out and positions closed, just monitor state
+            # If already locked out and positions closed, just update final P&L/positions in state and return
             if self.state.is_locked_out and self._lockout_executed:
+                try:
+                    positions = self.api.get_positions()
+                    self._last_positions = positions
+                    self.state.update_positions([
+                        {
+                            "securityId": p.get("securityId"),
+                            "netQty": p.get("netQty"),
+                            "avgPrice": p.get("avgPrice"),
+                            "ltp": p.get("lastTradedPrice"),
+                            "pnl": (p.get("realizedProfit", 0) or 0) + (p.get("unrealizedProfit", 0) or 0),
+                        }
+                        for p in positions if p.get("netQty", 0) != 0
+                    ])
+                    # Update trade book to get final trade history
+                    self._refresh_trade_cache()
+                    
+                    realized_pnl = self._analyser_realized_pnl
+                    unrealized_pnl = self._calc_unrealized()
+                    self.state.update_pnl(realized_pnl, unrealized_pnl)
+                    
+                    orders = self.api.get_order_book() or []
+                    filled_order_ids = {
+                        str(o["orderId"]) for o in orders 
+                        if o.get("orderStatus") in ("TRADED", "PARTIALLY_TRADED") and "orderId" in o
+                    }
+                    self.state.set("total_executions", len(filled_order_ids))
+                except Exception as e:
+                    logger.debug("Failed status sync during lockout: %s", e)
                 return
 
             # Fetch current positions

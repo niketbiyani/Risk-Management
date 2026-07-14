@@ -529,7 +529,10 @@ DASHBOARD_HTML = """
         <div class="card">
             <h3>Win Rate</h3>
             <div class="value" id="win-rate">0%</div>
-            <div class="sub" id="trade-stats">0 trades</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
+                <div class="sub" id="trade-stats" style="margin:0;">0 trades</div>
+                <button id="main-extend-btn" onclick="extendTradeLimit()" class="btn-xs btn-neutral" style="padding:2px 6px;font-size:10px;font-weight:700;background:#21262d;border-color:#30363d;color:#e6edf3;border-radius:4px;cursor:pointer;line-height:1.2;">+10 Trades</button>
+            </div>
         </div>
     </div>
 
@@ -1531,21 +1534,24 @@ DASHBOARD_HTML = """
                 document.getElementById('ct-trades-counter').textContent = 
                     data.trades.total + ' / ' + maxTrades + ' trades';
                 
-                // Update extend trade limit button state
+                // Update extend trade limit buttons state
                 var extendBtn = document.getElementById('ct-extend-btn');
-                if (extendBtn) {
-                    if (data.limits.trade_limit_extended) {
-                        extendBtn.textContent = 'Extended';
-                        extendBtn.disabled = true;
-                        extendBtn.style.opacity = '0.5';
-                        extendBtn.style.cursor = 'not-allowed';
-                    } else {
-                        extendBtn.textContent = '+10 Trades';
-                        extendBtn.disabled = false;
-                        extendBtn.style.opacity = '1';
-                        extendBtn.style.cursor = 'pointer';
+                var mainExtendBtn = document.getElementById('main-extend-btn');
+                [extendBtn, mainExtendBtn].forEach(function(btn) {
+                    if (btn) {
+                        if (data.limits.trade_limit_extended) {
+                            btn.textContent = 'Extended';
+                            btn.disabled = true;
+                            btn.style.opacity = '0.5';
+                            btn.style.cursor = 'not-allowed';
+                        } else {
+                            btn.textContent = '+10 Trades';
+                            btn.disabled = false;
+                            btn.style.opacity = '1';
+                            btn.style.cursor = 'pointer';
+                        }
                     }
-                }
+                });
             }
 
             // Trailing drawdown — new style
