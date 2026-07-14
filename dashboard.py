@@ -262,10 +262,10 @@ DASHBOARD_HTML = """
         .chart-trading-mode #trading-desktop-container { display: block !important; }
         .chart-trading-mode #oc-scroll-container {
             max-height: none !important;
-            height: calc(100vh - 100px) !important;
+            height: calc(100vh - 150px) !important;
         }
         .chart-trading-mode #dom-chart-canvas {
-            height: calc(100vh - 180px) !important;
+            height: calc(100vh - 230px) !important;
         }
         .chart-trading-mode body {
             padding: 8px 0 !important;
@@ -276,6 +276,7 @@ DASHBOARD_HTML = """
         .chart-trading-mode #dom-analysis { display: none !important; }
         .chart-trading-mode #dom-title-text { display: none !important; }
         .chart-trading-mode #chart-title-text { display: block !important; }
+        .chart-trading-mode #chart-trading-status-bar { display: flex !important; }
 
         /* ── Mobile responsive ───────────────────────────────────── */
         @media (max-width: 768px) {
@@ -588,6 +589,23 @@ DASHBOARD_HTML = """
 
     <!-- Option Chain + Depth of Market (side by side) -->
     <div id="trading-desktop-container" class="desktop-only" style="padding:0 24px;margin-top:16px;">
+        <!-- Dedicated status bar for chart-trading page -->
+        <div id="chart-trading-status-bar" style="display:none;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:8px 16px;margin-bottom:12px;align-items:center;justify-content:space-between;gap:16px;">
+            <div style="display:flex;align-items:center;gap:16px;">
+                <span style="font-size:12px;color:#8b949e;">Net P&L:</span>
+                <strong id="ct-net-pnl" style="font-size:15px;font-weight:700;">&#8377;0</strong>
+                <span id="ct-pnl-breakdown" style="font-size:11px;color:#8b949e;">R: &#8377;0 | U: &#8377;0 | Charges: &#8377;0</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:16px;font-size:12px;color:#8b949e;">
+                <div>Loss Buffer: <strong id="ct-loss-remaining" style="color:#e6edf3;">&#8377;0</strong></div>
+                <div style="width:1px;height:12px;background:#30363d;"></div>
+                <div>Profit Lock: <strong id="ct-profit-lock" style="color:#e6edf3;">&#8377;0</strong></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;">
+                <span id="ct-trades-counter" style="font-size:12px;font-weight:600;color:#c9d1d9;">0 / 35 trades</span>
+                <button id="ct-extend-btn" onclick="extendTradeLimit()" class="btn-xs btn-neutral" style="padding:4px 8px;font-size:11px;font-weight:700;background:#21262d;border-color:#30363d;color:#e6edf3;border-radius:4px;cursor:pointer;line-height:1.2;">+10 Trades</button>
+            </div>
+        </div>
         <div id="trading-workspace" style="display:flex;gap:16px;transition:all 0.2s;">
             <!-- Left: Option Chain -->
             <div id="oc-workspace-col" style="flex:0 0 280px;width:280px;min-width:0;transition:all 0.2s;">
@@ -1485,8 +1503,50 @@ DASHBOARD_HTML = """
 
             // Win rate
             document.getElementById('win-rate').textContent = fmtPct(data.trades.win_rate);
+            var maxTrades = data.limits.max_trades_limit || 35;
             document.getElementById('trade-stats').textContent =
-                data.trades.total + ' trades (W:' + data.trades.winners + ' L:' + data.trades.losers + ')';
+                data.trades.total + ' / ' + maxTrades + ' trades (W:' + data.trades.winners + ' L:' + data.trades.losers + ')';
+
+            // Update chart trading status bar
+            var ctNetPnl = document.getElementById('ct-net-pnl');
+            if (ctNetPnl) {
+                ctNetPnl.textContent = fmt(totalPnl);
+                ctNetPnl.className = 'value ' + (totalPnl >= 0 ? 'positive' : 'negative');
+                document.getElementById('ct-pnl-breakdown').textContent =
+                    'R: ' + fmt(data.pnl.realized) + ' | U: ' + fmt(data.pnl.unrealized) + ' | Charges: ' + fmt(charges);
+                
+                var lossRemaining = data.limits.loss_remaining;
+                document.getElementById('ct-loss-remaining').textContent = fmt(lossRemaining);
+                
+                var plInfo = document.getElementById('ct-profit-lock');
+                if (data.profit_lock.active) {
+                    plInfo.textContent = fmt(data.profit_lock.floor);
+                    plInfo.className = 'positive';
+                } else {
+                    plInfo.textContent = fmt(data.profit_lock.distance);
+                    plInfo.className = 'neutral';
+                }
+
+                // Update Trade limits counter
+                document.getElementById('ct-trades-counter').textContent = 
+                    data.trades.total + ' / ' + maxTrades + ' trades';
+                
+                // Update extend trade limit button state
+                var extendBtn = document.getElementById('ct-extend-btn');
+                if (extendBtn) {
+                    if (data.limits.trade_limit_extended) {
+                        extendBtn.textContent = 'Extended';
+                        extendBtn.disabled = true;
+                        extendBtn.style.opacity = '0.5';
+                        extendBtn.style.cursor = 'not-allowed';
+                    } else {
+                        extendBtn.textContent = '+10 Trades';
+                        extendBtn.disabled = false;
+                        extendBtn.style.opacity = '1';
+                        extendBtn.style.cursor = 'pointer';
+                    }
+                }
+            }
 
             // Trailing drawdown — new style
             if (data.trailing_drawdown.enabled) {
@@ -2602,6 +2662,30 @@ DASHBOARD_HTML = """
             }
         }
 
+        function extendTradeLimit() {
+            if (!confirm('Are you sure you want to extend your daily trade limit by 10? This can only be done once per day.')) {
+                return;
+            }
+            fetch('/api/admin/extend_trade_limit', {
+                method: 'POST'
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.status === 'success') {
+                    showToast(d.message, 'success');
+                    fetch('/api/status')
+                        .then(function(r){ return r.json(); })
+                        .then(safeUpdate)
+                        .catch(function(e){});
+                } else {
+                    showToast(d.message || 'Failed to extend trade limit', 'error');
+                }
+            })
+            .catch(function(e) {
+                showToast('Error: ' + e.message, 'error');
+            });
+        }
+
         // Socket.IO real-time updates (bound via setupSocketListeners when socket connects async)
 
         // Initial fetch
@@ -3491,7 +3575,7 @@ DASHBOARD_HTML = """
             container.innerHTML = '';
              var initialHeight = 420;
              if (document.documentElement.classList.contains('chart-trading-mode')) {
-                 initialHeight = window.innerHeight - 180;
+                 initialHeight = window.innerHeight - 230;
                  if (initialHeight < 300) initialHeight = 300;
              }
              container.style.height = initialHeight + 'px';
@@ -4529,6 +4613,22 @@ def api_admin_reset_hwm():
         return jsonify({"status": "ok", "message": f"HWM reset from ₹{old_hwm:,.0f} to 0. Everything else preserved."})
     except Exception as e:
         logger.error("HWM reset failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/admin/extend_trade_limit", methods=["POST"])
+def api_admin_extend_trade_limit():
+    """Allow one-time extension of maximum daily trades limit by 10."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "monitor not ready"}), 503
+    try:
+        success, msg = _monitor.risk.extend_trade_limit()
+        if success:
+            return jsonify({"status": "success", "message": msg})
+        else:
+            return jsonify({"status": "error", "message": msg}), 400
+    except Exception as e:
+        logger.error("Extend trade limit failed: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/api/status")
@@ -6692,7 +6792,7 @@ function resizeAll() {
         var canvasW = canvasDiv.clientWidth || 600;
         var canvasH = 420;
         if (document.documentElement.classList.contains('chart-trading-mode')) {
-            canvasH = window.innerHeight - 180;
+            canvasH = window.innerHeight - 230;
             if (canvasH < 300) canvasH = 300;
         } else if (window._chartMaximized) {
             canvasH = 550;

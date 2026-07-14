@@ -99,6 +99,8 @@ class StateManager:
 
             # Trade Tracking
             "total_trades": 0,
+            "max_trades_limit": Config.MAX_DAILY_TRADES,
+            "trade_limit_extended": False,
             "winning_trades": 0,
             "losing_trades": 0,
             "consecutive_losses": 0,

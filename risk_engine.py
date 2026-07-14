@@ -68,9 +68,10 @@ class RiskEngine:
 
         # 1b. Check daily trade count limit
         total_trades = self.state.get("total_trades", 0)
-        if total_trades >= Config.MAX_DAILY_TRADES:
+        max_trades = self.state.get("max_trades_limit", Config.MAX_DAILY_TRADES)
+        if total_trades >= max_trades:
             self.state.activate_lockout(
-                f"Daily trade limit hit: {total_trades} trades (limit: {Config.MAX_DAILY_TRADES})")
+                f"Daily trade limit hit: {total_trades} trades (limit: {max_trades})")
             return RiskDecision(False, "Daily trade count limit reached", "lockout")
 
         # 2. Daily max loss breached
@@ -147,9 +148,10 @@ class RiskEngine:
 
         # Check daily trade limit lockout
         total_trades = self.state.get("total_trades", 0)
-        if total_trades >= Config.MAX_DAILY_TRADES:
+        max_trades = self.state.get("max_trades_limit", Config.MAX_DAILY_TRADES)
+        if total_trades >= max_trades:
             self.state.activate_lockout(
-                f"Daily trade limit hit: {total_trades} trades (limit: {Config.MAX_DAILY_TRADES})")
+                f"Daily trade limit hit: {total_trades} trades (limit: {max_trades})")
             return "lockout_max_trades"
 
         # ── Check daily max loss (total P&L including brokerage) ──────
@@ -340,6 +342,8 @@ class RiskEngine:
                 "loss_used_pct": (1 - loss_remaining / Config.DAILY_MAX_LOSS) * 100 if Config.DAILY_MAX_LOSS > 0 else 0,
                 "profit_target": Config.DAILY_PROFIT_TARGET,
                 "profit_remaining": profit_remaining,
+                "max_trades_limit": self.state.get("max_trades_limit", Config.MAX_DAILY_TRADES),
+                "trade_limit_extended": self.state.get("trade_limit_extended", False),
             },
             "profit_lock": profit_lock_info,
             "trailing_drawdown": drawdown_info,
@@ -354,3 +358,24 @@ class RiskEngine:
             },
             "kill_switch": self.state.get("kill_switch_activated", False),
         }
+
+    def extend_trade_limit(self) -> tuple[bool, str]:
+        """Allow a one-time daily increment of max trades limit by 10."""
+        if self.state.get("trade_limit_extended", False):
+            return False, "Trade limit has already been extended once today."
+        
+        current_limit = self.state.get("max_trades_limit", Config.MAX_DAILY_TRADES)
+        new_limit = current_limit + 10
+        self.state.set("max_trades_limit", new_limit)
+        self.state.set("trade_limit_extended", True)
+        
+        # If currently locked out due to daily trade limit, unlock!
+        if self.state.is_locked_out and "Daily trade limit hit" in self.state.get("lockout_reason", ""):
+            self.state.set("is_locked_out", False)
+            self.state.set("lockout_reason", "")
+            self.state.set("lockout_time", None)
+            logger.info("Daily trade limit extended to %d and lockout cleared.", new_limit)
+            return True, f"Trade limit successfully extended to {new_limit} and lockout cleared."
+        
+        logger.info("Daily trade limit extended to %d.", new_limit)
+        return True, f"Trade limit successfully extended to {new_limit}."
