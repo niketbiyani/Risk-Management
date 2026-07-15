@@ -1558,7 +1558,7 @@ DASHBOARD_HTML = """
             if (data.trailing_drawdown.enabled) {
                 var dd = data.trailing_drawdown;
                 var hwm = dd.high_water_mark || 0;
-                var threshold = 10000;
+                var threshold = data.profit_lock.threshold || 3000;
                 var realized = data.pnl ? data.pnl.realized : 0;
                 var total = data.pnl ? data.pnl.total : 0;
                 var floor = dd.drawdown_limit > 0 ? hwm - dd.drawdown_limit : 0;
