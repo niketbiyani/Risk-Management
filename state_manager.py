@@ -152,36 +152,55 @@ class StateManager:
 
     # ── Getters ────────────────────────────────────────────────────────
 
+    def _check_date_and_reset(self):
+        """Check if today's date (IST) is different from the state date.
+        If it changed, reset the state immediately (resets lockout, counts, P&L, etc.)."""
+        if not hasattr(self, "_state") or not self._state:
+            return
+        today_ist = self._today_ist()
+        if self._state.get("date") != today_ist:
+            logger.info("State date (%s) is older than today (%s) — performing automatic daily reset.",
+                        self._state.get("date"), today_ist)
+            self._reset_state()
+
     def get(self, key: str, default: Any = None) -> Any:
+        self._check_date_and_reset()
         return self._state.get(key, default)
 
     def set(self, key: str, value: Any):
         """Set a custom state value and save immediately."""
+        self._check_date_and_reset()
         self._state[key] = value
         self._save()
 
     def get_all(self) -> dict:
         """Return full state (read-only copy)."""
+        self._check_date_and_reset()
         return dict(self._state)
 
     @property
     def realized_pnl(self) -> float:
+        self._check_date_and_reset()
         return self._state["realized_pnl"]
 
     @property
     def unrealized_pnl(self) -> float:
+        self._check_date_and_reset()
         return self._state["unrealized_pnl"]
 
     @property
     def total_pnl(self) -> float:
+        self._check_date_and_reset()
         return self._state["realized_pnl"] + self._state["unrealized_pnl"]
 
     @property
     def is_locked_out(self) -> bool:
+        self._check_date_and_reset()
         return self._state["is_locked_out"]
 
     @property
     def is_cooling_down(self) -> bool:
+        self._check_date_and_reset()
         if not self._state["is_cooling_down"]:
             return False
         if self._state["cooldown_until"] and time.time() >= self._state["cooldown_until"]:
@@ -195,6 +214,7 @@ class StateManager:
     @property
     def cooldown_remaining(self) -> int:
         """Seconds remaining in cooldown."""
+        self._check_date_and_reset()
         if not self.is_cooling_down:
             return 0
         remaining = self._state["cooldown_until"] - time.time()
@@ -202,24 +222,29 @@ class StateManager:
 
     @property
     def profit_lock_active(self) -> bool:
+        self._check_date_and_reset()
         return self._state["profit_lock_active"]
 
     @property
     def profit_lock_floor(self) -> float:
+        self._check_date_and_reset()
         return self._state["profit_lock_floor"]
 
     @property
     def high_water_mark(self) -> float:
+        self._check_date_and_reset()
         return self._state["high_water_mark"]
 
     @property
     def consecutive_losses(self) -> int:
+        self._check_date_and_reset()
         return self._state["consecutive_losses"]
 
     # ── Setters (all persist immediately) ──────────────────────────────
 
     def update_pnl(self, realized: float, unrealized: float):
         """Update P&L figures."""
+        self._check_date_and_reset()
         self._state["realized_pnl"] = realized
         self._state["unrealized_pnl"] = unrealized
         self._state["total_pnl"] = realized + unrealized
@@ -237,6 +262,7 @@ class StateManager:
 
     def record_trade(self, trade_info: dict):
         """Record a completed trade."""
+        self._check_date_and_reset()
         pnl = trade_info.get("pnl", 0)
         self._state["total_trades"] += 1
 
@@ -268,6 +294,7 @@ class StateManager:
 
     def activate_lockout(self, reason: str):
         """Lock out trading for the day. CANNOT be reversed."""
+        self._check_date_and_reset()
         self._state["is_locked_out"] = True
         self._state["lockout_reason"] = reason
         self._state["lockout_time"] = time.time()
@@ -276,6 +303,7 @@ class StateManager:
 
     def activate_cooldown(self, duration_seconds: int, reason: str):
         """Start a cooldown period."""
+        self._check_date_and_reset()
         self._state["is_cooling_down"] = True
         self._state["cooldown_until"] = time.time() + duration_seconds
         self._state["cooldown_reason"] = reason
@@ -284,6 +312,7 @@ class StateManager:
 
     def activate_profit_lock(self, lock_level: float, floor: float):
         """Activate profit lock at given level with floor."""
+        self._check_date_and_reset()
         self._state["profit_lock_active"] = True
         self._state["profit_lock_level"] = lock_level
         self._state["profit_lock_floor"] = floor
@@ -292,6 +321,7 @@ class StateManager:
 
     def update_trailing_drawdown(self, active: bool, hwm: float = 0, drawdown: float = 0):
         """Update trailing drawdown state."""
+        self._check_date_and_reset()
         self._state["trailing_drawdown_active"] = active
         if hwm > 0:
             self._state["high_water_mark"] = hwm
@@ -300,16 +330,19 @@ class StateManager:
 
     def set_kill_switch(self, activated: bool):
         """Record that Dhan kill switch was activated."""
+        self._check_date_and_reset()
         self._state["kill_switch_activated"] = activated
         self._save()
 
     def update_positions(self, positions: list):
         """Store current position snapshot."""
+        self._check_date_and_reset()
         self._state["position_snapshot"] = positions
         self._save()
 
     def update_spreads(self, spreads: list):
         """Store detected option spreads."""
+        self._check_date_and_reset()
         self._state["open_spreads"] = spreads
         self._save()
 
@@ -320,4 +353,5 @@ class StateManager:
 
     def is_fresh_day(self) -> bool:
         """Check if this is a fresh state with no trades."""
+        self._check_date_and_reset()
         return self._state["total_trades"] == 0 and self._state["realized_pnl"] == 0
