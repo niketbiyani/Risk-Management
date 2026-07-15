@@ -77,7 +77,12 @@ class StateManager:
                                 self._state.get("date"), today_ist)
                     self._reset_state()
                 else:
-                    logger.info("Loaded existing state for today")
+                    # Sync baseline trade limit from Config on restart
+                    extended = self._state.get("trade_limit_extended", False)
+                    self._state["max_trades_limit"] = Config.MAX_DAILY_TRADES + (10 if extended else 0)
+                    self._save()
+                    logger.info("Loaded existing state for today (synchronized baseline trade limit to %d)",
+                                self._state["max_trades_limit"])
                     return
             except Exception as e:
                 logger.warning("Failed to load state (possibly tampered): %s", e)

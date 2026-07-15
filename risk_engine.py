@@ -145,6 +145,7 @@ class RiskEngine:
         brokerage = executions * Config.BROKERAGE_PER_ORDER
         total_pnl = realized_pnl + unrealized_pnl
         net_total = total_pnl - brokerage
+        net_realized = realized_pnl - brokerage
 
         # Check daily trade limit lockout
         total_trades = self.state.get("total_trades", 0)
@@ -162,46 +163,46 @@ class RiskEngine:
             return "lockout_max_loss"
 
         # ── Check profit lock activation & trailing ratchet ───────────
-        if realized_pnl >= Config.PROFIT_LOCK_THRESHOLD:
+        if net_realized >= Config.PROFIT_LOCK_THRESHOLD:
             lock_pct = Config.PROFIT_LOCK_PERCENTAGE / 100
-            new_floor = realized_pnl * lock_pct
+            new_floor = net_realized * lock_pct
             
             # If not yet active, activate it
             if not self.state.profit_lock_active:
-                self.state.activate_profit_lock(realized_pnl, new_floor)
-                logger.info("Profit lock triggered at ₹%.0f, floor set to ₹%.0f",
-                            realized_pnl, new_floor)
+                self.state.activate_profit_lock(net_realized, new_floor)
+                logger.info("Profit lock triggered at ₹%.0f (Net), floor set to ₹%.0f (Net)",
+                            net_realized, new_floor)
                 return "profit_lock_activated"
             
-            # If active, ratchet up the floor if current realized_pnl exceeds the previous lock level HWM
-            elif realized_pnl > self.state.get("profit_lock_level", 0.0):
-                self.state.activate_profit_lock(realized_pnl, new_floor)
-                logger.info("Profit lock ratcheted up to new peak ₹%.0f, floor set to ₹%.0f",
-                            realized_pnl, new_floor)
+            # If active, ratchet up the floor if current net_realized exceeds the previous lock level HWM
+            elif net_realized > self.state.get("profit_lock_level", 0.0):
+                self.state.activate_profit_lock(net_realized, new_floor)
+                logger.info("Profit lock ratcheted up to new peak ₹%.0f (Net), floor set to ₹%.0f (Net)",
+                            net_realized, new_floor)
                 return "profit_lock_ratcheted"
 
         # ── Check profit lock floor breach ─────────────────────────────
         if self.state.profit_lock_active:
             floor = self.state.profit_lock_floor
-            if realized_pnl < floor:
+            if net_realized < floor:
                 self.state.activate_lockout(
-                    f"Profit lock floor breached: P&L ₹{realized_pnl:,.0f} "
+                    f"Profit lock floor breached: Net P&L ₹{net_realized:,.0f} "
                     f"fell below floor ₹{floor:,.0f}")
                 return "lockout_profit_lock"
 
-        # ── Check trailing drawdown (HWM based on realized P&L only) ────
-        # HWM uses realized P&L only — unrealized fluctuates every tick
+        # ── Check trailing drawdown (HWM based on net realized P&L only) ────
+        # HWM uses net realized P&L only — unrealized fluctuates every tick
         # and would cause HWM to ratchet up on paper gains, making the
         # drawdown display jump around. Drawdown is measured as how far
-        # total (realized + unrealized) has fallen from the realized HWM.
+        # net total (realized + unrealized - brokerage) has fallen from the realized net HWM.
         if Config.TRAILING_DRAWDOWN_ENABLED:
             hwm = self.state.high_water_mark
-            if realized_pnl > hwm:
-                hwm = realized_pnl
+            if net_realized > hwm:
+                hwm = net_realized
 
             # Only track drawdown once HWM has been established above threshold
             if hwm >= Config.PROFIT_LOCK_THRESHOLD:
-                drawdown = max(0, hwm - total_pnl)
+                drawdown = max(0.0, hwm - net_total)
                 drawdown_limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100)
                 self.state.update_trailing_drawdown(True, hwm, drawdown)
 
@@ -210,9 +211,9 @@ class RiskEngine:
                         f"Trailing drawdown limit hit: drew down ₹{drawdown:,.0f} "
                         f"from HWM ₹{hwm:,.0f} (limit: {Config.TRAILING_DRAWDOWN_PERCENTAGE}%)")
                     return "lockout_trailing_drawdown"
-            elif realized_pnl > 0:
+            elif net_realized > 0:
                 # Below threshold but track progress
-                drawdown = max(0, hwm - total_pnl)
+                drawdown = max(0.0, hwm - net_total)
                 self.state.update_trailing_drawdown(False, hwm, drawdown)
 
         return None
@@ -242,15 +243,19 @@ class RiskEngine:
         """Check if profit lock floor is breached."""
         if not self.state.profit_lock_active:
             return RiskDecision(True)
-        if self.state.realized_pnl < self.state.profit_lock_floor:
+        executions = self.state.get("total_executions", 0)
+        brokerage = executions * Config.BROKERAGE_PER_ORDER
+        net_realized = self.state.realized_pnl - brokerage
+        floor = self.state.profit_lock_floor
+        if net_realized < floor:
             self.state.activate_lockout(
-                f"Profit lock floor breached: ₹{self.state.realized_pnl:,.0f} "
-                f"< floor ₹{self.state.profit_lock_floor:,.0f}")
+                f"Profit lock floor breached: Net P&L ₹{net_realized:,.0f} "
+                f"< floor ₹{floor:,.0f}")
             return RiskDecision(False, "Profit lock floor breached", "lockout")
         return RiskDecision(True)
 
     def _check_trailing_drawdown(self) -> RiskDecision:
-        """Check trailing drawdown: HWM is realized P&L, drawdown measures vs total."""
+        """Check trailing drawdown: HWM is net realized P&L, drawdown measures vs net total."""
         if not Config.TRAILING_DRAWDOWN_ENABLED:
             return RiskDecision(True)
         if not self.state.get("trailing_drawdown_active"):
@@ -260,8 +265,11 @@ class RiskEngine:
         if hwm < Config.PROFIT_LOCK_THRESHOLD:
             return RiskDecision(True)
 
-        total = self.state.total_pnl
-        drawdown = max(0, hwm - total)
+        executions = self.state.get("total_executions", 0)
+        brokerage = executions * Config.BROKERAGE_PER_ORDER
+        net_total = self.state.total_pnl - brokerage
+        
+        drawdown = max(0.0, hwm - net_total)
         limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100)
         if drawdown >= limit:
             self.state.activate_lockout(
