@@ -105,6 +105,7 @@ class StateManager:
             "losing_trades": 0,
             "consecutive_losses": 0,
             "trade_history": [],
+            "total_executions": 0,
 
             # Risk State
             "is_locked_out": False,
@@ -166,11 +167,7 @@ class StateManager:
     def get(self, key: str, default: Any = None) -> Any:
         self._check_date_and_reset()
         if key == "total_trades":
-            try:
-                today_ist = self._today_ist()
-                return len(self._journal.get_entries(date_str=today_ist))
-            except Exception:
-                return self._state.get("total_trades", 0)
+            return self._state.get("total_executions", 0)
         elif key == "winning_trades":
             try:
                 today_ist = self._today_ist()

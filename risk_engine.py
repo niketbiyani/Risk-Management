@@ -353,7 +353,7 @@ class RiskEngine:
                 "losers": self.state.get("losing_trades", 0),
                 "consecutive_losses": self.state.consecutive_losses,
                 "win_rate": (self.state.get("winning_trades", 0) /
-                             max(1, self.state.get("total_trades", 1))) * 100,
+                             max(1, self.state.get("winning_trades", 0) + self.state.get("losing_trades", 0))) * 100,
                 "history": self.state.get("trade_history", []),
             },
             "kill_switch": self.state.get("kill_switch_activated", False),
