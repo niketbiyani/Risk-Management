@@ -165,6 +165,26 @@ class StateManager:
 
     def get(self, key: str, default: Any = None) -> Any:
         self._check_date_and_reset()
+        if key == "total_trades":
+            try:
+                today_ist = self._today_ist()
+                return len(self._journal.get_entries(date_str=today_ist))
+            except Exception:
+                return self._state.get("total_trades", 0)
+        elif key == "winning_trades":
+            try:
+                today_ist = self._today_ist()
+                entries = self._journal.get_entries(date_str=today_ist)
+                return sum(1 for e in entries if e.get("pnl") is not None and e.get("pnl") >= 0)
+            except Exception:
+                return self._state.get("winning_trades", 0)
+        elif key == "losing_trades":
+            try:
+                today_ist = self._today_ist()
+                entries = self._journal.get_entries(date_str=today_ist)
+                return sum(1 for e in entries if e.get("pnl") is not None and e.get("pnl") < 0)
+            except Exception:
+                return self._state.get("losing_trades", 0)
         return self._state.get(key, default)
 
     def set(self, key: str, value: Any):
