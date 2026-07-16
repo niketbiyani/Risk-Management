@@ -288,10 +288,11 @@ class RiskEngine:
         executions = self.state.get("total_executions", 0)
         brokerage = executions * Config.BROKERAGE_PER_ORDER
         net_total = total - brokerage
+        net_realized = realized - brokerage
 
         # Calculate distances to limits
         loss_remaining = max(0, Config.DAILY_MAX_LOSS + net_total)
-        profit_remaining = Config.DAILY_PROFIT_TARGET - realized if Config.DAILY_PROFIT_TARGET > 0 else None
+        profit_remaining = Config.DAILY_PROFIT_TARGET - net_realized if Config.DAILY_PROFIT_TARGET > 0 else None
 
         # Profit lock info
         profit_lock_info = {}
@@ -300,10 +301,10 @@ class RiskEngine:
                 "active": True,
                 "lock_level": self.state.get("profit_lock_level"),
                 "floor": self.state.profit_lock_floor,
-                "buffer": realized - self.state.profit_lock_floor,
+                "buffer": net_realized - self.state.profit_lock_floor,
             }
         else:
-            distance_to_lock = Config.PROFIT_LOCK_THRESHOLD - realized
+            distance_to_lock = Config.PROFIT_LOCK_THRESHOLD - net_realized
             profit_lock_info = {
                 "active": False,
                 "threshold": Config.PROFIT_LOCK_THRESHOLD,
@@ -314,7 +315,7 @@ class RiskEngine:
         drawdown_info = {}
         if Config.TRAILING_DRAWDOWN_ENABLED:
             hwm = self.state.high_water_mark
-            drawdown = hwm - total if hwm > 0 else 0
+            drawdown = hwm - net_total if hwm > 0 else 0
             limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100) if hwm > 0 else 0
             drawdown_info = {
                 "enabled": True,
