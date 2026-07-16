@@ -4637,6 +4637,24 @@ def api_admin_extend_trade_limit():
         logger.error("Extend trade limit failed: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+@app.route("/api/admin/reset_lockout", methods=["POST"])
+def api_admin_reset_lockout():
+    """Manually clear today's lockout state via admin endpoint."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "monitor not ready"}), 503
+    try:
+        _monitor.state._state["is_locked_out"] = False
+        _monitor.state._state["lockout_reason"] = ""
+        _monitor.state._state["lockout_time"] = None
+        _monitor.state._save()
+        _monitor._lockout_executed = False  # Reset monitor lockout flag
+        logger.warning("MANUAL LOCKOUT RESET: Lockout cleared via admin endpoint")
+        return jsonify({"status": "ok", "message": "Lockout cleared successfully."})
+    except Exception as e:
+        logger.error("Lockout reset failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/api/status")
 def api_status():
     if _monitor:
