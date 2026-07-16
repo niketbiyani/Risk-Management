@@ -54,6 +54,7 @@ class PositionMonitor:
         self._lockout_executed = False
         self._analyser_realized_pnl: float = 0.0   # sum of closed trade P&L from analyser
         self._analyser_open_trades: list = []       # open trades with entry prices from analyser
+        self._trade_cache_loaded = False            # flag indicating trade cache has loaded successfully
         self._ltp_cache: dict = {}                  # security_id -> latest LTP from WebSocket
         self._analyser_last_import: float = 0.0
         self._analyser_import_interval: float = 60.0  # fallback periodic refresh
@@ -111,8 +112,12 @@ class PositionMonitor:
         except Exception as e:
             logger.warning("Startup journal backfill failed: %s", e)
 
-        # Prime trade cache on startup
-        threading.Thread(target=self._refresh_trade_cache, args=("startup",), daemon=True).start()
+        # Prime trade cache on startup synchronously to avoid P&L race conditions
+        try:
+            logger.info("Priming trade cache on startup...")
+            self._refresh_trade_cache("startup")
+        except Exception as e:
+            logger.warning("Failed to prime trade cache on startup: %s", e)
 
         self._monitor_loop()
 
@@ -184,7 +189,7 @@ class PositionMonitor:
                     # Update trade book to get final trade history
                     self._refresh_trade_cache()
                     
-                    realized_pnl = self._analyser_realized_pnl
+                    realized_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
                     unrealized_pnl = self._calc_unrealized()
                     self.state.update_pnl(realized_pnl, unrealized_pnl)
                     
@@ -266,7 +271,7 @@ class PositionMonitor:
                 threading.Thread(target=self._refresh_trade_cache, daemon=True).start()
 
             # Realized P&L: sum of closed trades from our cache (updated on every fill)
-            realized_pnl = self._analyser_realized_pnl
+            realized_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
 
             # Unrealized P&L: calculated from our own open trade cache + WebSocket LTP.
             # Never use Dhan's unrealizedProfit — it blends all re-entries via average price.
@@ -541,7 +546,8 @@ class PositionMonitor:
 
             self._analyser_realized_pnl = sum(t.get("pnl", 0) or 0 for t in closed)
             self._analyser_open_trades = open_t
-
+            self._trade_cache_loaded = True
+ 
             logger.info("Trade cache refreshed (%s): realized=₹%.0f closed=%d open=%d",
                         trigger, self._analyser_realized_pnl, len(closed), len(open_t))
         except Exception as e:
