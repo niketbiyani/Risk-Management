@@ -37,10 +37,10 @@ def _load_env():
     """Reload .env and return current credentials."""
     load_dotenv(ENV_FILE, override=True)
     return {
-        "client_id": os.getenv("DHAN_CLIENT_ID", ""),
-        "access_token": os.getenv("DHAN_ACCESS_TOKEN", ""),
-        "pin": os.getenv("DHAN_PIN", ""),
-        "totp_secret": os.getenv("DHAN_TOTP_SECRET", ""),
+        "client_id": os.getenv("DHAN_CLIENT_ID", "").strip(),
+        "access_token": os.getenv("DHAN_ACCESS_TOKEN", "").strip(),
+        "pin": os.getenv("DHAN_PIN", "").strip(),
+        "totp_secret": os.getenv("DHAN_TOTP_SECRET", "").strip(),
     }
 
 
