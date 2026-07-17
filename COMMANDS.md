@@ -166,38 +166,87 @@ grep -i "place_order\|order_id\|DH-" platform.log | tail -20
 nano .env
 ```
 
-| Setting                    | What it does                          | Default |
-|----------------------------|---------------------------------------|---------|
-| DAILY_MAX_LOSS             | Max loss before trading stops (INR)   | 5000    |
-| DAILY_PROFIT_TARGET        | Profit target for the day (INR)       | 20000   |
-| MAX_OPEN_POSITIONS         | Max concurrent positions              | 5       |
-| MAX_SINGLE_TRADE_RISK      | Max risk per trade (INR)              | 2000    |
-| MAX_ORDER_QUANTITY         | Max lots per order                    | 1800    |
+| Setting                    | What it does                                                    | Default |
+|----------------------------|-----------------------------------------------------------------|---------|
+| `DAILY_MAX_LOSS`           | Maximum loss allowed before trading is locked out (INR)          | 3500    |
+| `DAILY_PROFIT_TARGET`      | Daily profit target for optional auto-lockout (INR)              | 20000   |
+| `MAX_OPEN_POSITIONS`       | Maximum number of simultaneous open positions                   | 5       |
+| `MAX_SINGLE_TRADE_RISK`    | Maximum estimated risk per trade (INR)                           | 1200    |
+| `MAX_ORDER_QUANTITY`       | Maximum quantity allowed per order                              | 1800    |
+| `MAX_DAILY_TRADES`         | Maximum number of unique filled/partially-filled orders         | 35      |
+| `PROFIT_LOCK_THRESHOLD`    | Realized P&L level required to trigger trailing Profit Lock (INR)| 3000    |
+| `PROFIT_LOCK_PERCENTAGE`   | Percentage of peak realized profit locked in (e.g. 50%)         | 50      |
+| `TRAILING_DRAWDOWN_ENABLED`| Enable trailing drawdown protection                             | true    |
+| `TRAILING_DRAWDOWN_PCT`    | Drawdown allowance (percent) from peak realized HWM              | 50      |
 
-After changing settings, restart: `sudo systemctl restart risk-manager`
-
----
-
-## Troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| DH-901 (token expired) | Should auto-fix on next restart. Manual: `python3 token_manager.py` |
-| DH-906 (market closed) | Normal outside 9:15 AM - 3:30 PM IST |
-| DH-905 (insufficient margin) | Check fund balance on Dhan |
-| Dashboard not loading | `sudo systemctl status risk-manager` to check |
-| Service won't start | Check logs: `tail -50 platform.log` |
-| Token auto-refresh failing | Verify DHAN_PIN and DHAN_TOTP_SECRET in .env |
+*After changing settings, restart the service to apply: `sudo systemctl restart risk-manager`*
+*Note: Mid-day updates to `MAX_DAILY_TRADES` are automatically synchronized on restart without resetting your active daily progress.*
 
 ---
 
-## Quick Status Check
+## Dynamic Trade Limit Extensions
 
+The platform allows you to dynamically extend your daily trade count limit by **+10** during the day if you are close to lockout or already locked out.
+
+*   **How to trigger**: Click the `+10 Trades` button on the main dashboard Win Rate card or on the chart-trading status bar.
+*   **What it does**: Increments your daily maximum trades limit by `10` (e.g., from `50` to `60`) in memory and automatically clears any active lockout caused by the trade limit rule, resuming trading instantly.
+
+---
+
+## Resetting Lockout States (Manual Override)
+
+If you get locked out (e.g., during testing, false alarms, or deliberate risk overrides), you can manually reset the lockout flags to active status using one of two methods:
+
+### Method A: Offline Reset (Recommended when the service is stopped)
+If the service is stopped, run this script to reset the lockout flags directly inside today's encrypted file on disk. This prevents the service from liquidating your positions on startup:
 ```bash
-# Platform status
-python3 main.py --status
+# 1. Stop the manager
+sudo systemctl stop risk-manager
 
-# Service status
+# 2. Reset lockout flag on disk
+./venv/bin/python reset_lockout.py
+
+# 3. Start the manager
+sudo systemctl start risk-manager
+```
+
+### Method B: Online Reset (While the service is running)
+If the service is running and you want to clear a lockout live on the fly, send a secure POST request to the administrative endpoint:
+```bash
+curl -X POST http://localhost:5555/api/admin/reset_lockout
+```
+
+---
+
+## How Profit Lock & Trailing Drawdown Calculate P&L
+
+All risk rules are calculated strictly using **Net Realized P&L** and **Net Total P&L** (after subtracting unique order execution charges of ₹20 per order). This ensures your triggers reflect your actual cash balance:
+
+$$\text{Net Realized P\&L} = \text{Gross Realized P\&L} - (\text{Unique Filled Orders} \times \text{Brokerage Fee})$$
+
+1.  **Profit Lock (Realized Protection)**:
+    *   Triggers when **Net Realized P&L** reaches `PROFIT_LOCK_THRESHOLD` (e.g. ₹3,000).
+    *   Locks in `PROFIT_LOCK_PERCENTAGE` of peak (e.g. at ₹3,000 peak, it locks in ₹1,500).
+    *   Ratchets up as peak net profit increases. Locks out trading if net realized P&L falls below this floor.
+2.  **Trailing Drawdown (Open Protection)**:
+    *   Triggers only *after* HWM reaches the profit lock threshold.
+    *   Drawdown measures how far your **Total Net P&L (realized + open unrealized - charges)** falls from your peak Net HWM.
+    *   Locks out trading *immediately while positions are still open* if you draw down more than the percentage allowance.
+
+---
+
+## Quick Status Diagnostics
+
+You can inspect the active risk management parameters, daily P&L balances, trailing drawdown levels, and lockout flags currently written to disk without starting the web server.
+
+Run the status utility:
+```bash
+./venv/bin/python main.py --status
+```
+
+Verify service daemon state:
+```bash
+# General status
 sudo systemctl status risk-manager
 
 # Is it running?
