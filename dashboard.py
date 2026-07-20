@@ -1559,8 +1559,8 @@ DASHBOARD_HTML = """
                 var dd = data.trailing_drawdown;
                 var hwm = dd.high_water_mark || 0;
                 var threshold = data.profit_lock.threshold || 3000;
-                var realized = data.pnl ? data.pnl.realized : 0;
-                var total = data.pnl ? data.pnl.total : 0;
+                var realized = data.pnl ? (data.pnl.net_realized !== undefined ? data.pnl.net_realized : data.pnl.realized) : 0;
+                var total = data.pnl ? (data.pnl.net_total !== undefined ? data.pnl.net_total : data.pnl.total) : 0;
                 var floor = dd.drawdown_limit > 0 ? hwm - dd.drawdown_limit : 0;
                 var gap = total - floor;
                 var active = hwm >= threshold;
