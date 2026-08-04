@@ -116,6 +116,10 @@ class PositionMonitor:
         try:
             logger.info("Priming trade cache on startup...")
             self._refresh_trade_cache("startup")
+            if self._trade_cache_loaded:
+                # Sync the state immediately on startup so the dashboard shows correct values after market hours
+                self.state.update_pnl(self._analyser_realized_pnl, self.state.unrealized_pnl)
+                logger.info("Startup state synchronized with trade cache realized P&L: ₹%.0f", self._analyser_realized_pnl)
         except Exception as e:
             logger.warning("Failed to prime trade cache on startup: %s", e)
 
