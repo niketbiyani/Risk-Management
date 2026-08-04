@@ -1323,7 +1323,7 @@ class PositionMonitor:
             
             limit = None
             if "NIFTY" in symbol:
-                limit = 195
+                limit = 325
             elif "SENSEX" in symbol:
                 limit = 80
                 
