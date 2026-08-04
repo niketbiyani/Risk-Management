@@ -4647,10 +4647,16 @@ def api_admin_reset_lockout():
         _monitor.state._state["is_locked_out"] = False
         _monitor.state._state["lockout_reason"] = ""
         _monitor.state._state["lockout_time"] = None
+        # Also reset active floors and HWM to prevent instant re-lockout
+        _monitor.state._state["high_water_mark"] = 0.0
+        _monitor.state._state["drawdown_active"] = False
+        _monitor.state._state["profit_lock_active"] = False
+        _monitor.state._state["profit_lock_floor"] = 0.0
+        _monitor.state._state["profit_lock_level"] = 0.0
         _monitor.state._save()
         _monitor._lockout_executed = False  # Reset monitor lockout flag
-        logger.warning("MANUAL LOCKOUT RESET: Lockout cleared via admin endpoint")
-        return jsonify({"status": "ok", "message": "Lockout cleared successfully."})
+        logger.warning("MANUAL LOCKOUT RESET: Lockout and HWM floors cleared via admin endpoint")
+        return jsonify({"status": "ok", "message": "Lockout and Profit Lock floors cleared successfully."})
     except Exception as e:
         logger.error("Lockout reset failed: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500

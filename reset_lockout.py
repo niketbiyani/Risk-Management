@@ -23,6 +23,12 @@ def main():
         state._state["is_locked_out"] = False
         state._state["lockout_reason"] = ""
         state._state["lockout_time"] = None
+        # Also reset active floors and HWM to prevent instant re-lockout on start
+        state._state["high_water_mark"] = 0.0
+        state._state["drawdown_active"] = False
+        state._state["profit_lock_active"] = False
+        state._state["profit_lock_floor"] = 0.0
+        state._state["profit_lock_level"] = 0.0
         state._save()
         
         logger.info("SUCCESS: Lockout state cleared successfully! (Previous reason: %s)", old_reason)
