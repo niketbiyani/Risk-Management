@@ -5227,7 +5227,7 @@ def api_get_ltp(security_id):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/order/candle_close_trigger", methods=["POST"])
+@app.route("/api/order/candle_close_trigger", methods=["POST"], strict_slashes=False)
 def api_candle_close_trigger():
     """Queue a single-leg order to trigger at candle close."""
     if not _monitor:
@@ -5275,7 +5275,7 @@ def api_candle_close_trigger():
 
 # ── Order Placement ────────────────────────────────────────────────
 
-@app.route("/api/order/place", methods=["POST"])
+@app.route("/api/order/place", methods=["POST"], strict_slashes=False)
 def api_place_order():
     """Place an order through the risk-checked interceptor."""
     if not _monitor:
