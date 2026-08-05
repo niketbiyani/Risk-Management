@@ -53,18 +53,29 @@ class InstrumentCache:
 
         logger.info("Downloading instrument data from Dhan...")
         start = time.time()
+        
+        urls = [
+            "https://images.dhan.co/api-data/api-scrip-master.csv",
+            "https://images.dhan.co/api-data/api-scrip-master-bse.csv"
+        ]
+        
+        rows = []
+        for url in urls:
+            try:
+                logger.info("Downloading from %s", url)
+                resp = requests.get(url, timeout=60)
+                resp.raise_for_status()
+                reader = csv.DictReader(io.StringIO(resp.text))
+                rows.extend(list(reader))
+            except Exception as e:
+                logger.error("Failed to download scrip master from %s: %s", url, e)
 
-        try:
-            resp = requests.get(SCRIP_MASTER_URL, timeout=60)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error("Failed to download scrip master: %s", e)
+        if not rows:
+            logger.error("No scrip data downloaded.")
             return 0
 
-        reader = csv.DictReader(io.StringIO(resp.text))
         instruments = []
-
-        for row in reader:
+        for row in rows:
             exchange = row.get("SEM_EXM_EXCH_ID", "")
             segment = row.get("SEM_SEGMENT", "")
             inst_type = row.get("SEM_INSTRUMENT_NAME", "")
