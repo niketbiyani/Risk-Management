@@ -336,7 +336,12 @@ class InstrumentCache:
             # Bonus: near-term expiry preferred
             if inst.expiry_date:
                 try:
-                    exp = datetime.strptime(inst.expiry_date, "%Y-%m-%d")
+                    # Try parsing with time first, then fallback to date-only
+                    try:
+                        exp = datetime.strptime(inst.expiry_date.strip(), "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        exp = datetime.strptime(inst.expiry_date.strip(), "%Y-%m-%d")
+                        
                     days_to_expiry = (exp - datetime.now()).days
                     if 0 <= days_to_expiry <= 7:
                         score += 20  # Current week
