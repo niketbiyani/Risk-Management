@@ -5390,6 +5390,19 @@ def api_place_order():
                     sl_price=sl_price,
                 )
                 logger.info("Auto-set SL at %.2f for %s", sl_price, security_id)
+                
+                # Queue native Stop Loss placement when this specific entry order fills
+                if order_id:
+                    tx_type = data.get("transaction_type", "BUY")
+                    _monitor._pending_sl_orders[order_id] = {
+                        "security_id": security_id,
+                        "exchange_segment": segment,
+                        "quantity": qty,
+                        "product_type": product_type,
+                        "direction": tx_type,
+                        "stop_loss": sl_price
+                    }
+                    logger.info("Queued automated native Stop Loss at %.2f for order %s", sl_price, order_id)
 
         if data.get("tp_price"):
             tp_price = float(data["tp_price"])
