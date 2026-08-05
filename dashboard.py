@@ -22,6 +22,19 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = "risk-mgmt-dashboard"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
+@app.before_request
+def handle_options_preflight():
+    if request.method == "OPTIONS":
+        response = app.make_default_options_response()
+        return response
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
+
 # Reference to monitor instance and instrument cache (set at startup)
 _monitor = None
 _instrument_cache = None
