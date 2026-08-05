@@ -5214,6 +5214,52 @@ def api_get_ltp(security_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/order/candle_close_trigger", methods=["POST"])
+def api_candle_close_trigger():
+    """Queue a single-leg order to trigger at candle close."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "Monitor not ready"}), 503
+    data = request.json or {}
+
+    security_id = data.get("security_id", "")
+    if not security_id:
+        return jsonify({"status": "error", "message": "No security_id"}), 400
+
+    quantity = int(data.get("quantity", 0))
+    if quantity <= 0:
+        return jsonify({"status": "error", "message": "Quantity must be > 0"}), 400
+
+    timeframe = int(data.get("timeframe", 60))
+    if timeframe not in (15, 60, 300):
+        return jsonify({"status": "error", "message": "Unsupported timeframe (only 15s, 1m, 5m allowed)"}), 400
+
+    buffer = float(data.get("buffer", 0.0))
+    direction = data.get("direction", "SELL").upper()
+    product_type = data.get("product_type", "MARGIN")
+    exseg = data.get("exchange_segment", "NSE_FNO")
+    stop_loss = float(data.get("stop_loss", 0.0))
+
+    try:
+        trigger_id = _monitor.queue_candle_close_trigger(
+            security_id=security_id,
+            direction=direction,
+            quantity=quantity,
+            buffer=buffer,
+            timeframe=timeframe,
+            product_type=product_type,
+            exchange_segment=exseg,
+            stop_loss=stop_loss,
+        )
+        return jsonify({
+            "status": "success",
+            "message": f"Candle-close trigger queued successfully for {security_id}",
+            "trigger_id": trigger_id
+        })
+    except Exception as e:
+        logger.error("Failed to queue candle close trigger: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 # ── Order Placement ────────────────────────────────────────────────
 
 @app.route("/api/order/place", methods=["POST"])

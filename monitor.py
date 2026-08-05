@@ -73,6 +73,12 @@ class PositionMonitor:
         self._extra_instruments: list = []   # OC / UI-requested instruments, preserved across position changes
         self._sl_tp_executing: set = set()
 
+        # Candle-Close Order Placement state
+        self._candle_close_triggers = {}
+        self._pending_sl_orders = {}
+        self._trigger_thread_running = False
+        self._trigger_thread = None
+
     def start(self):
         """Start the monitoring loop."""
         errors = Config.validate()
@@ -97,6 +103,12 @@ class PositionMonitor:
         logger.info("=" * 60)
 
         self._running = True
+
+        # Start high-frequency trigger polling thread
+        self._trigger_thread_running = True
+        self._trigger_thread = threading.Thread(target=self._run_trigger_loop, name="CandleCloseTriggerThread")
+        self._trigger_thread.daemon = True
+        self._trigger_thread.start()
 
         # Start WebSocket feeds (non-blocking daemon threads)
         self._start_market_feed()
@@ -518,6 +530,36 @@ class PositionMonitor:
                     })
             except Exception:
                 pass
+
+            # If there's an automated Stop Loss queued for this order, place it now
+            if status == "TRADED" and hasattr(self, "_pending_sl_orders") and order_id in self._pending_sl_orders:
+                sl_info = self._pending_sl_orders.pop(order_id)
+                logger.info("Main order %s filled. Placing Stop Loss at %.2f for %s...",
+                            order_id, sl_info["stop_loss"], sl_info["security_id"])
+                
+                # Since the entry order was SELL, the Stop Loss order must be a BUY order!
+                sl_tx_type = "BUY" if sl_info["direction"] == "SELL" else "SELL"
+                
+                # Place stop-loss order
+                try:
+                    # Calculate stop loss limit price with buffer to prevent execution slippage
+                    sl_val = sl_info["stop_loss"]
+                    sl_buffer = round(max(0.50, sl_val * 0.01) * 20) / 20
+                    sl_limit = sl_val + sl_buffer if sl_tx_type == "BUY" else max(0.05, sl_val - sl_buffer)
+                    
+                    self.api.place_order(
+                        security_id=sl_info["security_id"],
+                        exchange_segment=sl_info["exchange_segment"],
+                        transaction_type=sl_tx_type,
+                        quantity=sl_info["quantity"],
+                        order_type="STOP_LOSS_LIMIT",
+                        product_type=sl_info["product_type"],
+                        price=sl_limit,
+                        trigger_price=sl_val
+                    )
+                    logger.info("Automated Stop Loss placed successfully at %.2f for %s", sl_val, sl_info["security_id"])
+                except Exception as sl_ex:
+                    logger.error("Failed to place automated Stop Loss for %s: %s", sl_info["security_id"], sl_ex)
 
             # Refresh trade cache on fill so realized + open trades update immediately
             if status in ("TRADED", "PART_TRADED", "TRANSIT"):
@@ -1217,6 +1259,7 @@ class PositionMonitor:
         """Graceful shutdown."""
         logger.info("Shutting down monitor...")
         self._running = False
+        self._trigger_thread_running = False
 
     def _get_pending_orders(self) -> list[dict]:
         """Filter order book for pending/transit orders."""
@@ -1402,6 +1445,115 @@ class PositionMonitor:
                 # Clear state violation
                 del self._lot_violation_start[sid]
                 self.state.set(f"lot_warn_{sid}", None)
+
+    def queue_candle_close_trigger(self, security_id, direction, quantity, buffer, timeframe, product_type, exchange_segment, stop_loss):
+        """Queue an order to fire at the next candle rollover."""
+        import uuid
+        trigger_id = str(uuid.uuid4())
+        
+        now = time.time()
+        # Find next rollover boundary
+        rollover_time = (int(now) // timeframe + 1) * timeframe
+        
+        with self._lock:
+            self._candle_close_triggers[trigger_id] = {
+                "security_id": security_id,
+                "direction": direction,
+                "quantity": quantity,
+                "buffer": buffer,
+                "timeframe": timeframe,
+                "product_type": product_type,
+                "exchange_segment": exchange_segment,
+                "stop_loss": stop_loss,
+                "rollover_time": rollover_time,
+                "created_at": now
+            }
+        logger.info("Queued candle-close trigger %s for %s (rollover in %.1f seconds)",
+                    trigger_id, security_id, rollover_time - now)
+        return trigger_id
+
+    def _run_trigger_loop(self):
+        """High-frequency polling loop for candle-close triggers."""
+        logger.info("Starting high-frequency candle close trigger loop...")
+        while self._trigger_thread_running:
+            try:
+                now = time.time()
+                fired = []
+                with self._lock:
+                    for tid, trig in list(self._candle_close_triggers.items()):
+                        if now >= trig["rollover_time"]:
+                            fired.append((tid, trig))
+                
+                for tid, trig in fired:
+                    with self._lock:
+                        if tid in self._candle_close_triggers:
+                            del self._candle_close_triggers[tid]
+                    self._execute_candle_close_order(trig)
+            except Exception as e:
+                logger.error("Error in candle close trigger loop: %s", e)
+            
+            time.sleep(0.05)  # 50ms polling resolution
+
+    def _execute_candle_close_order(self, trig):
+        """Execute the order at the candle close boundary."""
+        security_id = trig["security_id"]
+        direction = trig["direction"]
+        quantity = trig["quantity"]
+        buffer = trig["buffer"]
+        product_type = trig["product_type"]
+        exseg = trig["exchange_segment"]
+        stop_loss = trig["stop_loss"]
+
+        # Fetch latest LTP from cache
+        ltp = self._ltp_cache.get(security_id, 0.0)
+        if ltp <= 0.0:
+            try:
+                ltp = self.api.get_ltp(security_id)
+            except Exception as e:
+                logger.error("Failed to get LTP for candle-close execution %s: %s", security_id, e)
+                return
+
+        # Calculate limit price with buffer and round to nearest 0.05 tick size
+        limit_price = ltp + buffer
+        limit_price = round(limit_price * 20) / 20
+
+        logger.info("Executing candle-close order for %s: Close=%.2f, Buffer=%.2f, LimitPrice=%.2f",
+                    security_id, ltp, buffer, limit_price)
+
+        try:
+            # Place order through interceptor (runs pre-trade risk checks!)
+            res = self.interceptor.place_order(
+                security_id=security_id,
+                exchange_segment=exseg,
+                transaction_type=direction,
+                quantity=quantity,
+                order_type="LIMIT",
+                product_type=product_type,
+                price=limit_price,
+                trigger_price=0.0
+            )
+
+            order_id = ""
+            if res.get("status") == "success" and "data" in res:
+                order_id = str(res["data"].get("orderId", ""))
+
+            if order_id:
+                logger.info("Candle-close order placed successfully. Order ID: %s", order_id)
+                # If stop_loss trigger price is specified, queue it to place when the order fills
+                if stop_loss > 0.0:
+                    self._pending_sl_orders[order_id] = {
+                        "security_id": security_id,
+                        "exchange_segment": exseg,
+                        "quantity": quantity,
+                        "product_type": product_type,
+                        "direction": direction,
+                        "stop_loss": stop_loss
+                    }
+                    logger.info("Queued automated Stop Loss at %.2f for order %s", stop_loss, order_id)
+            else:
+                logger.error("Candle-close order was rejected/blocked by Risk Interceptor: %s", res)
+        except Exception as ex:
+            logger.error("Error executing candle-close order: %s", ex)
 
 
 def run_monitor():
