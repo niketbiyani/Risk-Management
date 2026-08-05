@@ -105,10 +105,18 @@ class PositionMonitor:
         # Backfill journal entries from today's order book (catches trades placed
         # via Dhan directly, or when monitor was not running)
         try:
-            orders = self.api.get_order_book()
+            orders = self.api.get_order_book() or []
             if orders:
                 logger.info("Startup journal backfill: checking %d orders...", len(orders))
                 self._auto_journal_orders(orders)
+                
+                # Sync total executions count on startup so the trades card is accurate on boot
+                filled_order_ids = {
+                    str(o["orderId"]) for o in orders 
+                    if o.get("orderStatus") in ("TRADED", "PARTIALLY_TRADED") and "orderId" in o
+                }
+                self.state.set("total_executions", len(filled_order_ids))
+                logger.info("Startup state synchronized with trade executions count: %d", len(filled_order_ids))
         except Exception as e:
             logger.warning("Startup journal backfill failed: %s", e)
 
