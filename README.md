@@ -451,3 +451,25 @@ sudo htpasswd /etc/nginx/.htpasswd trader
     ```
   * Restart the service. The system will automatically fetch a fresh token on startup and renew it every 12 hours.
 
+### 4. Managing Auto-Restarts and Daily Maintenance
+The VPS has a systemd timer setup to automatically restart the risk manager at 8:45 AM IST every morning to refresh API tokens. 
+
+* **To stop auto-restarting completely** (e.g., over weekends or holiday periods):
+  ```bash
+  # Stop and disable the daily 8:45 AM IST restart timer
+  sudo systemctl stop risk-manager-restart.timer
+  sudo systemctl disable risk-manager-restart.timer
+  
+  # Disable the main risk-manager from starting on server boot
+  sudo systemctl disable risk-manager
+  ```
+* **To turn auto-restarts back on**:
+  ```bash
+  # Re-enable and start the daily restart timer and boot-service
+  sudo systemctl enable --now risk-manager-restart.timer risk-manager
+  ```
+* **To check timer status**:
+  ```bash
+  sudo systemctl status risk-manager-restart.timer
+  ```
+

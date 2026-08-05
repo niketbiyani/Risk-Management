@@ -481,6 +481,7 @@ DASHBOARD_HTML = """
             <a href="/journal" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Open Trade Journal">&#x1F4D3; Journal</a>
             <a href="/analytics" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Analytics">&#x1F4CA; Analytics</a>
             <a href="/straddle" target="_blank" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;color:#8b949e;text-decoration:none;cursor:pointer;" title="Strangle Chart">&#x1F4C8; Strangle</a>
+            <button onclick="openAdminModal()" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #30363d;background:none;color:#8b949e;cursor:pointer;font-family:inherit;" title="VPS Admin Commands">&#x2699;&#xfe0f; VPS Admin</button>
             <!-- Broker Toggle Switch -->
             <div class="broker-toggle" style="display:flex;align-items:center;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:2px;gap:2px;">
                 <button id="broker-dhan" onclick="toggleBroker('DHAN')" style="background:#21262d;border:none;color:#c9d1d9;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;transition:all 0.2s;">Dhan</button>
@@ -4262,7 +4263,101 @@ DASHBOARD_HTML = """
         };
         // If socket is already connected, set up now
         if (socket) setupDepthListener();
+
+        // VPS Admin Modal Helpers
+        function openAdminModal() {
+            document.getElementById('vps-admin-modal').style.display = 'flex';
+        }
+        function closeAdminModal() {
+            document.getElementById('vps-admin-modal').style.display = 'none';
+        }
+        function copyText(text, btn) {
+            navigator.clipboard.writeText(text).then(function() {
+                var oldText = btn.textContent;
+                btn.textContent = 'Copied!';
+                btn.style.borderColor = '#238636';
+                btn.style.color = '#3fb950';
+                setTimeout(function() {
+                    btn.textContent = oldText;
+                    btn.style.borderColor = '';
+                    btn.style.color = '';
+                }, 1500);
+            }).catch(function(err) {
+                console.error('Could not copy text: ', err);
+            });
+        }
     </script>
+
+    <!-- VPS Admin Commands Modal -->
+    <div id="vps-admin-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:99999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+        <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;width:90%;max-width:600px;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-family:sans-serif;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;border-bottom:1px solid #30363d;padding-bottom:12px;">
+                <h3 style="margin:0;color:#c9d1d9;font-size:16px;display:flex;align-items:center;gap:8px;">⚙️ VPS Admin Shortcuts</h3>
+                <button onclick="closeAdminModal()" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:20px;font-weight:700;">&times;</button>
+            </div>
+            <p style="color:#8b949e;font-size:12px;margin-top:0;margin-bottom:16px;">Click on any command block to copy it to your clipboard. Run these inside your VPS terminal.</p>
+            <div style="display:flex;flex-direction:column;gap:14px;max-height:400px;overflow-y:auto;padding-right:4px;">
+                
+                <!-- Command 1 -->
+                <div>
+                    <label style="display:block;color:#58a6ff;font-size:11px;font-weight:600;margin-bottom:4px;text-transform:uppercase;">🔓 Reset Lockout & Profit Lock Floors (Online)</label>
+                    <div style="display:flex;gap:8px;">
+                        <code style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#8b949e;word-break:break-all;display:block;">curl -X POST http://localhost:5555/api/admin/reset_lockout</code>
+                        <button class="btn-neutral btn-sm" onclick="copyText('curl -X POST http://localhost:5555/api/admin/reset_lockout', this)" style="font-size:11px;">Copy</button>
+                    </div>
+                </div>
+
+                <!-- Command 2 -->
+                <div>
+                    <label style="display:block;color:#58a6ff;font-size:11px;font-weight:600;margin-bottom:4px;text-transform:uppercase;">🔄 Reset Peak HWM Only (Online)</label>
+                    <div style="display:flex;gap:8px;">
+                        <code style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#8b949e;word-break:break-all;display:block;">curl -X POST http://localhost:5555/api/admin/reset_hwm</code>
+                        <button class="btn-neutral btn-sm" onclick="copyText('curl -X POST http://localhost:5555/api/admin/reset_hwm', this)" style="font-size:11px;">Copy</button>
+                    </div>
+                </div>
+
+                <!-- Command 3 -->
+                <div>
+                    <label style="display:block;color:#f85149;font-size:11px;font-weight:600;margin-bottom:4px;text-transform:uppercase;">🛑 Disable Daily Auto-Restarts</label>
+                    <div style="display:flex;gap:8px;">
+                        <code style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#8b949e;word-break:break-all;display:block;">sudo systemctl stop risk-manager-restart.timer && sudo systemctl disable risk-manager-restart.timer && sudo systemctl disable risk-manager</code>
+                        <button class="btn-neutral btn-sm" onclick="copyText('sudo systemctl stop risk-manager-restart.timer && sudo systemctl disable risk-manager-restart.timer && sudo systemctl disable risk-manager', this)" style="font-size:11px;">Copy</button>
+                    </div>
+                </div>
+
+                <!-- Command 4 -->
+                <div>
+                    <label style="display:block;color:#3fb950;font-size:11px;font-weight:600;margin-bottom:4px;text-transform:uppercase;">🟢 Enable Daily Auto-Restarts</label>
+                    <div style="display:flex;gap:8px;">
+                        <code style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#8b949e;word-break:break-all;display:block;">sudo systemctl enable --now risk-manager-restart.timer risk-manager</code>
+                        <button class="btn-neutral btn-sm" onclick="copyText('sudo systemctl enable --now risk-manager-restart.timer risk-manager', this)" style="font-size:11px;">Copy</button>
+                    </div>
+                </div>
+
+                <!-- Command 5 -->
+                <div>
+                    <label style="display:block;color:#d29922;font-size:11px;font-weight:600;margin-bottom:4px;text-transform:uppercase;">📊 View Live Status Diagnostics</label>
+                    <div style="display:flex;gap:8px;">
+                        <code style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#8b949e;word-break:break-all;display:block;">cd ~/Risk-Management && ./venv/bin/python main.py --status</code>
+                        <button class="btn-neutral btn-sm" onclick="copyText('cd ~/Risk-Management && ./venv/bin/python main.py --status', this)" style="font-size:11px;">Copy</button>
+                    </div>
+                </div>
+
+                <!-- Command 6 -->
+                <div>
+                    <label style="display:block;color:#8b949e;font-size:11px;font-weight:600;margin-bottom:4px;text-transform:uppercase;">🛠️ Reset Lockout Offline (When Service is Down)</label>
+                    <div style="display:flex;gap:8px;">
+                        <code style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#8b949e;word-break:break-all;display:block;">cd ~/Risk-Management && ./venv/bin/python reset_lockout.py</code>
+                        <button class="btn-neutral btn-sm" onclick="copyText('cd ~/Risk-Management && ./venv/bin/python reset_lockout.py', this)" style="font-size:11px;">Copy</button>
+                    </div>
+                </div>
+
+            </div>
+            <div style="display:flex;justify-content:flex-end;margin-top:16px;border-top:1px solid #30363d;padding-top:12px;">
+                <button class="btn-neutral" onclick="closeAdminModal()">Close</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Lot Size Warning Overlay Modal -->
     <div id="lot-warn-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:99999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
