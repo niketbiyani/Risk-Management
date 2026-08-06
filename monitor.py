@@ -1423,16 +1423,18 @@ class PositionMonitor:
                     "net_qty_raw": pos["netQty"]
                 }
                 
-        # Clear resolved violations
-        resolved = []
-        for sid in list(self._lot_violation_start.keys()):
-            if sid not in current_violations:
-                resolved.append(sid)
+        # Clear resolved violations (including orphaned ones in the database)
+        resolved = set(self._lot_violation_start.keys())
+        for k in self.state.get_all().keys():
+            if k.startswith("lot_warn_") and self.state.get(k) is not None:
+                resolved.add(k.replace("lot_warn_", ""))
                 
         for sid in resolved:
-            del self._lot_violation_start[sid]
-            self.state.set(f"lot_warn_{sid}", None)
-            logger.info("Lot size violation resolved for security ID %s", sid)
+            if sid not in current_violations:
+                if sid in self._lot_violation_start:
+                    del self._lot_violation_start[sid]
+                self.state.set(f"lot_warn_{sid}", None)
+                logger.info("Lot size violation resolved for security ID %s", sid)
             
         # Process active violations
         for sid, viol in current_violations.items():
