@@ -79,6 +79,8 @@ class PositionMonitor:
         self._pending_sl_orders = {}
         self._trigger_thread_running = False
         self._trigger_thread = None
+        self._live_candles = {}               # (security_id, timeframe) -> { "open", "high", "low", "close", "candle_start" }
+        self._closed_candles = {}             # (security_id, timeframe) -> { "high", "low", "close" }
 
     def start(self):
         """Start the monitoring loop."""
@@ -487,8 +489,44 @@ class PositionMonitor:
             if not security_id or ltp <= 0:
                 return
 
+            now = time.time()
             # Cache LTP for our own unrealized calculation
             self._ltp_cache[security_id] = ltp
+
+            # Track live candle High/Low dynamically from the tick stream
+            for tf in (5, 15, 60, 300):
+                candle_start = (int(now) // tf) * tf
+                key = (security_id, tf)
+                with self._lock:
+                    if key not in self._live_candles:
+                        self._live_candles[key] = {
+                            "open": ltp,
+                            "high": ltp,
+                            "low": ltp,
+                            "close": ltp,
+                            "candle_start": candle_start
+                        }
+                    else:
+                        candle = self._live_candles[key]
+                        if candle_start > candle["candle_start"]:
+                            # Save the completed candle
+                            self._closed_candles[key] = {
+                                "high": candle["high"],
+                                "low": candle["low"],
+                                "close": candle["close"]
+                            }
+                            # Start new candle
+                            self._live_candles[key] = {
+                                "open": ltp,
+                                "high": ltp,
+                                "low": ltp,
+                                "close": ltp,
+                                "candle_start": candle_start
+                            }
+                        else:
+                            candle["high"] = max(candle["high"], ltp)
+                            candle["low"] = min(candle["low"], ltp)
+                            candle["close"] = ltp
 
             # Push LTP to option chain UI
             try:
@@ -1479,6 +1517,33 @@ class PositionMonitor:
                 del self._lot_violation_start[sid]
                 self.state.set(f"lot_warn_{sid}", None)
 
+    def _add_extra_instrument_for_trigger(self, security_id, exchange_segment):
+        """Add the instrument to extra subscriptions so the WebSocket starts streaming ticks for it."""
+        seg_map = {
+            "IDX_I": 0,
+            "NSE_EQ": 1,
+            "NSE_FNO": 2,
+            "NSE_CURR": 3,
+            "BSE_EQ": 4,
+            "MCX": 5,
+            "BSE_CURR": 7,
+            "BSE_FNO": 8,
+        }
+        seg_int = seg_map.get(exchange_segment, 2)
+        inst = (seg_int, security_id, 15)
+        
+        with self._lock:
+            if inst not in self._extra_instruments:
+                self._extra_instruments.append(inst)
+                logger.info("Added extra instrument subscription for trigger: %s", inst)
+                
+        # Trigger an immediate feed refresh
+        try:
+            positions = self.api.get_positions()
+            self._refresh_market_feed(positions)
+        except Exception as e:
+            logger.error("Failed to refresh feed after adding trigger instrument: %s", e)
+
     def queue_candle_close_trigger(self, security_id, direction, quantity, buffer, timeframe, product_type, exchange_segment, stop_loss):
         """Queue an order to fire at the next candle rollover."""
         import uuid
@@ -1501,6 +1566,10 @@ class PositionMonitor:
                 "rollover_time": rollover_time,
                 "created_at": now
             }
+        
+        # Ensure the VPS is actively streaming ticks for this instrument
+        self._add_extra_instrument_for_trigger(security_id, exchange_segment)
+        
         logger.info("Queued candle-close trigger %s for %s (rollover in %.1f seconds)",
                     trigger_id, security_id, rollover_time - now)
         return trigger_id
@@ -1527,6 +1596,32 @@ class PositionMonitor:
             
             time.sleep(0.05)  # 50ms polling resolution
 
+    def get_last_completed_candle(self, security_id, timeframe):
+        """
+        Return the OHLC bounds of the last completed candle.
+        Checks both live candle (if elapsed) and closed cache.
+        """
+        key = (security_id, timeframe)
+        now = time.time()
+        
+        with self._lock:
+            # Check if current live candle's starting time is in the past
+            if key in self._live_candles:
+                candle = self._live_candles[key]
+                current_start = (int(now) // timeframe) * timeframe
+                if current_start > candle["candle_start"]:
+                    return {
+                        "high": candle["high"],
+                        "low": candle["low"],
+                        "close": candle["close"]
+                    }
+            
+            # Return from closed cache if available
+            if key in self._closed_candles:
+                return self._closed_candles[key]
+                
+        return None
+
     def _execute_candle_close_order(self, trig):
         """Execute the order at the candle close boundary."""
         security_id = trig["security_id"]
@@ -1536,6 +1631,7 @@ class PositionMonitor:
         product_type = trig["product_type"]
         exseg = trig["exchange_segment"]
         stop_loss = trig["stop_loss"]
+        timeframe = trig.get("timeframe", 60)
 
         # Fetch latest LTP from cache
         ltp = self._ltp_cache.get(security_id, 0.0)
@@ -1546,8 +1642,35 @@ class PositionMonitor:
                 logger.error("Failed to get LTP for candle-close execution %s: %s", security_id, e)
                 return
 
-        # Calculate limit price with buffer and round to nearest 0.05 tick size
-        limit_price = ltp + buffer
+        # Fetch candle high/low bounds
+        candle = self.get_last_completed_candle(security_id, timeframe)
+        if candle:
+            high = candle["high"]
+            low = candle["low"]
+            close = candle["close"]
+            logger.info("Found completed %ds candle for %s: High=%.2f, Low=%.2f, Close=%.2f",
+                        timeframe, security_id, high, low, close)
+        else:
+            high = ltp
+            low = ltp
+            close = ltp
+            logger.warning("No completed candle bounds in cache for %s (%ds). Falling back to LTP=%.2f",
+                           security_id, timeframe, ltp)
+
+        # Calculate entry level: Low - 1 for SELL, High + 1 for BUY
+        # Then apply slippage buffer limit (buffer is negative for SELL e.g. -2.00)
+        if direction.upper() == "SELL":
+            entry_level = low - 1.00
+            limit_price = entry_level + buffer
+            logger.info("SELL Entry Ref: Low (%.2f) - 1.00 = %.2f. Limit Price with Buffer (%.2f) = %.2f",
+                        low, entry_level, buffer, limit_price)
+        else:
+            entry_level = high + 1.00
+            limit_price = entry_level + buffer
+            logger.info("BUY Entry Ref: High (%.2f) + 1.00 = %.2f. Limit Price with Buffer (%.2f) = %.2f",
+                        high, entry_level, buffer, limit_price)
+
+        # Round limit price to nearest 0.05 tick size
         limit_price = round(limit_price * 20) / 20
 
         logger.info("Executing candle-close order for %s: Close=%.2f, Buffer=%.2f, LimitPrice=%.2f",

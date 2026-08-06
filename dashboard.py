@@ -5243,8 +5243,8 @@ def api_candle_close_trigger():
         return jsonify({"status": "error", "message": "Quantity must be > 0"}), 400
 
     timeframe = int(data.get("timeframe", 60))
-    if timeframe not in (15, 60, 300):
-        return jsonify({"status": "error", "message": "Unsupported timeframe (only 15s, 1m, 5m allowed)"}), 400
+    if timeframe not in (5, 15, 60, 300):
+        return jsonify({"status": "error", "message": "Unsupported timeframe (only 5s, 15s, 1m, 5m allowed)"}), 400
 
     buffer = float(data.get("buffer", 0.0))
     direction = data.get("direction", "SELL").upper()
