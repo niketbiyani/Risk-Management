@@ -123,13 +123,36 @@ class PositionMonitor:
                 logger.info("Startup journal backfill: checking %d orders...", len(orders))
                 self._auto_journal_orders(orders)
                 
-                # Sync total trades count on startup so the trades card is accurate on boot
-                filled_order_ids = {
-                    str(o["orderId"]) for o in orders 
-                    if o.get("orderStatus") in ("TRADED", "PARTIALLY_TRADED") and "orderId" in o
-                }
+                # Sync total trades count on startup (filtered by today's date in IST)
+                from datetime import timezone as _tz, timedelta as _td
+                ist = _tz(_td(hours=5, minutes=30))
+                today_ist_str = datetime.now(ist).strftime("%Y-%m-%d")
+
+                filled_order_ids = set()
+                for o in orders:
+                    if o.get("orderStatus") in ("TRADED", "PARTIALLY_TRADED") and "orderId" in o:
+                        t = o.get("createTime") or o.get("updateTime") or o.get("exchangeTime") or ""
+                        order_date = ""
+                        if t:
+                            t = t.strip()
+                            if len(t) >= 10 and t[4] == '-' and t[7] == '-':
+                                order_date = t[:10]
+                            else:
+                                for fmt in ("%Y-%m-%d %H:%M:%S", "%d %b %Y %H:%M:%S",
+                                            "%d-%b-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S",
+                                            "%Y-%m-%dT%H:%M:%S"):
+                                    try:
+                                        dt = datetime.strptime(t, fmt)
+                                        order_date = dt.strftime("%Y-%m-%d")
+                                        break
+                                    except ValueError:
+                                        pass
+                        # Only count if the order date matches today, or we couldn't parse the date
+                        if order_date == today_ist_str or not order_date:
+                            filled_order_ids.add(str(o["orderId"]))
+
                 self.state.set("total_trades", len(filled_order_ids))
-                logger.info("Startup state synchronized with trade count: %d", len(filled_order_ids))
+                logger.info("Startup state synchronized with today's trade count: %d", len(filled_order_ids))
         except Exception as e:
             logger.warning("Startup journal backfill failed: %s", e)
 
