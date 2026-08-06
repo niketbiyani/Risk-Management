@@ -1388,7 +1388,7 @@ class PositionMonitor:
             if "NIFTY" in symbol:
                 limit = 325
             elif "SENSEX" in symbol:
-                limit = 120
+                limit = 400
                 
             if limit and qty > limit:
                 current_violations[sid] = {
