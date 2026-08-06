@@ -52,6 +52,7 @@ class PositionMonitor:
         self._last_trade_count = 0
         self._prev_realized_pnl = 0.0
         self._lockout_executed = False
+        self._last_state_date = self.state.get("date")
         self._analyser_realized_pnl: float = 0.0   # sum of closed trade P&L from analyser
         self._analyser_open_trades: list = []       # open trades with entry prices from analyser
         self._trade_cache_loaded = False            # flag indicating trade cache has loaded successfully
@@ -122,13 +123,13 @@ class PositionMonitor:
                 logger.info("Startup journal backfill: checking %d orders...", len(orders))
                 self._auto_journal_orders(orders)
                 
-                # Sync total executions count on startup so the trades card is accurate on boot
+                # Sync total trades count on startup so the trades card is accurate on boot
                 filled_order_ids = {
                     str(o["orderId"]) for o in orders 
                     if o.get("orderStatus") in ("TRADED", "PARTIALLY_TRADED") and "orderId" in o
                 }
-                self.state.set("total_executions", len(filled_order_ids))
-                logger.info("Startup state synchronized with trade executions count: %d", len(filled_order_ids))
+                self.state.set("total_trades", len(filled_order_ids))
+                logger.info("Startup state synchronized with trade count: %d", len(filled_order_ids))
         except Exception as e:
             logger.warning("Startup journal backfill failed: %s", e)
 
@@ -195,6 +196,13 @@ class PositionMonitor:
     def _tick(self):
         """Single monitoring cycle."""
         with self._lock:
+            # Check for date crossover to reset in-memory lockout flags
+            current_date = self.state.get("date")
+            if current_date != self._last_state_date:
+                logger.info("New day detected (%s vs %s): resetting in-memory monitor lockout flag", current_date, self._last_state_date)
+                self._lockout_executed = False
+                self._last_state_date = current_date
+
             # If already locked out and positions closed, just update final P&L/positions in state and return
             if self.state.is_locked_out and self._lockout_executed:
                 try:

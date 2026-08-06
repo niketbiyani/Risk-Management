@@ -172,7 +172,7 @@ class StateManager:
     def get(self, key: str, default: Any = None) -> Any:
         self._check_date_and_reset()
         if key == "total_trades":
-            return self._state.get("total_executions", 0)
+            return self._state.get("total_trades", 0)
         elif key == "winning_trades":
             try:
                 today_ist = self._today_ist()
