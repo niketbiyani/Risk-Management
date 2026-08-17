@@ -1447,9 +1447,9 @@ class PositionMonitor:
             
             limit = None
             if "NIFTY" in symbol:
-                limit = 325
+                limit = Config.MAX_NIFTY_QUANTITY
             elif "SENSEX" in symbol:
-                limit = 400
+                limit = Config.MAX_SENSEX_QUANTITY
                 
             if limit and qty > limit:
                 current_violations[sid] = {
