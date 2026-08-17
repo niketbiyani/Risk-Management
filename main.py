@@ -220,7 +220,29 @@ def main():
 
     if args.status:
         print_status()
-    elif args.monitor:
+        return
+
+    # Intercept termination signals during live market hours to prevent emotional overrides
+    import signal
+    def handle_exit_signals(signum, frame):
+        from datetime import datetime, timezone, timedelta
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist_tz)
+        is_trading_day = now_ist.weekday() < 5
+        start_time = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+        end_time = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+        
+        if is_trading_day and start_time <= now_ist <= end_time:
+            logger.warning("CRITICAL PROTECTION: Attempted to terminate Risk Manager during live trading hours (%s IST)! Signal ignored to enforce risk policy.", now_ist.strftime("%H:%M:%S"))
+            return
+            
+        logger.info("Signal %d received outside trading hours. Shutting down...", signum)
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, handle_exit_signals)
+    signal.signal(signal.SIGTERM, handle_exit_signals)
+
+    if args.monitor:
         from monitor import run_monitor
         run_monitor()
     elif args.dashboard:
