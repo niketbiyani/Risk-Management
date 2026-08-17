@@ -4667,26 +4667,11 @@ def index():
     return resp
 
 
-def is_trading_hours() -> bool:
-    """Check if the current time is within Indian Stock Market trading hours (9:15 AM - 3:30 PM IST, Mon-Fri)."""
-    from datetime import datetime, timezone, timedelta
-    ist_tz = timezone(timedelta(hours=5, minutes=30))
-    now_ist = datetime.now(ist_tz)
-    if now_ist.weekday() >= 5:  # 5=Sat, 6=Sun
-        return False
-    start_time = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
-    end_time = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
-    return start_time <= now_ist <= end_time
-
-
 @app.route("/api/admin/unlock", methods=["POST"])
 def api_admin_unlock():
     """Force-reset the daily state for a new trading day. Use when state is stale from prior day."""
     if not _monitor:
         return jsonify({"status": "error", "message": "monitor not ready"}), 503
-    if is_trading_hours():
-        logger.warning("BLOCKED MANUAL UNLOCK: Attempted to unlock platform during trading hours (9:15 AM - 3:30 PM IST).")
-        return jsonify({"status": "error", "message": "ADMIN OVERRIDE LOCKED: Daily state cannot be force-reset during live trading hours (09:15 - 15:30 IST)."}), 403
     try:
         _monitor.state._reset_state()
         _monitor._lockout_executed = False
@@ -4715,10 +4700,6 @@ def api_admin_kill_switch():
         return jsonify({"status": "error", "message": "monitor not ready"}), 503
     data = request.get_json(silent=True) or {}
     action = data.get("action", "deactivate").lower()
-    if action == "deactivate" and is_trading_hours():
-        if _monitor.state._state.get("is_locked_out", False):
-            logger.warning("BLOCKED KILL SWITCH DEACTIVATION: Attempted to deactivate kill switch while locked out during trading hours.")
-            return jsonify({"status": "error", "message": "ADMIN OVERRIDE LOCKED: Kill switch cannot be deactivated while locked out during live trading hours (09:15 - 15:30 IST)."}), 403
     try:
         if action == "activate":
             result = _monitor.api.activate_kill_switch()
@@ -4770,9 +4751,6 @@ def api_admin_reset_lockout():
     """Manually clear today's lockout state via admin endpoint."""
     if not _monitor:
         return jsonify({"status": "error", "message": "monitor not ready"}), 503
-    if is_trading_hours():
-        logger.warning("BLOCKED LOCKOUT RESET: Attempted to reset lockout during trading hours (9:15 AM - 3:30 PM IST).")
-        return jsonify({"status": "error", "message": "ADMIN OVERRIDE LOCKED: Lockouts cannot be reset during live trading hours (09:15 - 15:30 IST)."}), 403
     try:
         _monitor.state._state["is_locked_out"] = False
         _monitor.state._state["lockout_reason"] = ""
