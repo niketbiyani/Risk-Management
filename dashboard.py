@@ -4769,6 +4769,30 @@ def api_admin_reset_lockout():
         logger.error("Lockout reset failed: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route("/api/admin/reload_config", methods=["POST"])
+def api_admin_reload_config():
+    """Reload config from .env dynamically in memory."""
+    if not _monitor:
+        return jsonify({"status": "error", "message": "monitor not ready"}), 503
+    try:
+        from dotenv import load_dotenv
+        import os
+        load_dotenv(override=True)
+        Config.DAILY_MAX_LOSS = float(os.getenv("DAILY_MAX_LOSS", "7000"))
+        Config.DAILY_PROFIT_TARGET = float(os.getenv("DAILY_PROFIT_TARGET", "20000"))
+        Config.MAX_ORDER_QUANTITY = int(os.getenv("MAX_ORDER_QUANTITY", "1300"))
+        Config.MAX_NIFTY_QUANTITY = int(os.getenv("MAX_NIFTY_QUANTITY", "1300"))
+        Config.MAX_SENSEX_QUANTITY = int(os.getenv("MAX_SENSEX_QUANTITY", "400"))
+        Config.PROFIT_LOCK_THRESHOLD = float(os.getenv("PROFIT_LOCK_THRESHOLD", "7000"))
+        logger.warning("CONFIG RELOAD: Reloaded .env variables dynamically in memory! "
+                       "DAILY_MAX_LOSS=%.0f, MAX_NIFTY_QUANTITY=%d",
+                       Config.DAILY_MAX_LOSS, Config.MAX_NIFTY_QUANTITY)
+        return jsonify({"status": "success", "message": "Configuration reloaded in memory!"})
+    except Exception as e:
+        logger.error("Config reload failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/api/status")
 def api_status():
     if _monitor:
