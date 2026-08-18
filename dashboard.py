@@ -4299,6 +4299,51 @@ DASHBOARD_HTML = """
                 console.error('Could not copy text: ', err);
             });
         }
+        function runReloadConfig(btn) {
+            btn.disabled = true;
+            btn.textContent = 'Running...';
+            fetch('/api/admin/reload_config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                btn.disabled = false;
+                if (d.status === 'success' || d.status === 'ok') {
+                    btn.textContent = 'Success!';
+                    btn.style.backgroundColor = '#238636';
+                    btn.style.borderColor = '#2ea043';
+                    showToast('Configuration reloaded successfully!', 'success');
+                    setTimeout(function() {
+                        btn.textContent = 'Run';
+                        btn.style.backgroundColor = '#1f6feb';
+                        btn.style.borderColor = '#388bfd';
+                    }, 2000);
+                } else {
+                    btn.textContent = 'Failed';
+                    btn.style.backgroundColor = '#da3637';
+                    btn.style.borderColor = '#f85149';
+                    showToast('Reload failed: ' + (d.message || ''), 'error');
+                    setTimeout(function() {
+                        btn.textContent = 'Run';
+                        btn.style.backgroundColor = '#1f6feb';
+                        btn.style.borderColor = '#388bfd';
+                    }, 2000);
+                }
+            })
+            .catch(function(err) {
+                btn.disabled = false;
+                btn.textContent = 'Error';
+                btn.style.backgroundColor = '#da3637';
+                btn.style.borderColor = '#f85149';
+                showToast('Network error: ' + err, 'error');
+                setTimeout(function() {
+                    btn.textContent = 'Run';
+                    btn.style.backgroundColor = '#1f6feb';
+                    btn.style.borderColor = '#388bfd';
+                }, 2000);
+            });
+        }
     </script>
 
     <!-- VPS Admin Commands Modal -->
@@ -4362,6 +4407,16 @@ DASHBOARD_HTML = """
                     <div style="display:flex;gap:8px;">
                         <code style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#8b949e;word-break:break-all;display:block;">cd ~/Risk-Management && ./venv/bin/python reset_lockout.py</code>
                         <button class="btn-neutral btn-sm" onclick="copyText('cd ~/Risk-Management && ./venv/bin/python reset_lockout.py', this)" style="font-size:11px;">Copy</button>
+                    </div>
+                </div>
+
+                <!-- Command 7 -->
+                <div>
+                    <label style="display:block;color:#58a6ff;font-size:11px;font-weight:600;margin-bottom:4px;text-transform:uppercase;">🔄 Reload Configuration (.env) in Memory (Online)</label>
+                    <div style="display:flex;gap:8px;">
+                        <code style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#8b949e;word-break:break-all;display:block;">curl -X POST http://localhost:5555/api/admin/reload_config</code>
+                        <button class="btn-neutral btn-sm" onclick="copyText('curl -X POST http://localhost:5555/api/admin/reload_config', this)" style="font-size:11px;">Copy</button>
+                        <button class="btn-neutral btn-sm" onclick="runReloadConfig(this)" style="font-size:11px;background:#1f6feb;border-color:#388bfd;color:#fff;">Run</button>
                     </div>
                 </div>
 

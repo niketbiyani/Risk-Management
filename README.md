@@ -373,6 +373,7 @@ sudo htpasswd /etc/nginx/.htpasswd trader
 |----------|--------|-------------|
 | `/api/admin/unlock` | POST | Emergency state reset (bypasses lockout) |
 | `/api/admin/reset_hwm` | POST | Reset HWM + profit lock without clearing full state |
+| `/api/admin/reload_config` | POST | Reload configuration variables from `.env` dynamically in memory |
 
 ---
 
