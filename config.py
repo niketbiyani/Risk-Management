@@ -40,7 +40,7 @@ class Config:
     BROKERAGE_PER_ORDER: float = float(os.getenv("BROKERAGE_PER_ORDER", "20"))
 
     # Profit Lock
-    PROFIT_LOCK_THRESHOLD: float = float(os.getenv("PROFIT_LOCK_THRESHOLD", "3000"))
+    PROFIT_LOCK_THRESHOLD: float = float(os.getenv("PROFIT_LOCK_THRESHOLD", "7000"))
     PROFIT_LOCK_PERCENTAGE: float = float(os.getenv("PROFIT_LOCK_PERCENTAGE", "50"))
 
     # Trailing Drawdown
