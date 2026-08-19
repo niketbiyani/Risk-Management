@@ -245,8 +245,11 @@ class PositionMonitor:
                         }
                         for p in positions if p.get("netQty", 0) != 0
                     ])
-                    # Update trade book to get final trade history
-                    self._refresh_trade_cache()
+                    # Update trade book to get final trade history (non-blocking fallback)
+                    now = time.time()
+                    if now - self._analyser_last_import >= self._analyser_import_interval:
+                        self._analyser_last_import = now
+                        threading.Thread(target=self._refresh_trade_cache, daemon=True).start()
                     
                     analyser_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
                     realized_pnl = max(self.state.realized_pnl, analyser_pnl)
@@ -1064,13 +1067,22 @@ class PositionMonitor:
             if current_count > self._last_trade_count and self._last_trade_count > 0:
                 new_trades = trades[self._last_trade_count:]
 
+                # Deduplicate by orderId to avoid counting partial fills as multiple trades
+                unique_new_trades = []
+                seen_order_ids = set()
+                for trade in new_trades:
+                    oid = str(trade.get("orderId") or "")
+                    if oid and oid not in seen_order_ids:
+                        seen_order_ids.add(oid)
+                        unique_new_trades.append(trade)
+
                 # Approximate per-trade P&L from realized P&L changes
                 current_realized = self.state.realized_pnl
                 prev_realized = getattr(self, "_prev_realized_pnl", 0)
                 realized_change = current_realized - prev_realized
-                per_trade_pnl = realized_change / max(1, len(new_trades))
+                per_trade_pnl = realized_change / max(1, len(unique_new_trades))
 
-                for trade in new_trades:
+                for trade in unique_new_trades:
                     trade_info = {
                         "security_id": trade.get("securityId", ""),
                         "type": trade.get("transactionType", ""),
