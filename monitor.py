@@ -164,8 +164,10 @@ class PositionMonitor:
             self._refresh_trade_cache("startup")
             if self._trade_cache_loaded:
                 # Sync the state immediately on startup so the dashboard shows correct values after market hours
-                self.state.update_pnl(self._analyser_realized_pnl, self.state.unrealized_pnl)
-                logger.info("Startup state synchronized with trade cache realized P&L: ₹%.0f", self._analyser_realized_pnl)
+                realized_pnl = max(self.state.realized_pnl, self._analyser_realized_pnl)
+                self.state.update_pnl(realized_pnl, self.state.unrealized_pnl)
+                logger.info("Startup state synchronized with trade cache realized P&L: ₹%.0f (state: ₹%.0f)",
+                            self._analyser_realized_pnl, self.state.realized_pnl)
         except Exception as e:
             logger.warning("Failed to prime trade cache on startup: %s", e)
 
@@ -246,7 +248,8 @@ class PositionMonitor:
                     # Update trade book to get final trade history
                     self._refresh_trade_cache()
                     
-                    realized_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
+                    analyser_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
+                    realized_pnl = max(self.state.realized_pnl, analyser_pnl)
                     unrealized_pnl = self._calc_unrealized()
                     self.state.update_pnl(realized_pnl, unrealized_pnl)
                     
@@ -328,7 +331,14 @@ class PositionMonitor:
                 threading.Thread(target=self._refresh_trade_cache, daemon=True).start()
 
             # Realized P&L: sum of closed trades from our cache (updated on every fill)
-            realized_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
+            analyser_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
+            if analyser_pnl < self.state.realized_pnl:
+                logger.warning(
+                    "P&L SYNC LAG DETECTED: Trade analyser reported realized P&L ₹%.0f, "
+                    "which is less than the state realized P&L ₹%.0f. Retaining higher state P&L to prevent false lockout.",
+                    analyser_pnl, self.state.realized_pnl
+                )
+            realized_pnl = max(self.state.realized_pnl, analyser_pnl)
 
             # Unrealized P&L: calculated from our own open trade cache + WebSocket LTP.
             # Never use Dhan's unrealizedProfit — it blends all re-entries via average price.
