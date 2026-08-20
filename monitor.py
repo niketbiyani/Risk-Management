@@ -54,6 +54,7 @@ class PositionMonitor:
         self._lockout_executed = False
         self._last_state_date = self.state.get("date")
         self._analyser_realized_pnl: float = 0.0   # sum of closed trade P&L from analyser
+        self._analyser_closed_count: int = 0       # count of closed trades to detect sync lag
         self._analyser_open_trades: list = []       # open trades with entry prices from analyser
         self._trade_cache_loaded = False            # flag indicating trade cache has loaded successfully
         self._ltp_cache: dict = {}                  # security_id -> latest LTP from WebSocket
@@ -164,10 +165,8 @@ class PositionMonitor:
             self._refresh_trade_cache("startup")
             if self._trade_cache_loaded:
                 # Sync the state immediately on startup so the dashboard shows correct values after market hours
-                realized_pnl = max(self.state.realized_pnl, self._analyser_realized_pnl)
-                self.state.update_pnl(realized_pnl, self.state.unrealized_pnl)
-                logger.info("Startup state synchronized with trade cache realized P&L: ₹%.0f (state: ₹%.0f)",
-                            self._analyser_realized_pnl, self.state.realized_pnl)
+                self.state.update_pnl(self._analyser_realized_pnl, self.state.unrealized_pnl)
+                logger.info("Startup state synchronized with trade cache realized P&L: ₹%.0f", self._analyser_realized_pnl)
         except Exception as e:
             logger.warning("Failed to prime trade cache on startup: %s", e)
 
@@ -251,8 +250,7 @@ class PositionMonitor:
                         self._analyser_last_import = now
                         threading.Thread(target=self._refresh_trade_cache, daemon=True).start()
                     
-                    analyser_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
-                    realized_pnl = max(self.state.realized_pnl, analyser_pnl)
+                    realized_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
                     unrealized_pnl = self._calc_unrealized()
                     self.state.update_pnl(realized_pnl, unrealized_pnl)
                     
@@ -334,14 +332,7 @@ class PositionMonitor:
                 threading.Thread(target=self._refresh_trade_cache, daemon=True).start()
 
             # Realized P&L: sum of closed trades from our cache (updated on every fill)
-            analyser_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
-            if analyser_pnl < self.state.realized_pnl:
-                logger.warning(
-                    "P&L SYNC LAG DETECTED: Trade analyser reported realized P&L ₹%.0f, "
-                    "which is less than the state realized P&L ₹%.0f. Retaining higher state P&L to prevent false lockout.",
-                    analyser_pnl, self.state.realized_pnl
-                )
-            realized_pnl = max(self.state.realized_pnl, analyser_pnl)
+            realized_pnl = self._analyser_realized_pnl if self._trade_cache_loaded else self.state.realized_pnl
 
             # Unrealized P&L: calculated from our own open trade cache + WebSocket LTP.
             # Never use Dhan's unrealizedProfit — it blends all re-entries via average price.
@@ -680,12 +671,23 @@ class PositionMonitor:
             closed = [t for t in trades if t.get("status") == "CLOSED"]
             open_t = [t for t in trades if t.get("status") == "OPEN"]
 
-            self._analyser_realized_pnl = sum(t.get("pnl", 0) or 0 for t in closed)
-            self._analyser_open_trades = open_t
-            self._trade_cache_loaded = True
- 
-            logger.info("Trade cache refreshed (%s): realized=₹%.0f closed=%d open=%d",
-                        trigger, self._analyser_realized_pnl, len(closed), len(open_t))
+            new_pnl = sum(t.get("pnl", 0) or 0 for t in closed)
+            new_count = len(closed)
+
+            # Prevent overwriting with stale/lagged data if trade count dropped
+            if new_count >= self._analyser_closed_count:
+                self._analyser_realized_pnl = new_pnl
+                self._analyser_closed_count = new_count
+                self._analyser_open_trades = open_t
+                self._trade_cache_loaded = True
+                logger.info("Trade cache refreshed (%s): realized=₹%.0f closed=%d open=%d",
+                            trigger, self._analyser_realized_pnl, len(closed), len(open_t))
+            else:
+                logger.warning(
+                    "Stale trade cache response ignored: new_closed=%d < prev_closed=%d. "
+                    "This indicates sync lag; keeping previous realized P&L ₹%.0f.",
+                    new_count, self._analyser_closed_count, self._analyser_realized_pnl
+                )
         except Exception as e:
             logger.warning("Trade-analyser fetch failed (%s): %s", trigger, e)
 
