@@ -296,15 +296,20 @@ class RiskEngine:
 
         # Profit lock info
         profit_lock_info = {}
-        if self.state.profit_lock_active:
+        is_profit_lock_active = self.state.profit_lock_active or (net_realized >= Config.PROFIT_LOCK_THRESHOLD)
+        if is_profit_lock_active:
+            floor = self.state.profit_lock_floor
+            if floor == 0.0:
+                # Dynamic fallback for startup status check before first tick
+                floor = net_realized * (Config.PROFIT_LOCK_PERCENTAGE / 100)
             profit_lock_info = {
                 "active": True,
-                "lock_level": self.state.get("profit_lock_level"),
-                "floor": self.state.profit_lock_floor,
-                "buffer": net_realized - self.state.profit_lock_floor,
+                "lock_level": self.state.get("profit_lock_level") or net_realized,
+                "floor": floor,
+                "buffer": net_realized - floor,
             }
         else:
-            distance_to_lock = Config.PROFIT_LOCK_THRESHOLD - net_realized
+            distance_to_lock = max(0.0, Config.PROFIT_LOCK_THRESHOLD - net_realized)
             profit_lock_info = {
                 "active": False,
                 "threshold": Config.PROFIT_LOCK_THRESHOLD,
@@ -315,6 +320,9 @@ class RiskEngine:
         drawdown_info = {}
         if Config.TRAILING_DRAWDOWN_ENABLED:
             hwm = self.state.high_water_mark
+            if hwm == 0.0 and net_realized > 0:
+                # Dynamic fallback for startup status check
+                hwm = net_realized
             drawdown = hwm - net_total if hwm > 0 else 0
             limit = hwm * (Config.TRAILING_DRAWDOWN_PERCENTAGE / 100) if hwm > 0 else 0
             drawdown_info = {

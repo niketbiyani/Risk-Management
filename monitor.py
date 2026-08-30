@@ -225,8 +225,11 @@ class PositionMonitor:
             # Check for date crossover to reset in-memory lockout flags
             current_date = self.state.get("date")
             if current_date != self._last_state_date:
-                logger.info("New day detected (%s vs %s): resetting in-memory monitor lockout flag", current_date, self._last_state_date)
+                logger.info("New day detected (%s vs %s): resetting in-memory monitor lockout flag and analyser caches", current_date, self._last_state_date)
                 self._lockout_executed = False
+                self._analyser_closed_count = 0
+                self._analyser_realized_pnl = 0.0
+                self._trade_cache_loaded = False
                 self._last_state_date = current_date
 
             # If already locked out and positions closed, just update final P&L/positions in state and return

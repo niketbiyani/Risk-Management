@@ -44,7 +44,7 @@ def main():
         print("=" * 70)
         for idx, r in enumerate(rows, 1):
             pnl_str = f"₹{r['pnl']:,.2f}" if r['pnl'] is not None else "OPEN"
-            dir_str = "BUY" if r.get('direction') == 'LONG' else "SELL"
+            dir_str = "BUY" if r['direction'] == 'LONG' else "SELL"
             print(f"{idx}. [{r['entry_time']}] {r['underlying']} {r['strike']} {r['option_type']} ({dir_str}) "
                   f"| Qty: {r['quantity']} | Entry: ₹{r['entry_price']} -> Exit: ₹{r['exit_price']} "
                   f"| P&L: {pnl_str} ({r['status']})")
