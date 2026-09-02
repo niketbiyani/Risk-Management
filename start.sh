@@ -29,7 +29,11 @@ fi
 # Ensure venv exists
 if [ ! -f "$PYTHON" ]; then
     echo "Creating virtual environment..."
-    python3 -m venv "${WORK_DIR}/venv"
+    if [ -f "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13" ]; then
+        /Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13 -m venv "${WORK_DIR}/venv"
+    else
+        python3 -m venv "${WORK_DIR}/venv"
+    fi
 fi
 
 # Always sync dependencies (handles new/updated packages after git pull)

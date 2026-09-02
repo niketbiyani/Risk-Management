@@ -72,7 +72,10 @@ class PositionMonitor:
         self._market_feed_thread: threading.Thread | None = None
         self._order_update_thread: threading.Thread | None = None
         self._subscribed_instruments: list = []
-        self._extra_instruments: list = []   # OC / UI-requested instruments, preserved across position changes
+        self._extra_instruments: list = [
+            (0, "13", 15),  # NIFTY Spot (IDX_I)
+            (4, "51", 15)   # SENSEX Spot (BSE_EQ)
+        ]   # OC / UI-requested instruments, preserved across position changes
         self._sl_tp_executing: set = set()
 
         # Candle-Close Order Placement state
@@ -82,6 +85,7 @@ class PositionMonitor:
         self._trigger_thread = None
         self._live_candles = {}               # (security_id, timeframe) -> { "open", "high", "low", "close", "candle_start" }
         self._closed_candles = {}             # (security_id, timeframe) -> { "high", "low", "close" }
+        self._closed_candles_history = {}     # (security_id, timeframe) -> list of candles
 
     def start(self):
         """Start the monitoring loop."""
@@ -522,6 +526,17 @@ class PositionMonitor:
                                 "low": candle["low"],
                                 "close": candle["close"]
                             }
+                            # Save to history list
+                            hist = self._closed_candles_history.setdefault(key, [])
+                            hist.append({
+                                "open": candle["open"],
+                                "high": candle["high"],
+                                "low": candle["low"],
+                                "close": candle["close"],
+                                "candle_start": candle["candle_start"]
+                            })
+                            if len(hist) > 100:
+                                hist.pop(0)
                             # Start new candle
                             self._live_candles[key] = {
                                 "open": ltp,

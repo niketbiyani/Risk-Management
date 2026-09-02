@@ -4652,10 +4652,11 @@ def submit_sl_1click():
             break
             
     if pos_qty == 0:
-        tx_type = "SELL"
-    else:
-        tx_type = "SELL" if pos_qty > 0 else "BUY"
-        qty = abs(pos_qty)
+        logger.warning("1-Click SL rejected for %s: No open position found", security_id)
+        return jsonify({"status": "error", "message": f"No open position found for security_id {security_id} to attach a Stop Loss"}), 400
+    
+    tx_type = "SELL" if pos_qty > 0 else "BUY"
+    qty = abs(pos_qty)
         
     # Calculate limit price with buffer to prevent execution slippage (STOP_LOSS_LIMIT)
     buffer = round(max(0.50, sl * 0.01) * 20) / 20
@@ -5304,6 +5305,29 @@ def api_get_ltp(security_id):
         return jsonify({"ltp": ltp, "raw": data})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/market_data")
+def api_market_data():
+    """Get NIFTY and SENSEX spot index 1-minute candle history and live tick."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+        
+    res = {}
+    with _monitor._lock:
+        for name, security_id in [("NIFTY", "13"), ("SENSEX", "51")]:
+            key = (security_id, 60)
+            closed = list(_monitor._closed_candles_history.get(key, []))
+            live = _monitor._live_candles.get(key, None)
+            ltp = _monitor._ltp_cache.get(security_id, None)
+            
+            res[name] = {
+                "closed_candles": closed,
+                "live_candle": live,
+                "ltp": ltp
+            }
+            
+    return jsonify(res)
 
 
 @app.route("/api/order/candle_close_trigger", methods=["POST"], strict_slashes=False)
