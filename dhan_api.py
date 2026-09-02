@@ -77,13 +77,23 @@ class DhanAPI:
             security_id, exchange_segment, transaction_type, quantity,
             order_type, product_type, price, trigger_price,
         )
+        # Map internal order types to Dhan API enum strings ("SL", "SLM", "LIMIT", "MARKET")
+        order_type_map = {
+            "STOP_LOSS_LIMIT": "SL",
+            "STOP_LOSS_MARKET": "SLM",
+            "STOP_LOSS": "SL",
+            "SL_LIMIT": "SL",
+            "SL_MARKET": "SLM"
+        }
+        mapped_order_type = order_type_map.get(str(order_type).upper(), str(order_type).upper())
+
         try:
             response = self.dhan.place_order(
                 security_id=security_id,
                 exchange_segment=exchange_segment,
                 transaction_type=transaction_type,
                 quantity=quantity,
-                order_type=order_type,
+                order_type=mapped_order_type,
                 product_type=product_type,
                 price=price,
                 trigger_price=trigger_price,
