@@ -4762,6 +4762,84 @@ def submit_tp_1click():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route("/api/order/move_sl_to_be", methods=["POST"])
+def move_sl_to_be():
+    """Instantly locate active open trade, calculate Break-Even (entry +/- offset), and submit native SL order."""
+    data = request.json or {}
+    security_id = data.get("security_id")
+    offset = float(data.get("be_offset", 0.50))
+    
+    positions = _monitor.api.get_positions() if _monitor else []
+    target_pos = None
+    
+    # 1. Try matching security_id
+    if security_id:
+        for p in positions:
+            sec_match = str(p.get("securityId", "")) == str(security_id) or str(p.get("security_id", "")) == str(security_id)
+            net_q = p.get("netQty", p.get("net_qty", 0))
+            if sec_match and net_q != 0:
+                target_pos = p
+                break
+
+    # 2. Fallback: match any active open position
+    if not target_pos:
+        for p in positions:
+            net_q = p.get("netQty", p.get("net_qty", 0))
+            if net_q != 0:
+                target_pos = p
+                break
+                
+    if not target_pos:
+        logger.warning("move_sl_to_be rejected: No open position found")
+        return jsonify({"status": "error", "message": "No active open position found on account"}), 400
+        
+    net_qty = target_pos.get("netQty", target_pos.get("net_qty", 0))
+    sec_id = str(target_pos.get("securityId", target_pos.get("security_id", "")))
+    segment = target_pos.get("exchangeSegment", target_pos.get("exchange_segment", "BSE_FNO"))
+    product_type = target_pos.get("productType", target_pos.get("product_type", "MARGIN"))
+    
+    # Extract entry fill price
+    if net_qty < 0:
+        entry_price = float(target_pos.get("sellAvg", 0) or target_pos.get("costPrice", 0) or target_pos.get("buyAvg", 0))
+        be_sl = entry_price - offset
+        tx_type = "BUY"
+    else:
+        entry_price = float(target_pos.get("buyAvg", 0) or target_pos.get("costPrice", 0) or target_pos.get("sellAvg", 0))
+        be_sl = entry_price + offset
+        tx_type = "SELL"
+        
+    if entry_price <= 0:
+        return jsonify({"status": "error", "message": "Could not determine position entry price"}), 400
+        
+    be_sl = round(max(0.05, be_sl) * 20) / 20
+    qty = abs(net_qty)
+    
+    buffer = round(max(0.50, be_sl * 0.01) * 20) / 20
+    limit_price = be_sl + buffer if tx_type == "BUY" else max(0.05, be_sl - buffer)
+    
+    logger.info("move_sl_to_be: sec_id=%s netQty=%d entry=%.2f be_sl=%.2f tx=%s", sec_id, net_qty, entry_price, be_sl, tx_type)
+    
+    try:
+        res_order = _monitor.api.place_order(
+            security_id=sec_id,
+            exchange_segment=segment,
+            transaction_type=tx_type,
+            quantity=qty,
+            order_type="STOP_LOSS_LIMIT",
+            product_type=product_type,
+            price=limit_price,
+            trigger_price=be_sl
+        )
+        return jsonify({"status": "success", "be_price": be_sl, "entry_price": entry_price, "data": res_order})
+    except Exception as e:
+        logger.error("Failed to place Break-Even SL: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "success", "data": res_order})
+    except Exception as e:
+        logger.error("Failed to place 1-Click TP: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/chart-trading")
 def chart_trading():
     def fmt_inr(n):
