@@ -92,12 +92,23 @@ function attachIframeListeners() {
       if (iframe.contentDocument && !iframe.dataset.rmExtListenerAttached) {
         iframe.dataset.rmExtListenerAttached = "true";
 
-        iframe.contentDocument.addEventListener('mousedown', function(e) {
+        // Listen for pane focus click in multi-chart layouts
+        const handlePaneClick = (e) => {
           const rowPane = e.target.closest('tr, .chart-container, [class*="widget-"], td.chart-markup-table');
           if (rowPane) activePane = rowPane;
-        }, true);
 
+          // Broadcast focused chart symbol on click
+          setTimeout(() => {
+            const sym = scanActiveSymbol();
+            if (sym) {
+              chrome.runtime.sendMessage({ type: 'ACTIVE_SYMBOL_DETECTED', symbol: sym }).catch(() => {});
+            }
+          }, 50);
+        };
+
+        iframe.contentDocument.addEventListener('mousedown', handlePaneClick, true);
         iframe.contentDocument.addEventListener('click', function(e) {
+          handlePaneClick(e);
           if (armedCaptureMode) {
             const computedPrice = calculateClickedPrice(iframe.contentWindow, e);
             if (computedPrice) {
