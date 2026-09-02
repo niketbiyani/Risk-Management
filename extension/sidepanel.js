@@ -69,6 +69,47 @@ function initPanel() {
   setInterval(queryActiveTabSymbol, 2000);
 }
 
+function setCaptureMode(mode) {
+  // If clicking the same capture button again, cancel capture mode
+  if (captureMode === mode && mode !== null) {
+    mode = null;
+  }
+  
+  captureMode = mode;
+  if (captureTimeoutId) clearTimeout(captureTimeoutId);
+
+  const limitBtn = document.getElementById('rm-btn-capture-limit');
+  const slBtn = document.getElementById('rm-btn-capture-sl');
+  const tpBtn = document.getElementById('rm-btn-capture-tp');
+
+  limitBtn.textContent = mode === 'LIMIT' ? 'Click...' : '🎯 Lmt';
+  limitBtn.style.background = mode === 'LIMIT' ? '#2ea043' : '#13233c';
+
+  slBtn.textContent = mode === 'SL' ? 'Click...' : '🎯 SL';
+  slBtn.style.background = mode === 'SL' ? '#d29922' : '#13233c';
+
+  tpBtn.textContent = mode === 'TP' ? 'Click...' : '🎯 TP';
+  tpBtn.style.background = mode === 'TP' ? '#a371f7' : '#13233c';
+
+  if (mode !== null) {
+    showFlashToast(`Click chart price to set ${mode}...`, "#1f6feb");
+    // Auto-reset after 10 seconds if user doesn't click chart
+    captureTimeoutId = setTimeout(() => {
+      setCaptureMode(null);
+      showFlashToast("Capture mode timed out.", "#30363d");
+    }, 10000);
+  }
+
+  // Tell content script to capture next click
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0] && tabs[0].id) {
+      chrome.tabs.sendMessage(tabs[0].id, { type: 'ARM_CAPTURE_MODE', mode: mode }, () => {
+        if (chrome.runtime.lastError) {} // Silence connection error
+      });
+    }
+  });
+}
+
 function queryActiveTabSymbol() {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (!tabs[0]) return;
@@ -90,7 +131,7 @@ function queryActiveTabSymbol() {
     // 2. Query content script via message passing fallback
     if (tabs[0].id) {
       chrome.tabs.sendMessage(tabs[0].id, { type: 'QUERY_ACTIVE_SYMBOL' }, (res) => {
-        if (chrome.runtime.lastError) return;
+        if (chrome.runtime.lastError) return; // Silently handle disconnected content script
         if (res && res.symbol) handleSymbolUpdate(res.symbol);
       });
     }
@@ -183,19 +224,6 @@ function moveSLToBreakEven() {
   .catch(() => showFlashToast("Failed to reach VPS BE endpoint.", "#f85149"));
 }
 
-function setCaptureMode(mode) {
-  captureMode = mode;
-  document.getElementById('rm-btn-capture-limit').style.background = mode === 'LIMIT' ? '#2ea043' : '#13233c';
-  document.getElementById('rm-btn-capture-sl').style.background = mode === 'SL' ? '#d29922' : '#13233c';
-  document.getElementById('rm-btn-capture-tp').style.background = mode === 'TP' ? '#a371f7' : '#13233c';
-
-  // Tell content script to capture next click
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0] && tabs[0].id) {
-      chrome.tabs.sendMessage(tabs[0].id, { type: 'ARM_CAPTURE_MODE', mode: mode });
-    }
-  });
-}
 
 function handlePriceClickUpdate(price) {
   const roundedPrice = Math.round(parseFloat(price) / 0.05) * 0.05;
