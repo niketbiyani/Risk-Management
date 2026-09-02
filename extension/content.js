@@ -39,8 +39,31 @@ function scanActiveSymbol() {
   const activeWidget = getActiveChartWidget();
   if (!activeWidget) return null;
 
+  // 1. Try reading symbol directly from TradingView's active mainSeries model
+  try {
+    if (activeWidget.model && activeWidget.model()) {
+      const mModel = activeWidget.model().m_model || activeWidget.model();
+      if (mModel && mModel.mainSeries) {
+        const mainSeries = mModel.mainSeries();
+        const rawSym = mainSeries ? (typeof mainSeries.symbol === 'function' ? mainSeries.symbol() : mainSeries._symbol) : null;
+        if (rawSym && typeof rawSym === 'string') {
+          const match = rawSym.match(/(NIFTY|SENSEX).*?(\d{3,})\s*[-\s]*\s*(CE|PE|CALL|PUT|C|P)/i);
+          if (match) {
+            const underlying = match[1].toUpperCase();
+            const strike = match[2];
+            let type = match[3].toUpperCase();
+            if (type === "CALL" || type === "C") type = "CE";
+            if (type === "PUT" || type === "P") type = "PE";
+            return `${underlying} ${strike} ${type}`;
+          }
+        }
+      }
+    }
+  } catch(e) {}
+
+  // 2. Locate the specific DOM container for ONLY the active chart widget
   let doc = document;
-  let container = null;
+  let activeContainer = activeWidget._container || null;
 
   const iframes = document.querySelectorAll('iframe');
   for (const iframe of iframes) {
@@ -52,18 +75,20 @@ function scanActiveSymbol() {
           : coll.activeChartWidget._value;
         if (widget === activeWidget) {
           doc = iframe.contentDocument;
-          container = activeWidget._container || (activeWidget._id ? doc.getElementById(activeWidget._id) : null);
+          if (!activeContainer && activeWidget._id) {
+            activeContainer = doc.getElementById(activeWidget._id);
+          }
           break;
         }
       }
     } catch(e){}
   }
 
-  const searchRoots = [container, doc, document];
+  // Strictly search ONLY within the active chart's container (do NOT fall back to entire doc)
+  const searchRoots = activeContainer ? [activeContainer] : [];
   const legendSelectors = ['.js-button-text','.noWrapWrapper-l31H9iuA','.pane-legend-line','[class*="legend-"]','[class*="title-"]'];
 
   for (const root of searchRoots) {
-    if (!root) continue;
     for (const selector of legendSelectors) {
       const elements = root.querySelectorAll(selector);
       for (const el of elements) {
