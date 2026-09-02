@@ -4834,10 +4834,6 @@ def move_sl_to_be():
     except Exception as e:
         logger.error("Failed to place Break-Even SL: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
-        return jsonify({"status": "success", "data": res_order})
-    except Exception as e:
-        logger.error("Failed to place 1-Click TP: %s", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/chart-trading")
