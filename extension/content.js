@@ -11,6 +11,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
+// Continuously scan active chart symbol across frames and broadcast to sidepanel
+setInterval(() => {
+  const sym = scanActiveSymbol();
+  if (sym) {
+    chrome.runtime.sendMessage({ type: 'ACTIVE_SYMBOL_DETECTED', symbol: sym }).catch(() => {});
+  }
+}, 1500);
+
 function getActiveChartWidget() {
   const iframes = document.querySelectorAll('iframe');
   for (const iframe of iframes) {
@@ -51,22 +59,25 @@ function scanActiveSymbol() {
     } catch(e){}
   }
 
-  const searchRoot = container || doc;
+  const searchRoots = [container, doc, document];
   const legendSelectors = ['.js-button-text','.noWrapWrapper-l31H9iuA','.pane-legend-line','[class*="legend-"]','[class*="title-"]'];
 
-  for (const selector of legendSelectors) {
-    const elements = searchRoot.querySelectorAll(selector);
-    for (const el of elements) {
-      if (el.textContent) {
-        const text = el.textContent.trim();
-        const match = text.match(/(NIFTY|SENSEX).*?(\d{3,})\s*[-\s]*\s*(CE|PE|CALL|PUT|C|P)/i);
-        if (match) {
-          const underlying = match[1].toUpperCase();
-          const strike = match[2];
-          let type = match[3].toUpperCase();
-          if (type === "CALL" || type === "C") type = "CE";
-          if (type === "PUT" || type === "P") type = "PE";
-          return `${underlying} ${strike} ${type}`;
+  for (const root of searchRoots) {
+    if (!root) continue;
+    for (const selector of legendSelectors) {
+      const elements = root.querySelectorAll(selector);
+      for (const el of elements) {
+        if (el.textContent) {
+          const text = el.textContent.trim();
+          const match = text.match(/(NIFTY|SENSEX).*?(\d{3,})\s*[-\s]*\s*(CE|PE|CALL|PUT|C|P)/i);
+          if (match) {
+            const underlying = match[1].toUpperCase();
+            const strike = match[2];
+            let type = match[3].toUpperCase();
+            if (type === "CALL" || type === "C") type = "CE";
+            if (type === "PUT" || type === "P") type = "PE";
+            return `${underlying} ${strike} ${type}`;
+          }
         }
       }
     }
