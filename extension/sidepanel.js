@@ -71,7 +71,24 @@ function initPanel() {
 
 function queryActiveTabSymbol() {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0] && tabs[0].id) {
+    if (!tabs[0]) return;
+    
+    // 1. Try parsing symbol directly from active tab title (instant & 100% reliable)
+    if (tabs[0].title) {
+      const match = tabs[0].title.match(/(NIFTY|SENSEX).*?(\d{3,})\s*[-\s]*\s*(CE|PE|CALL|PUT|C|P)/i);
+      if (match) {
+        const underlying = match[1].toUpperCase();
+        const strike = match[2];
+        let type = match[3].toUpperCase();
+        if (type === "CALL" || type === "C") type = "CE";
+        if (type === "PUT" || type === "P") type = "PE";
+        handleSymbolUpdate(`${underlying} ${strike} ${type}`);
+        return;
+      }
+    }
+
+    // 2. Query content script via message passing fallback
+    if (tabs[0].id) {
       chrome.tabs.sendMessage(tabs[0].id, { type: 'QUERY_ACTIVE_SYMBOL' }, (res) => {
         if (chrome.runtime.lastError) return;
         if (res && res.symbol) handleSymbolUpdate(res.symbol);
