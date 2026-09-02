@@ -4645,13 +4645,29 @@ def submit_sl_1click():
     positions = _monitor.api.get_positions() if _monitor else []
     pos_qty = 0
     product_type = "MARGIN"
+    target_sec_id = security_id
+    target_segment = segment
+
+    # 1. Try exact security_id match
     for p in positions:
         sec_match = str(p.get("securityId", "")) == str(security_id) or str(p.get("security_id", "")) == str(security_id)
-        if sec_match:
+        net_q = p.get("netQty", p.get("net_qty", 0))
+        if sec_match and net_q != 0:
+            pos_qty = net_q
+            product_type = p.get("productType", p.get("product_type", "MARGIN"))
+            target_sec_id = str(p.get("securityId", p.get("security_id", security_id)))
+            target_segment = p.get("exchangeSegment", p.get("exchange_segment", segment))
+            break
+
+    # 2. Fallback: If exact match failed, pick any active open position (netQty != 0)
+    if pos_qty == 0:
+        for p in positions:
             net_q = p.get("netQty", p.get("net_qty", 0))
             if net_q != 0:
                 pos_qty = net_q
                 product_type = p.get("productType", p.get("product_type", "MARGIN"))
+                target_sec_id = str(p.get("securityId", p.get("security_id", security_id)))
+                target_segment = p.get("exchangeSegment", p.get("exchange_segment", segment))
                 break
             
     if pos_qty == 0:
@@ -4667,8 +4683,8 @@ def submit_sl_1click():
         
     try:
         res_order = _monitor.api.place_order(
-            security_id=security_id,
-            exchange_segment=segment,
+            security_id=target_sec_id,
+            exchange_segment=target_segment,
             transaction_type=tx_type,
             quantity=qty,
             order_type="STOP_LOSS_LIMIT",
@@ -4698,13 +4714,29 @@ def submit_tp_1click():
     positions = _monitor.api.get_positions() if _monitor else []
     pos_qty = 0
     product_type = "MARGIN"
+    target_sec_id = security_id
+    target_segment = segment
+
+    # 1. Try exact security_id match
     for p in positions:
         sec_match = str(p.get("securityId", "")) == str(security_id) or str(p.get("security_id", "")) == str(security_id)
-        if sec_match:
+        net_q = p.get("netQty", p.get("net_qty", 0))
+        if sec_match and net_q != 0:
+            pos_qty = net_q
+            product_type = p.get("productType", p.get("product_type", "MARGIN"))
+            target_sec_id = str(p.get("securityId", p.get("security_id", security_id)))
+            target_segment = p.get("exchangeSegment", p.get("exchange_segment", segment))
+            break
+
+    # 2. Fallback: If exact match failed, pick any active open position (netQty != 0)
+    if pos_qty == 0:
+        for p in positions:
             net_q = p.get("netQty", p.get("net_qty", 0))
             if net_q != 0:
                 pos_qty = net_q
                 product_type = p.get("productType", p.get("product_type", "MARGIN"))
+                target_sec_id = str(p.get("securityId", p.get("security_id", security_id)))
+                target_segment = p.get("exchangeSegment", p.get("exchange_segment", segment))
                 break
             
     if pos_qty == 0:
@@ -4716,8 +4748,8 @@ def submit_tp_1click():
         
     try:
         res_order = _monitor.api.place_order(
-            security_id=security_id,
-            exchange_segment=segment,
+            security_id=target_sec_id,
+            exchange_segment=target_segment,
             transaction_type=tx_type,
             quantity=qty,
             order_type="LIMIT",
