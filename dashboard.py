@@ -4682,6 +4682,54 @@ def submit_sl_1click():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route("/api/order/submit_tp_1click", methods=["POST"])
+def submit_tp_1click():
+    """Instantly submit native Take Profit (Limit) target order for the open position at the specified price."""
+    data = request.json or {}
+    security_id = data.get("security_id")
+    segment = data.get("exchange_segment", "NSE_FNO")
+    tp = float(data.get("tp_price", 0))
+    qty = int(data.get("quantity", 0))
+    
+    if not security_id or tp <= 0 or qty <= 0:
+        return jsonify({"status": "error", "message": "Invalid parameters"}), 400
+        
+    # Determine transaction direction based on current position
+    positions = _monitor.api.get_positions() if _monitor else []
+    pos_qty = 0
+    product_type = "MARGIN"
+    for p in positions:
+        sec_match = str(p.get("securityId", "")) == str(security_id) or str(p.get("security_id", "")) == str(security_id)
+        if sec_match:
+            net_q = p.get("netQty", p.get("net_qty", 0))
+            if net_q != 0:
+                pos_qty = net_q
+                product_type = p.get("productType", p.get("product_type", "MARGIN"))
+                break
+            
+    if pos_qty == 0:
+        logger.warning("1-Click TP rejected for %s: No open position found", security_id)
+        return jsonify({"status": "error", "message": f"No open position found for security_id {security_id} to attach Take Profit"}), 400
+    
+    tx_type = "SELL" if pos_qty > 0 else "BUY"
+    qty = abs(pos_qty)
+        
+    try:
+        res_order = _monitor.api.place_order(
+            security_id=security_id,
+            exchange_segment=segment,
+            transaction_type=tx_type,
+            quantity=qty,
+            order_type="LIMIT",
+            product_type=product_type,
+            price=tp
+        )
+        return jsonify({"status": "success", "data": res_order})
+    except Exception as e:
+        logger.error("Failed to place 1-Click TP: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/chart-trading")
 def chart_trading():
     def fmt_inr(n):
