@@ -71,44 +71,54 @@ function initPanel() {
 }
 
 function setCaptureMode(mode) {
-  // If clicking the same capture button again, cancel capture mode
-  if (captureMode === mode && mode !== null) {
-    mode = null;
-  }
-  
-  captureMode = mode;
-  if (captureTimeoutId) clearTimeout(captureTimeoutId);
-
-  const limitBtn = document.getElementById('rm-btn-capture-limit');
-  const slBtn = document.getElementById('rm-btn-capture-sl');
-  const tpBtn = document.getElementById('rm-btn-capture-tp');
-
-  limitBtn.textContent = mode === 'LIMIT' ? 'Click...' : '🎯 Lmt';
-  limitBtn.style.background = mode === 'LIMIT' ? '#2ea043' : '#13233c';
-
-  slBtn.textContent = mode === 'SL' ? 'Click...' : '🎯 SL';
-  slBtn.style.background = mode === 'SL' ? '#d29922' : '#13233c';
-
-  tpBtn.textContent = mode === 'TP' ? 'Click...' : '🎯 TP';
-  tpBtn.style.background = mode === 'TP' ? '#a371f7' : '#13233c';
-
-  if (mode !== null) {
-    showFlashToast(`Click chart price to set ${mode}...`, "#1f6feb");
-    // Auto-reset after 10 seconds if user doesn't click chart
-    captureTimeoutId = setTimeout(() => {
-      setCaptureMode(null);
-      showFlashToast("Capture mode timed out.", "#30363d");
-    }, 10000);
-  }
-
-  // Tell content script to capture next click
-  chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-    if (tabs && tabs[0] && tabs[0].id) {
-      chrome.tabs.sendMessage(tabs[0].id, { type: 'ARM_CAPTURE_MODE', mode: mode }, () => {
-        if (chrome.runtime.lastError) {} // Silence connection error
-      });
+  try {
+    if (captureMode === mode && mode !== null) {
+      mode = null;
     }
-  });
+    
+    captureMode = mode;
+    if (captureTimeoutId) {
+      clearTimeout(captureTimeoutId);
+      captureTimeoutId = null;
+    }
+
+    const limitBtn = document.getElementById('rm-btn-capture-limit');
+    const slBtn = document.getElementById('rm-btn-capture-sl');
+    const tpBtn = document.getElementById('rm-btn-capture-tp');
+
+    if (limitBtn) {
+      limitBtn.textContent = mode === 'LIMIT' ? 'Click...' : '🎯 Lmt';
+      limitBtn.style.background = mode === 'LIMIT' ? '#2ea043' : '#13233c';
+    }
+
+    if (slBtn) {
+      slBtn.textContent = mode === 'SL' ? 'Click...' : '🎯 SL';
+      slBtn.style.background = mode === 'SL' ? '#d29922' : '#13233c';
+    }
+
+    if (tpBtn) {
+      tpBtn.textContent = mode === 'TP' ? 'Click...' : '🎯 TP';
+      tpBtn.style.background = mode === 'TP' ? '#a371f7' : '#13233c';
+    }
+
+    if (mode !== null) {
+      showFlashToast(`Click chart price to set ${mode}...`, "#1f6feb");
+      captureTimeoutId = setTimeout(() => {
+        setCaptureMode(null);
+        showFlashToast("Capture mode timed out.", "#30363d");
+      }, 10000);
+    }
+
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+      if (tabs && tabs[0] && tabs[0].id) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'ARM_CAPTURE_MODE', mode: mode }, () => {
+          if (chrome.runtime.lastError) {}
+        });
+      }
+    });
+  } catch (e) {
+    console.error("setCaptureMode error:", e);
+  }
 }
 
 function queryActiveTabSymbol() {

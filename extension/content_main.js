@@ -44,33 +44,20 @@
   function scanChartFromClick(clickEvent) {
     if (!clickEvent || !clickEvent.target) return null;
     let curr = clickEvent.target;
-    let chartBox = null;
     while (curr && curr !== document && curr !== document.body) {
-      if (curr.classList && (curr.classList.contains('chart-container') || curr.classList.contains('widget-container') || curr.tagName === 'TD' || curr.tagName === 'TR')) {
-        chartBox = curr;
-        break;
-      }
-      curr = curr.parentElement;
-    }
-    const root = chartBox || document;
-    const legendSelectors = ['.js-button-text','.noWrapWrapper-l31H9iuA','.pane-legend-line','[class*="legend-"]','[class*="title-"]'];
-
-    for (const selector of legendSelectors) {
-      const elements = root.querySelectorAll(selector);
-      for (const el of elements) {
-        if (el.textContent) {
-          const text = el.textContent.trim();
-          const match = text.match(/(NIFTY|SENSEX).*?(\d{3,})\s*[-\s]*\s*(CE|PE|CALL|PUT|C|P)/i);
-          if (match) {
-            const underlying = match[1].toUpperCase();
-            const strike = match[2];
-            let type = match[3].toUpperCase();
-            if (type === "CALL" || type === "C") type = "CE";
-            if (type === "PUT" || type === "P") type = "PE";
-            return `${underlying} ${strike} ${type}`;
-          }
+      const text = curr.innerText || curr.textContent || "";
+      if (text) {
+        const match = text.match(/(NIFTY|SENSEX).*?(\d{3,})\s*[-\s]*\s*(CE|PE|CALL|PUT|C|P)/i);
+        if (match) {
+          const underlying = match[1].toUpperCase();
+          const strike = match[2];
+          let type = match[3].toUpperCase();
+          if (type === "CALL" || type === "C") type = "CE";
+          if (type === "PUT" || type === "P") type = "PE";
+          return `${underlying} ${strike} ${type}`;
         }
       }
+      curr = curr.parentElement;
     }
     return null;
   }
