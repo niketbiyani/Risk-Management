@@ -102,8 +102,8 @@ function setCaptureMode(mode) {
   }
 
   // Tell content script to capture next click
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0] && tabs[0].id) {
+  chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+    if (tabs && tabs[0] && tabs[0].id) {
       chrome.tabs.sendMessage(tabs[0].id, { type: 'ARM_CAPTURE_MODE', mode: mode }, () => {
         if (chrome.runtime.lastError) {} // Silence connection error
       });
@@ -112,8 +112,8 @@ function setCaptureMode(mode) {
 }
 
 function queryActiveTabSymbol() {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (!tabs[0]) return;
+  chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+    if (!tabs || !tabs[0]) return;
     
     // 1. Try parsing symbol directly from active tab title (instant & 100% reliable)
     if (tabs[0].title) {
