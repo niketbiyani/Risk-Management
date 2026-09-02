@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Dhan Risk Manager Side Panel</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="risk-manager-panel">
+    <div class="header">
+      <div class="title-group">
+        <h4>⚙️ Risk Manager</h4>
+        <button id="rm-toggle-settings" title="VPS Credentials">⚙️</button>
+      </div>
+      <span id="rm-status-badge" class="badge">v9.14 Side Panel</span>
+    </div>
+
+    <!-- SETTINGS DRAWER -->
+    <div id="rm-settings-drawer" style="display:none;">
+      <div class="form-group">
+        <label>VPS USER</label>
+        <input type="text" id="rm-vps-user" value="trader">
+      </div>
+      <div class="form-group">
+        <label>VPS PASSWORD</label>
+        <input type="password" id="rm-vps-password" placeholder="Dashboard pass">
+      </div>
+    </div>
+
+    <!-- DIRECTION & PRODUCT TOGGLES -->
+    <div class="toggle-container">
+      <div class="toggle-row">
+        <span class="label">DIRECTION</span>
+        <div class="btn-group">
+          <button id="rm-dir-buy" class="btn-toggle">BUY</button>
+          <button id="rm-dir-sell" class="btn-toggle active-sell">SELL</button>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <span class="label">PRODUCT</span>
+        <div class="btn-group">
+          <button id="rm-prod-margin" class="btn-toggle active-margin">NORMAL</button>
+          <button id="rm-prod-intraday" class="btn-toggle">INTRADAY</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ACTIVE CONTRACT -->
+    <div class="section">
+      <label class="label">ACTIVE CONTRACT</label>
+      <input type="text" id="rm-contract-search" placeholder="e.g. SENSEX 74700 PE">
+      <div id="rm-contract-status" class="status-text">Detecting active chart...</div>
+    </div>
+
+    <!-- QUANTITY, SLIPPAGE, & BE OFFSET -->
+    <div class="inputs-grid">
+      <div>
+        <label class="label">QTY</label>
+        <input type="number" id="rm-qty" value="20" step="20">
+      </div>
+      <div>
+        <label class="label">SLIPPAGE</label>
+        <input type="number" id="rm-slippage" value="2.00" step="0.05">
+      </div>
+      <div>
+        <label class="label">BE OFFSET</label>
+        <input type="number" id="rm-be-offset" value="0.50" step="0.05">
+      </div>
+    </div>
+
+    <!-- TARGET CAPTURE BUTTONS -->
+    <div class="capture-row">
+      <div class="input-wrap">
+        <label class="label">TRIGGER PRICE</label>
+        <input type="number" id="rm-limit-price" step="0.05" placeholder="Trigger">
+      </div>
+      <button id="rm-btn-capture-limit" class="btn-capture">🎯 Lmt</button>
+    </div>
+
+    <div class="capture-row">
+      <div class="input-wrap">
+        <label class="label">STOP LOSS</label>
+        <input type="number" id="rm-sl-price" step="0.05" placeholder="Stop Loss">
+      </div>
+      <button id="rm-btn-capture-sl" class="btn-capture">🎯 SL</button>
+    </div>
+
+    <div class="capture-row">
+      <div class="input-wrap">
+        <label class="label">TAKE PROFIT</label>
+        <input type="number" id="rm-tp-price" step="0.05" placeholder="Take Profit">
+      </div>
+      <button id="rm-btn-capture-tp" class="btn-capture">🎯 TP</button>
+    </div>
+
+    <!-- ACTIONS -->
+    <div class="actions-group">
+      <button id="rm-btn-sl-to-be" class="btn-action btn-be">🎯 SL ➔ BREAK-EVEN (BE)</button>
+      <button id="rm-btn-lmt" class="btn-action btn-sell">⚡ SELL TRIGGER LIMIT</button>
+      <button id="rm-btn-mkt" class="btn-action btn-sell">⚡ SELL MARKET</button>
+      <button id="rm-btn-exit" class="btn-action btn-emergency">🚨 INSTANT MARKET EXIT ALL</button>
+    </div>
+  </div>
+
+  <div id="rm-flash-toast" style="display:none;"></div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

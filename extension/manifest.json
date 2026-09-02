@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Dhan Risk Manager Side Panel",
+  "version": "1.0.0",
+  "description": "Pinned Chrome Side Panel for Dhan single-leg risk management, server-side break-even, 1-click SL/TP, and emergency exit.",
+  "permissions": [
+    "sidePanel",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://tv.dhan.co/*",
+    "https://88.208.255.34/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Open Risk Manager"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://tv.dhan.co/*"],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "all_frames": true
+    }
+  ]
+}
