@@ -4646,10 +4646,13 @@ def submit_sl_1click():
     pos_qty = 0
     product_type = "MARGIN"
     for p in positions:
-        if str(p["securityId"]) == str(security_id):
-            pos_qty = p["netQty"]
-            product_type = p.get("productType", "MARGIN")
-            break
+        sec_match = str(p.get("securityId", "")) == str(security_id) or str(p.get("security_id", "")) == str(security_id)
+        if sec_match:
+            net_q = p.get("netQty", p.get("net_qty", 0))
+            if net_q != 0:
+                pos_qty = net_q
+                product_type = p.get("productType", p.get("product_type", "MARGIN"))
+                break
             
     if pos_qty == 0:
         logger.warning("1-Click SL rejected for %s: No open position found", security_id)
