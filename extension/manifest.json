@@ -25,7 +25,14 @@
   "content_scripts": [
     {
       "matches": ["https://tv.dhan.co/*"],
-      "js": ["content.js"],
+      "js": ["content_main.js"],
+      "run_at": "document_end",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://tv.dhan.co/*"],
+      "js": ["content_bridge.js"],
       "run_at": "document_end",
       "all_frames": true
     }

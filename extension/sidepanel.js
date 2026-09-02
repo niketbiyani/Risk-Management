@@ -6,6 +6,7 @@ let resolvedSegment = "NSE_FNO";
 let currentDirection = "SELL";
 let currentProductType = localStorage.getItem("rm_product_type") || "MARGIN";
 let captureMode = null;
+let captureTimeoutId = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   initPanel();
