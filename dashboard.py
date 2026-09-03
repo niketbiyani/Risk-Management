@@ -4832,10 +4832,7 @@ def move_sl_to_be():
         return jsonify({"status": "success", "be_price": be_sl, "entry_price": entry_price, "data": res_order})
     except Exception as e:
         logger.error("Failed to place Break-Even SL: %s", e)
-        return jsonify({"status": "error", "message": str(e)}), 500 = p.get("netQty", p.get("net_qty", 0))
-        if sec_match and net_q != 0:
-            target_pos = p
-            break
+        return jsonify({"status": "error", "message": str(e)}), 500
 
     if not target_pos:
         logger.warning("move_sl_to_be rejected: No open position for security_id=%s", security_id)
