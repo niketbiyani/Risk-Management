@@ -9548,7 +9548,13 @@ def api_depth_diag():
 
 
 def run_dashboard(monitor):
-    """Start the dashboard web server."""
+    """Start the dashboard web server with multi-threaded request processing."""
     set_monitor(monitor)
-    socketio.run(app, host=Config.DASHBOARD_HOST, port=Config.DASHBOARD_PORT,
+    socketio.run(
+        app,
+        host=Config.DASHBOARD_HOST,
+        port=Config.DASHBOARD_PORT,
+        threaded=True,
+        allow_unsafe_werkzeug=True
+    )
                  debug=False, allow_unsafe_werkzeug=True)
