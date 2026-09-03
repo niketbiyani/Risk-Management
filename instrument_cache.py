@@ -305,11 +305,16 @@ class InstrumentCache:
         results = []
 
         for inst in self._instruments:
-            # Match against multiple fields
+            # Match against multiple fields including constructed strike + option type representation
+            strike_str = str(int(inst.strike_price)) if inst.strike_price > 0 else ""
             search_fields = (
                 inst.trading_symbol.upper(),
                 inst.custom_symbol.upper(),
                 inst.symbol_name.upper(),
+                f"{inst.symbol_name.upper()} {strike_str} {inst.option_type.upper()}",
+                f"{inst.symbol_name.upper()}{strike_str}{inst.option_type.upper()}",
+                strike_str,
+                inst.option_type.upper()
             )
 
             # Check if all tokens match at least one field
