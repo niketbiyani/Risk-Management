@@ -58,8 +58,7 @@ class InstrumentCache:
         start = time.time()
         
         urls = [
-            "https://images.dhan.co/api-data/api-scrip-master.csv",
-            "https://images.dhan.co/api-data/api-scrip-master-bse.csv"
+            "https://images.dhan.co/api-data/api-scrip-master.csv"
         ]
         
         rows = []
