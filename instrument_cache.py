@@ -297,7 +297,11 @@ class InstrumentCache:
             return []
 
         query_upper = query.upper().strip()
-        tokens = query_upper.split()
+        # Filter out timeframe noise tokens (e.g. 1m, 3m, 5m, 15m, 1d, 1h)
+        noise = {"1M", "2M", "3M", "5M", "10M", "15M", "30M", "1H", "2H", "4H", "1D", "1W", "D", "W", "MIN"}
+        tokens = [t for t in query_upper.split() if t not in noise and not (len(t) >= 2 and t[:-1].isdigit() and t[-1] in ("M", "H", "D", "W"))]
+        if not tokens:
+            tokens = query_upper.split()
         results = []
 
         for inst in self._instruments:
