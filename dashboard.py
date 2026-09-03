@@ -4764,34 +4764,42 @@ def submit_tp_1click():
 
 @app.route("/api/order/move_sl_to_be", methods=["POST"])
 def move_sl_to_be():
-    """Instantly locate active open trade, calculate Break-Even (entry +/- offset), and submit native SL order."""
+    """Locate open position strictly for the active chart contract, calculate Break-Even (entry +/- offset), and submit native SL order."""
     data = request.json or {}
     security_id = data.get("security_id")
     offset = float(data.get("be_offset", 0.50))
     
+    if not security_id:
+        return jsonify({"status": "error", "message": "No contract security_id provided. Select/resolve a chart first."}), 400
+
     positions = _monitor.api.get_positions() if _monitor else []
     target_pos = None
     
-    # 1. Try matching security_id
-    if security_id:
-        for p in positions:
-            sec_match = str(p.get("securityId", "")) == str(security_id) or str(p.get("security_id", "")) == str(security_id)
-            net_q = p.get("netQty", p.get("net_qty", 0))
-            if sec_match and net_q != 0:
-                target_pos = p
-                break
+    # Strictly match the security_id of the active chart contract only
+    for p in positions:
+        sec_match = str(p.get("securityId", "")) == str(security_id) or str(p.get("security_id", "")) == str(security_id)
+        net_q = p.get("netQty", p.get("net_qty", 0))
+        if sec_match and net_q != 0:
+            target_pos = p
+            break
 
-    # 2. Fallback: match any active open position
     if not target_pos:
-        for p in positions:
-            net_q = p.get("netQty", p.get("net_qty", 0))
-            if net_q != 0:
-                target_pos = p
-                break
-                
-    if not target_pos:
-        logger.warning("move_sl_to_be rejected: No open position found")
-        return jsonify({"status": "error", "message": "No active open position found on account"}), 400
+        logger.warning("move_sl_to_be rejected: No open position for security_id=%s", security_id)
+        return jsonify({"status": "error", "message": f"No active open position found for contract {security_id}"}), 400
+
+@app.route("/api/order/cancel_all_pending", methods=["POST"])
+def api_cancel_all_pending():
+    """Cancel all pending/resting orders on the exchange orderbook."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    try:
+        cancel_results = _monitor.api.cancel_all_pending_orders()
+        return jsonify({
+            "status": "success",
+            "cancelled_orders": len(cancel_results)
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
         
     net_qty = target_pos.get("netQty", target_pos.get("net_qty", 0))
     sec_id = str(target_pos.get("securityId", target_pos.get("security_id", "")))
