@@ -5623,6 +5623,9 @@ def api_place_order():
     if order_type in ("STOP_LOSS", "LIMIT") and price <= 0:
         return jsonify({"status": "error", "message": "Price required for LIMIT/STOP_LOSS orders"}), 400
 
+    if order_type in ("STOP_LOSS", "STOP_LOSS_LIMIT", "STOP_LOSS_MARKET"):
+        _cancel_existing_sl_orders(security_id)
+
     try:
         result = _monitor.interceptor.place_order(
             security_id=security_id,
