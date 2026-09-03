@@ -486,7 +486,7 @@ class TradeManager:
         tp_price = config.take_profit_price
         triggered = []
 
-        if sl_price:
+        if sl_price and ltp > 0:
             if (is_long and ltp <= sl_price) or (not is_long and ltp >= sl_price):
                 triggered.append({
                     "action": "STOP_LOSS",
@@ -500,7 +500,7 @@ class TradeManager:
                 })
                 config.is_active = False
 
-        if tp_price and not triggered:
+        if tp_price and ltp > 0 and not triggered:
             if (is_long and ltp >= tp_price) or (not is_long and ltp <= tp_price):
                 triggered.append({
                     "action": "TAKE_PROFIT",
