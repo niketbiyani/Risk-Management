@@ -5144,9 +5144,21 @@ def api_health():
 
 @app.route("/api/instruments/search")
 def api_search_instruments():
-    """Search instruments by query string."""
+    """Search instruments by query string with lazy-loading auto-initialization."""
+    global _instrument_cache
+    if not _instrument_cache or getattr(_instrument_cache, "count", 0) == 0:
+        logger.info("Instrument cache empty/uninitialized during search. Auto-loading now...")
+        try:
+            from instrument_cache import InstrumentCache
+            cache = InstrumentCache()
+            cache.load()
+            _instrument_cache = cache
+        except Exception as e:
+            logger.error("Failed lazy-loading instrument cache: %s", e)
+
     if not _instrument_cache:
         return jsonify([])
+        
     q = request.args.get("q", "")
     limit = int(request.args.get("limit", 20))
     results = _instrument_cache.search(q, limit)
