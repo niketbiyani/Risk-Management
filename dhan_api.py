@@ -77,13 +77,15 @@ class DhanAPI:
             security_id, exchange_segment, transaction_type, quantity,
             order_type, product_type, price, trigger_price,
         )
-        # Map internal order types to Dhan API enum strings ("SL", "SLM", "LIMIT", "MARKET")
+        # Map internal order types to Dhan API enum strings ("STOP_LOSS", "LIMIT", "MARKET")
         order_type_map = {
-            "STOP_LOSS_LIMIT": "SL",
-            "STOP_LOSS_MARKET": "SLM",
-            "STOP_LOSS": "SL",
-            "SL_LIMIT": "SL",
-            "SL_MARKET": "SLM"
+            "STOP_LOSS_LIMIT": "STOP_LOSS",
+            "STOP_LOSS_MARKET": "STOP_LOSS",
+            "STOP_LOSS": "STOP_LOSS",
+            "SL_LIMIT": "STOP_LOSS",
+            "SL_MARKET": "STOP_LOSS",
+            "SL": "STOP_LOSS",
+            "SLM": "STOP_LOSS"
         }
         mapped_order_type = order_type_map.get(str(order_type).upper(), str(order_type).upper())
 
