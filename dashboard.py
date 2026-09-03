@@ -4677,8 +4677,9 @@ def submit_sl_1click():
     tx_type = "SELL" if pos_qty > 0 else "BUY"
     qty = abs(pos_qty)
         
-    # Calculate tight limit price with 0.50 pt buffer to prevent slippage (STOP_LOSS_LIMIT)
-    buffer = 0.50
+    # Calculate limit price using user's configured slippage buffer (STOP_LOSS_LIMIT)
+    slippage = float(data.get("slippage", 0.50))
+    buffer = max(0.05, slippage)
     limit_price = sl + buffer if tx_type == "BUY" else max(0.05, sl - buffer)
         
     try:
@@ -4808,7 +4809,8 @@ def move_sl_to_be():
     be_sl = round(max(0.05, be_sl) * 20) / 20
     qty = abs(net_qty)
     
-    buffer = 0.50
+    slippage = float(data.get("slippage", 0.50))
+    buffer = max(0.05, slippage)
     limit_price = be_sl + buffer if tx_type == "BUY" else max(0.05, be_sl - buffer)
     
     logger.info("move_sl_to_be: sec_id=%s netQty=%d entry=%.2f be_sl=%.2f tx=%s", sec_id, net_qty, entry_price, be_sl, tx_type)
