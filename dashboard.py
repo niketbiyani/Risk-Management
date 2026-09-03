@@ -4787,20 +4787,6 @@ def move_sl_to_be():
         logger.warning("move_sl_to_be rejected: No open position for security_id=%s", security_id)
         return jsonify({"status": "error", "message": f"No active open position found for contract {security_id}"}), 400
 
-@app.route("/api/order/cancel_all_pending", methods=["POST"])
-def api_cancel_all_pending():
-    """Cancel all pending/resting orders on the exchange orderbook."""
-    if not _monitor:
-        return jsonify({"error": "Monitor not initialized"}), 500
-    try:
-        cancel_results = _monitor.api.cancel_all_pending_orders()
-        return jsonify({
-            "status": "success",
-            "cancelled_orders": len(cancel_results)
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-        
     net_qty = target_pos.get("netQty", target_pos.get("net_qty", 0))
     sec_id = str(target_pos.get("securityId", target_pos.get("security_id", "")))
     segment = target_pos.get("exchangeSegment", target_pos.get("exchange_segment", "BSE_FNO"))
@@ -4841,6 +4827,21 @@ def api_cancel_all_pending():
         return jsonify({"status": "success", "be_price": be_sl, "entry_price": entry_price, "data": res_order})
     except Exception as e:
         logger.error("Failed to place Break-Even SL: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/order/cancel_all_pending", methods=["POST"])
+def api_cancel_all_pending():
+    """Cancel all pending/resting orders on the exchange orderbook."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    try:
+        cancel_results = _monitor.api.cancel_all_pending_orders()
+        return jsonify({
+            "status": "success",
+            "cancelled_orders": len(cancel_results)
+        })
+    except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
