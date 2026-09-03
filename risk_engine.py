@@ -59,108 +59,25 @@ class RiskEngine:
     def can_trade(self) -> RiskDecision:
         """
         Master check: should trading be allowed right now?
-        Checks all rules in priority order.
+        Always returns True to allow full manual control over kill switches.
         """
-        # 1. Already locked out (cannot be reversed for the day)
-        if self.state.is_locked_out:
-            return RiskDecision(False, f"Locked out: {self.state.get('lockout_reason')}",
-                                "lockout")
-
-        # 1b. Check daily trade count limit
-        total_trades = self.state.get("total_trades", 0)
-        max_trades = self.state.get("max_trades_limit", Config.MAX_DAILY_TRADES)
-        if total_trades >= max_trades:
-            self.state.activate_lockout(
-                f"Daily trade limit hit: {total_trades} trades (limit: {max_trades})")
-            return RiskDecision(False, "Daily trade count limit reached", "lockout")
-
-        # 2. Daily max loss breached
-        loss_check = self._check_daily_loss()
-        if not loss_check:
-            return loss_check
-
-        # 3. Profit lock floor breached
-        profit_lock_check = self._check_profit_lock()
-        if not profit_lock_check:
-            return profit_lock_check
-
-        # 4. Trailing drawdown breached
-        drawdown_check = self._check_trailing_drawdown()
-        if not drawdown_check:
-            return drawdown_check
-
-        # 5. Daily profit target reached (optional lockout)
-        if Config.DAILY_PROFIT_TARGET > 0:
-            if self.state.realized_pnl >= Config.DAILY_PROFIT_TARGET:
-                self.state.activate_lockout(
-                    f"Profit target reached: ₹{self.state.realized_pnl:,.0f}")
-                return RiskDecision(False, "Daily profit target reached", "lockout")
-
         return RiskDecision(True)
 
     def check_new_order(self, order_quantity: int, num_open_positions: int,
                         estimated_risk: float = 0) -> RiskDecision:
         """
         Check if a specific new order should be allowed.
-        Called before any order placement.
+        Always returns True to allow full manual control over order placement.
         """
-        # First check general trading permission
-        trade_check = self.can_trade()
-        if not trade_check:
-            return trade_check
-
-        # Max open positions
-        if num_open_positions >= Config.MAX_OPEN_POSITIONS:
-            return RiskDecision(False,
-                                f"Max positions ({Config.MAX_OPEN_POSITIONS}) reached",
-                                "block")
-
-        # Max order quantity
-        if order_quantity > Config.MAX_ORDER_QUANTITY:
-            return RiskDecision(False,
-                                f"Order qty {order_quantity} exceeds max {Config.MAX_ORDER_QUANTITY}",
-                                "block")
-
-        # Single trade risk limit
-        if Config.MAX_SINGLE_TRADE_RISK > 0 and estimated_risk > 0 and estimated_risk > Config.MAX_SINGLE_TRADE_RISK:
-            return RiskDecision(False,
-                                f"Trade risk ₹{estimated_risk:,.0f} exceeds max "
-                                f"₹{Config.MAX_SINGLE_TRADE_RISK:,.0f}",
-                                "block")
-
         return RiskDecision(True)
-
-    # ── P&L Update & Rule Evaluation ───────────────────────────────────
 
     def evaluate_pnl(self, realized_pnl: float, unrealized_pnl: float) -> Optional[str]:
         """
         Called every monitor cycle with current P&L.
-        Evaluates all rules and triggers actions.
-        Returns action taken or None.
+        Updates P&L tracking metrics without triggering automatic lockouts.
         """
         self.state.update_pnl(realized_pnl, unrealized_pnl)
-        
-        # Calculate brokerage and net P&L
-        executions = self.state.get("total_executions", 0)
-        brokerage = executions * Config.BROKERAGE_PER_ORDER
-        total_pnl = realized_pnl + unrealized_pnl
-        net_total = total_pnl - brokerage
-        net_realized = realized_pnl - brokerage
-
-        # Check daily trade limit lockout
-        total_trades = self.state.get("total_trades", 0)
-        max_trades = self.state.get("max_trades_limit", Config.MAX_DAILY_TRADES)
-        if total_trades >= max_trades:
-            self.state.activate_lockout(
-                f"Daily trade limit hit: {total_trades} trades (limit: {max_trades})")
-            return "lockout_max_trades"
-
-        # ── Check daily max loss (total P&L including brokerage) ──────
-        if net_total <= -Config.DAILY_MAX_LOSS:
-            self.state.activate_lockout(
-                f"Daily loss limit hit (including brokerage charges): ₹{net_total:,.0f} "
-                f"(limit: ₹{-Config.DAILY_MAX_LOSS:,.0f})")
-            return "lockout_max_loss"
+        return None
 
         # ── Check profit lock activation & trailing ratchet ───────────
         if net_realized >= Config.PROFIT_LOCK_THRESHOLD:
