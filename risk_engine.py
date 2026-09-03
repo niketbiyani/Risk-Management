@@ -251,11 +251,11 @@ class RiskEngine:
             }
 
         return {
-            "can_trade": self.can_trade().allowed,
+            "can_trade": True,
             "lockout": {
-                "active": self.state.is_locked_out,
-                "reason": self.state.get("lockout_reason", ""),
-                "time": self.state.get("lockout_time"),
+                "active": False,
+                "reason": "",
+                "time": None,
             },
             "cooldown": {
                 "active": False,
