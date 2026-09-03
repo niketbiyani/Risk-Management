@@ -122,7 +122,7 @@ class RiskEngine:
                                 "block")
 
         # Single trade risk limit
-        if estimated_risk > 0 and estimated_risk > Config.MAX_SINGLE_TRADE_RISK:
+        if Config.MAX_SINGLE_TRADE_RISK > 0 and estimated_risk > 0 and estimated_risk > Config.MAX_SINGLE_TRADE_RISK:
             return RiskDecision(False,
                                 f"Trade risk ₹{estimated_risk:,.0f} exceeds max "
                                 f"₹{Config.MAX_SINGLE_TRADE_RISK:,.0f}",

@@ -32,7 +32,7 @@ class Config:
     DAILY_MAX_LOSS: float = float(os.getenv("DAILY_MAX_LOSS", "7000"))
     DAILY_PROFIT_TARGET: float = float(os.getenv("DAILY_PROFIT_TARGET", "20000"))
     MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
-    MAX_SINGLE_TRADE_RISK: float = float(os.getenv("MAX_SINGLE_TRADE_RISK", "2000"))
+    MAX_SINGLE_TRADE_RISK: float = float(os.getenv("MAX_SINGLE_TRADE_RISK", "50000"))
     MAX_ORDER_QUANTITY: int = int(os.getenv("MAX_ORDER_QUANTITY", "1300"))
     MAX_NIFTY_QUANTITY: int = int(os.getenv("MAX_NIFTY_QUANTITY", "1300"))
     MAX_SENSEX_QUANTITY: int = int(os.getenv("MAX_SENSEX_QUANTITY", "400"))
