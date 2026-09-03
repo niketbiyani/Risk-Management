@@ -49,7 +49,10 @@ class InstrumentCache:
         """Download and parse the scrip master CSV based on the active broker."""
         from config import Config
         if Config.ACTIVE_BROKER == "KOTAK":
-            return self.load_kotak()
+            count = self.load_kotak()
+            if count > 0:
+                return count
+            logger.warning("Kotak scrip master returned 0 instruments. Falling back to Dhan scrip master for search...")
 
         logger.info("Downloading instrument data from Dhan...")
         start = time.time()
