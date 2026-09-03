@@ -216,10 +216,17 @@ def main():
     parser.add_argument("--monitor", action="store_true", help="Run monitor only")
     parser.add_argument("--dashboard", action="store_true", help="Run dashboard only")
     parser.add_argument("--status", action="store_true", help="Show status and exit")
+    parser.add_argument("--reset-lockout", action="store_true", help="Reset active lockout state for today and exit")
     args = parser.parse_args()
 
     if args.status:
         print_status()
+        return
+
+    if args.reset_lockout:
+        state = StateManager()
+        state.clear_lockout()
+        print("Lockout state reset successfully.")
         return
 
     # Intercept termination signals during live market hours to prevent emotional overrides

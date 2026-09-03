@@ -311,13 +311,22 @@ class StateManager:
             logger.warning("Journal write failed (non-critical): %s", e)
 
     def activate_lockout(self, reason: str):
-        """Lock out trading for the day. CANNOT be reversed."""
+        """Lock out trading for the day. CANNOT be reversed automatically."""
         self._check_date_and_reset()
         self._state["is_locked_out"] = True
         self._state["lockout_reason"] = reason
         self._state["lockout_time"] = time.time()
         self._save()
         logger.warning("LOCKOUT ACTIVATED: %s", reason)
+
+    def clear_lockout(self):
+        """Clear active lockout state manually."""
+        self._check_date_and_reset()
+        self._state["is_locked_out"] = False
+        self._state["lockout_reason"] = ""
+        self._state["lockout_time"] = None
+        self._save()
+        logger.info("LOCKOUT CLEARED manually")
 
     def activate_cooldown(self, duration_seconds: int, reason: str):
         """Start a cooldown period."""

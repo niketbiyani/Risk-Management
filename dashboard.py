@@ -5162,6 +5162,18 @@ def api_search_instruments():
     return jsonify(results)
 
 
+@app.route("/api/risk/reset_lockout", methods=["POST"])
+def api_reset_lockout():
+    """Reset active lockout state."""
+    if not _monitor:
+        return jsonify({"error": "Monitor not initialized"}), 500
+    try:
+        _monitor.state.clear_lockout()
+        return jsonify({"status": "success", "message": "Lockout reset successfully."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/api/instruments/reload", methods=["POST"])
 def api_reload_instruments():
     """Force reload instrument data."""
