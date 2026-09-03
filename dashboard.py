@@ -9556,4 +9556,3 @@ def run_dashboard(monitor):
         port=Config.DASHBOARD_PORT,
         allow_unsafe_werkzeug=True
     )
-                 debug=False, allow_unsafe_werkzeug=True)
