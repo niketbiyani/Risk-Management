@@ -4571,34 +4571,18 @@ def place_trigger_chart():
         res = _monitor.api.get_ltp({segment: [int(security_id)]})
         ltp = 0.0
         if isinstance(res, dict):
-            # Flat dictionary
             if security_id in res:
                 ltp = float(res[security_id] or 0)
             elif str(security_id) in res:
                 ltp = float(res[str(security_id)] or 0)
-            # Dhan/nested format
-            elif "data" in res:
-                inner = res["data"]
-                if isinstance(inner, dict) and "data" in inner:
-                    inner = inner["data"]
-                if isinstance(inner, dict):
-                    for seg_key, seg_val in inner.items():
-                        if str(seg_key) == str(security_id):
-                            ltp = float(seg_val.get("last_price", 0) if isinstance(seg_val, dict) else (seg_val or 0))
-                            break
-                        elif isinstance(seg_val, dict) and str(security_id) in seg_val:
-                            val = seg_val[str(security_id)]
-                            ltp = float(val.get("last_price", 0) if isinstance(val, dict) else (val or 0))
-                            break
     except Exception:
         ltp = 0.0
         
     if ltp <= 0:
-        ltp = breakout  # fallback
+        ltp = breakout
         
     tx_type = "BUY" if breakout > ltp else "SELL"
     
-    # Store SL and TP in monitor state for auto-placement on fill
     if not hasattr(_monitor, "chart_sl_tp"):
         _monitor.chart_sl_tp = {}
     _monitor.chart_sl_tp[str(security_id)] = {
@@ -4608,7 +4592,6 @@ def place_trigger_chart():
         "tx_type": tx_type
     }
     
-    # Calculate limit price with buffer to prevent execution slippage (STOP_LOSS_LIMIT)
     buffer = round(max(0.50, breakout * 0.01) * 20) / 20
     limit_price = breakout + buffer if tx_type == "BUY" else max(0.05, breakout - buffer)
     
@@ -4629,9 +4612,30 @@ def place_trigger_chart():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+def _cancel_existing_sl_orders(security_id: str):
+    """Cancel any existing pending SL or Break-Even SL orders for a specific contract before replacing."""
+    if not _monitor:
+        return
+    try:
+        orders = _monitor.api.get_order_book() or []
+        for o in orders:
+            o_sec_id = str(o.get("securityId", ""))
+            status = str(o.get("orderStatus", "")).upper()
+            if o_sec_id == str(security_id) and status in ("PENDING", "TRANSIT"):
+                order_id = str(o.get("orderId", ""))
+                if order_id:
+                    logger.info("Cancelling existing pending SL order %s for security_id %s to replace with new SL", order_id, security_id)
+                    try:
+                        _monitor.api.cancel_order(order_id)
+                    except Exception as cx:
+                        logger.warning("Could not cancel order %s: %s", order_id, cx)
+    except Exception as e:
+        logger.warning("Error while checking existing SL orders for %s: %s", security_id, e)
+
+
 @app.route("/api/order/submit_sl_1click", methods=["POST"])
 def submit_sl_1click():
-    """Instantly submit native Stop Loss order for the open position at the specified trigger price."""
+    """Instantly submit native Stop Loss order for the open position at the specified price."""
     data = request.json or {}
     security_id = data.get("security_id")
     segment = data.get("exchange_segment", "NSE_FNO")
@@ -4641,14 +4645,12 @@ def submit_sl_1click():
     if not security_id or sl <= 0 or qty <= 0:
         return jsonify({"status": "error", "message": "Invalid parameters"}), 400
         
-    # Determine transaction direction based on current position
     positions = _monitor.api.get_positions() if _monitor else []
     pos_qty = 0
     product_type = "MARGIN"
     target_sec_id = security_id
     target_segment = segment
 
-    # 1. Try exact security_id match
     for p in positions:
         sec_match = str(p.get("securityId", "")) == str(security_id) or str(p.get("security_id", "")) == str(security_id)
         net_q = p.get("netQty", p.get("net_qty", 0))
@@ -4659,7 +4661,6 @@ def submit_sl_1click():
             target_segment = p.get("exchangeSegment", p.get("exchange_segment", segment))
             break
 
-    # 2. Fallback: If exact match failed, pick any active open position (netQty != 0)
     if pos_qty == 0:
         for p in positions:
             net_q = p.get("netQty", p.get("net_qty", 0))
@@ -4676,6 +4677,9 @@ def submit_sl_1click():
     
     tx_type = "SELL" if pos_qty > 0 else "BUY"
     qty = abs(pos_qty)
+    
+    # Cancel any existing pending SL order for this contract first before replacing
+    _cancel_existing_sl_orders(target_sec_id)
         
     # Calculate limit price using user's configured slippage buffer (STOP_LOSS_LIMIT)
     slippage = float(data.get("slippage", 0.50))
@@ -4711,14 +4715,12 @@ def submit_tp_1click():
     if not security_id or tp <= 0 or qty <= 0:
         return jsonify({"status": "error", "message": "Invalid parameters"}), 400
         
-    # Determine transaction direction based on current position
     positions = _monitor.api.get_positions() if _monitor else []
     pos_qty = 0
     product_type = "MARGIN"
     target_sec_id = security_id
     target_segment = segment
 
-    # 1. Try exact security_id match
     for p in positions:
         sec_match = str(p.get("securityId", "")) == str(security_id) or str(p.get("security_id", "")) == str(security_id)
         net_q = p.get("netQty", p.get("net_qty", 0))
@@ -4729,7 +4731,6 @@ def submit_tp_1click():
             target_segment = p.get("exchangeSegment", p.get("exchange_segment", segment))
             break
 
-    # 2. Fallback: If exact match failed, pick any active open position (netQty != 0)
     if pos_qty == 0:
         for p in positions:
             net_q = p.get("netQty", p.get("net_qty", 0))
@@ -4765,7 +4766,7 @@ def submit_tp_1click():
 
 @app.route("/api/order/move_sl_to_be", methods=["POST"])
 def move_sl_to_be():
-    """Locate open position strictly for the active chart contract, calculate Break-Even (entry +/- offset), and submit native SL order."""
+    """Locate open position strictly for the active chart contract, calculate Break-Even (entry +/- offset), cancel any existing pending SL, and submit native SL order."""
     data = request.json or {}
     security_id = data.get("security_id")
     offset = float(data.get("be_offset", 0.50))
@@ -4776,10 +4777,62 @@ def move_sl_to_be():
     positions = _monitor.api.get_positions() if _monitor else []
     target_pos = None
     
-    # Strictly match the security_id of the active chart contract only
     for p in positions:
         sec_match = str(p.get("securityId", "")) == str(security_id) or str(p.get("security_id", "")) == str(security_id)
         net_q = p.get("netQty", p.get("net_qty", 0))
+        if sec_match and net_q != 0:
+            target_pos = p
+            break
+
+    if not target_pos:
+        logger.warning("move_sl_to_be rejected: No open position for security_id=%s", security_id)
+        return jsonify({"status": "error", "message": f"No active open position found for contract {security_id}"}), 400
+
+    net_qty = target_pos.get("netQty", target_pos.get("net_qty", 0))
+    sec_id = str(target_pos.get("securityId", target_pos.get("security_id", "")))
+    segment = target_pos.get("exchangeSegment", target_pos.get("exchange_segment", "BSE_FNO"))
+    product_type = target_pos.get("productType", target_pos.get("product_type", "MARGIN"))
+    
+    # Extract entry fill price
+    if net_qty < 0:
+        entry_price = float(target_pos.get("sellAvg", 0) or target_pos.get("costPrice", 0) or target_pos.get("buyAvg", 0))
+        be_sl = entry_price - offset
+        tx_type = "BUY"
+    else:
+        entry_price = float(target_pos.get("buyAvg", 0) or target_pos.get("costPrice", 0) or target_pos.get("sellAvg", 0))
+        be_sl = entry_price + offset
+        tx_type = "SELL"
+        
+    if entry_price <= 0:
+        return jsonify({"status": "error", "message": "Could not determine position entry price"}), 400
+        
+    be_sl = round(max(0.05, be_sl) * 20) / 20
+    qty = abs(net_qty)
+    
+    # Cancel any existing pending SL order for this contract first before replacing
+    _cancel_existing_sl_orders(sec_id)
+
+    slippage = float(data.get("slippage", 0.50))
+    buffer = max(0.05, slippage)
+    limit_price = be_sl + buffer if tx_type == "BUY" else max(0.05, be_sl - buffer)
+    
+    logger.info("move_sl_to_be: sec_id=%s netQty=%d entry=%.2f be_sl=%.2f tx=%s", sec_id, net_qty, entry_price, be_sl, tx_type)
+    
+    try:
+        res_order = _monitor.api.place_order(
+            security_id=sec_id,
+            exchange_segment=segment,
+            transaction_type=tx_type,
+            quantity=qty,
+            order_type="STOP_LOSS_LIMIT",
+            product_type=product_type,
+            price=limit_price,
+            trigger_price=be_sl
+        )
+        return jsonify({"status": "success", "be_price": be_sl, "entry_price": entry_price, "data": res_order})
+    except Exception as e:
+        logger.error("Failed to place Break-Even SL: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500 = p.get("netQty", p.get("net_qty", 0))
         if sec_match and net_q != 0:
             target_pos = p
             break
