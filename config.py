@@ -6,7 +6,8 @@ Reads from .env file and provides typed access to all settings.
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+load_dotenv(env_path, override=True)
 
 
 class Config:
