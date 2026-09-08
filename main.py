@@ -103,7 +103,7 @@ def auto_refresh_token_on_startup():
         return
 
     logger.info("Auto-refreshing API token on startup...")
-    success = refresh_token(max_retries=1)
+    success = refresh_token(max_retries=3)
     if success:
         # Reload config so Config class picks up the new token
         from dotenv import load_dotenv
