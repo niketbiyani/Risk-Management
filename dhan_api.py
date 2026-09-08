@@ -179,21 +179,24 @@ class DhanAPI:
             logger.error("Order cancel failed for %s: %s", order_id, e)
             raise
 
+    def _extract_list(self, response) -> list[dict]:
+        if isinstance(response, list):
+            return [x for x in response if isinstance(x, dict)]
+        if isinstance(response, dict):
+            data = response.get("data")
+            if isinstance(data, list):
+                return [x for x in data if isinstance(x, dict)]
+        return []
+
     def get_order_book(self) -> list[dict]:
         """Get all orders for the day."""
         try:
             response = self.dhan.get_order_list()
-            logger.info("ORDER BOOK RAW: type=%s keys=%s data_type=%s data_len=%s",
+            logger.info("ORDER BOOK RAW: type=%s keys=%s data_len=%s",
                         type(response).__name__,
                         list(response.keys()) if isinstance(response, dict) else "N/A",
-                        type(response.get("data")).__name__ if isinstance(response, dict) else "N/A",
-                        len(response.get("data") or []) if isinstance(response, dict) else "N/A")
-            if isinstance(response, dict) and "data" in response:
-                data = response["data"]
-                if isinstance(data, list):
-                    return [o for o in data if isinstance(o, dict)]
-                return []
-            return []
+                        len(response) if isinstance(response, list) else len(response.get("data") or []) if isinstance(response, dict) else "N/A")
+            return self._extract_list(response)
         except Exception as e:
             logger.error("Failed to get order book: %s", e)
             return []
@@ -210,17 +213,11 @@ class DhanAPI:
         """Get historical trades for a date range. Dates must be DD-MM-YYYY format."""
         try:
             response = self.dhan.get_trade_history(from_date, to_date, 0)
-            logger.info("TRADE HISTORY RAW: type=%s keys=%s data_type=%s data_len=%s",
+            logger.info("TRADE HISTORY RAW: type=%s keys=%s data_len=%s",
                         type(response).__name__,
                         list(response.keys()) if isinstance(response, dict) else "N/A",
-                        type(response.get("data")).__name__ if isinstance(response, dict) else "N/A",
-                        len(response.get("data") or []) if isinstance(response, dict) else "N/A")
-            if isinstance(response, dict) and "data" in response:
-                data = response["data"]
-                if isinstance(data, list):
-                    return [t for t in data if isinstance(t, dict)]
-                return []
-            return []
+                        len(response) if isinstance(response, list) else len(response.get("data") or []) if isinstance(response, dict) else "N/A")
+            return self._extract_list(response)
         except Exception as e:
             logger.error("Failed to get trade history: %s", e)
             return []
@@ -229,17 +226,11 @@ class DhanAPI:
         """Get all executed trades for the day."""
         try:
             response = self.dhan.get_trade_book()
-            logger.info("TRADE BOOK RAW: type=%s keys=%s data_type=%s data_len=%s",
+            logger.info("TRADE BOOK RAW: type=%s keys=%s data_len=%s",
                         type(response).__name__,
                         list(response.keys()) if isinstance(response, dict) else "N/A",
-                        type(response.get("data")).__name__ if isinstance(response, dict) else "N/A",
-                        len(response.get("data") or []) if isinstance(response, dict) else "N/A")
-            if isinstance(response, dict) and "data" in response:
-                data = response["data"]
-                if isinstance(data, list):
-                    return [t for t in data if isinstance(t, dict)]
-                return []
-            return []
+                        len(response) if isinstance(response, list) else len(response.get("data") or []) if isinstance(response, dict) else "N/A")
+            return self._extract_list(response)
         except Exception as e:
             logger.error("Failed to get trade book: %s", e)
             return []
@@ -250,12 +241,7 @@ class DhanAPI:
         """Get all open positions for the day."""
         try:
             response = self.dhan.get_positions()
-            if isinstance(response, dict) and "data" in response:
-                data = response["data"]
-                if isinstance(data, list):
-                    return [p for p in data if isinstance(p, dict)]
-                return []
-            return []
+            return self._extract_list(response)
         except Exception as e:
             logger.error("Failed to get positions: %s", e)
             return []
@@ -264,12 +250,7 @@ class DhanAPI:
         """Get portfolio holdings."""
         try:
             response = self.dhan.get_holdings()
-            if isinstance(response, dict) and "data" in response:
-                data = response["data"]
-                if isinstance(data, list):
-                    return [h for h in data if isinstance(h, dict)]
-                return []
-            return []
+            return self._extract_list(response)
         except Exception as e:
             logger.error("Failed to get holdings: %s", e)
             return []
