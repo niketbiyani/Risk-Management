@@ -280,12 +280,16 @@ class PositionMonitor:
             
             # Update total executions count (counting unique filled or partially filled orders)
             try:
+                trade_book = self.api.get_trade_book() or []
+                trade_order_ids = {str(t.get("orderId")) for t in trade_book if isinstance(t, dict) and t.get("orderId")}
+                
                 orders = self.api.get_order_book() or []
                 filled_order_ids = {
-                    str(o["orderId"]) for o in orders 
-                    if o.get("orderStatus") in ("TRADED", "PARTIALLY_TRADED") and "orderId" in o
+                    str(o.get("orderId")) for o in orders 
+                    if isinstance(o, dict) and str(o.get("orderStatus", "")).upper() in ("TRADED", "PARTIALLY_TRADED", "FILLED", "EXECUTED", "COMPLETE") and o.get("orderId")
                 }
-                self.state.set("total_executions", len(filled_order_ids))
+                all_filled = trade_order_ids | filled_order_ids
+                self.state.set("total_executions", max(len(all_filled), len(trade_book)))
             except Exception as e:
                 logger.debug("Failed to update total_executions: %s", e)
 
