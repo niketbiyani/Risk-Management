@@ -4,9 +4,34 @@ Reads from .env file and provides typed access to all settings.
 """
 
 import os
+import logging
 from dotenv import load_dotenv
 
+logger = logging.getLogger(__name__)
+
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+bak_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.bak")
+
+# Auto-backup / auto-restore mechanism
+if os.path.exists(env_path):
+    try:
+        with open(env_path, "r") as f:
+            content = f.read()
+        if content.strip():
+            # Backup non-empty .env to .env.bak
+            with open(bak_path, "w") as f:
+                f.write(content)
+        elif os.path.exists(bak_path):
+            # Restore from .env.bak if current .env is empty
+            with open(bak_path, "r") as f:
+                bak_content = f.read()
+            if bak_content.strip():
+                with open(env_path, "w") as f:
+                    f.write(bak_content)
+                logger.info("Auto-restored empty .env from .env.bak")
+    except Exception as e:
+        logger.warning("Auto env backup/restore notice: %s", e)
+
 load_dotenv(env_path, override=True)
 
 
