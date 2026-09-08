@@ -9225,17 +9225,20 @@ def api_token_status():
         return jsonify({"valid": False, "error": "Monitor not initialized"}), 500
     try:
         resp = _monitor.api.get_fund_limits()
-        if isinstance(resp, dict) and resp.get("status") == "success":
-            return jsonify({"valid": True, "balance": resp.get("data", {}).get("availabelBalance")})
-        else:
-            msg = ""
-            if isinstance(resp, dict):
-                remarks = resp.get("remarks", {})
-                if isinstance(remarks, dict):
-                    msg = remarks.get("error_message", "")
-                elif isinstance(remarks, str):
-                    msg = remarks
-            return jsonify({"valid": False, "error": msg or "Token validation failed", "raw": resp})
+        if isinstance(resp, dict):
+            status = str(resp.get("status", "")).lower()
+            if status == "success" or "data" in resp:
+                data = resp.get("data", {})
+                balance = data.get("availabelBalance") or data.get("availableBalance") if isinstance(data, dict) else None
+                return jsonify({"valid": True, "balance": balance})
+        msg = ""
+        if isinstance(resp, dict):
+            remarks = resp.get("remarks", {})
+            if isinstance(remarks, dict):
+                msg = remarks.get("error_message", "")
+            elif isinstance(remarks, str):
+                msg = remarks
+        return jsonify({"valid": False, "error": msg or "Token validation failed", "raw": resp})
     except Exception as e:
         return jsonify({"valid": False, "error": str(e)}), 500
 
