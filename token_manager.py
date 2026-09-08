@@ -45,16 +45,27 @@ def _load_env():
 
 
 def _update_env_token(new_token: str):
-    """Write the new access token into the .env file."""
+    """Write the new access token into the .env file safely."""
+    if not os.path.exists(ENV_FILE):
+        logger.error(".env file does not exist!")
+        return
+
     with open(ENV_FILE, "r") as f:
         content = f.read()
 
-    content = re.sub(
-        r"^DHAN_ACCESS_TOKEN=.*$",
-        f"DHAN_ACCESS_TOKEN={new_token}",
-        content,
-        flags=re.MULTILINE,
-    )
+    if not content.strip():
+        logger.error(".env file is empty, skipping token update to preserve file integrity!")
+        return
+
+    if "DHAN_ACCESS_TOKEN=" in content:
+        content = re.sub(
+            r"^DHAN_ACCESS_TOKEN=.*$",
+            f"DHAN_ACCESS_TOKEN={new_token}",
+            content,
+            flags=re.MULTILINE,
+        )
+    else:
+        content = content.rstrip() + f"\nDHAN_ACCESS_TOKEN={new_token}\n"
 
     with open(ENV_FILE, "w") as f:
         f.write(content)
