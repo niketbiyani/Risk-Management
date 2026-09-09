@@ -766,24 +766,60 @@ class PositionMonitor:
 
     def _calc_unrealized(self) -> float:
         """
-        Calculate unrealized P&L from our own open trade cache + WebSocket LTP.
-        For SHORT trades: unrealized = (entry_price - ltp) * quantity
-        For LONG trades:  unrealized = (ltp - entry_price) * quantity
-        Returns 0 if no open trades or no LTP available yet.
+        Calculate unrealized P&L safely from open trade cache or live Dhan positions + WebSocket LTP.
+        Filters out invalid 0 LTP/price ticks to prevent false drawdown spikes or zero-price lockouts.
         """
         total = 0.0
-        for t in self._analyser_open_trades:
-            sid = str(t.get("security_id", ""))
-            ltp = self._ltp_cache.get(sid)
-            if not ltp:
-                continue
-            entry = t.get("entry_price") or 0
-            qty = t.get("quantity") or 0
-            direction = (t.get("direction") or "SHORT").upper()
-            if direction == "SHORT":
-                total += (entry - ltp) * qty
-            else:
-                total += (ltp - entry) * qty
+
+        # 1. First preference: analyser/open trade cache with live LTP
+        if self._analyser_open_trades:
+            valid_trades_count = 0
+            for t in self._analyser_open_trades:
+                sid = str(t.get("security_id", ""))
+                ltp = self._ltp_cache.get(sid)
+
+                # SANITY GUARD: If LTP is missing or <= 0, IGNORE to prevent false 0-price drawdown spike
+                if not ltp or ltp <= 0:
+                    continue
+
+                entry = t.get("entry_price") or 0
+                qty = t.get("quantity") or 0
+                if entry <= 0 or qty <= 0:
+                    continue
+
+                valid_trades_count += 1
+                direction = (t.get("direction") or "SHORT").upper()
+                if direction == "SHORT":
+                    total += (entry - ltp) * qty
+                else:
+                    total += (ltp - entry) * qty
+
+            if valid_trades_count > 0:
+                return total
+
+        # 2. Fallback: compute unrealized directly from Dhan open positions
+        if self._last_positions:
+            for pos in self._last_positions:
+                net_qty = pos.get("netQty", 0) or 0
+                if net_qty == 0:
+                    continue
+
+                sid = str(pos.get("securityId", ""))
+                ltp = self._ltp_cache.get(sid) or pos.get("lastTradedPrice", 0) or 0
+
+                # SANITY GUARD: If LTP is 0 or unpriced, ignore tick to prevent 0-value false lockout
+                if not ltp or ltp <= 0:
+                    continue
+
+                cost_price = pos.get("costPrice", 0) or pos.get("avgPrice", 0) or 0
+                if cost_price <= 0:
+                    continue
+
+                if net_qty > 0:  # LONG
+                    total += (ltp - cost_price) * net_qty
+                else:  # SHORT
+                    total += (cost_price - ltp) * abs(net_qty)
+
         return total
 
     def _persist_order_cache(self, orders: list):
