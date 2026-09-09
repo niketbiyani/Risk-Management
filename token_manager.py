@@ -34,13 +34,25 @@ ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
 
 def _load_env():
-    """Reload .env and return current credentials."""
+    """Reload .env and return current credentials robustly."""
     load_dotenv(ENV_FILE, override=True)
+    raw_env = {}
+    if os.path.exists(ENV_FILE):
+        try:
+            with open(ENV_FILE, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        raw_env[k.strip().upper()] = v.strip().strip("'\"")
+        except Exception:
+            pass
+
     return {
-        "client_id": os.getenv("DHAN_CLIENT_ID", "").strip(),
-        "access_token": os.getenv("DHAN_ACCESS_TOKEN", "").strip(),
-        "pin": os.getenv("DHAN_PIN", "").strip(),
-        "totp_secret": os.getenv("DHAN_TOTP_SECRET", "").strip(),
+        "client_id": (os.getenv("DHAN_CLIENT_ID") or raw_env.get("DHAN_CLIENT_ID") or "").strip().strip("'\""),
+        "access_token": (os.getenv("DHAN_ACCESS_TOKEN") or raw_env.get("DHAN_ACCESS_TOKEN") or "").strip().strip("'\""),
+        "pin": (os.getenv("DHAN_PIN") or raw_env.get("DHAN_PIN") or "").strip().strip("'\""),
+        "totp_secret": (os.getenv("DHAN_TOTP_SECRET") or raw_env.get("DHAN_TOTP_SECRET") or "").strip().strip("'\""),
     }
 
 
