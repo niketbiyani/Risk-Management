@@ -9246,10 +9246,11 @@ def api_token_status():
 @app.route("/api/token/refresh", methods=["POST"])
 def api_token_refresh():
     """Trigger automatic token refresh via PIN + TOTP (no manual token needed)."""
-    from token_manager import refresh_token, is_token_refresh_configured
+    from token_manager import refresh_token, _load_env
     import os as _os
 
-    if not is_token_refresh_configured():
+    creds = _load_env()
+    if not (creds.get("client_id") and creds.get("pin") and creds.get("totp_secret")):
         return jsonify({
             "status": "error",
             "message": "Auto-refresh not configured. Set DHAN_PIN and DHAN_TOTP_SECRET in .env"

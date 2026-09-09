@@ -667,10 +667,63 @@ class PositionMonitor:
 
     def _refresh_trade_cache(self, trigger: str = "periodic"):
         """
-        Fetch today's trades from trade-analyser and update realized + open trade caches.
+    def _sync_trades_from_dhan(self):
+        """Fallback: Fetch trades directly from Dhan API when trade-analyser is offline."""
+        try:
+            raw_trades = self.api.get_trade_book() or []
+            if not raw_trades:
+                logger.info("Direct Dhan trade sync: Trade book is currently empty for today.")
+                return
+
+            sorted_trades = sorted(raw_trades, key=lambda x: str(x.get("createTime") or x.get("exchangeTime") or ""))
+            contract_trades = {}
+            for t in sorted_trades:
+                sid = str(t.get("securityId", ""))
+                if sid:
+                    contract_trades.setdefault(sid, []).append(t)
+
+            total_realized_pnl = 0.0
+            closed_trade_count = 0
+
+            for sid, t_list in contract_trades.items():
+                buy_qty = 0
+                buy_val = 0.0
+                sell_qty = 0
+                sell_val = 0.0
+                for t in t_list:
+                    tx_type = str(t.get("transactionType", "")).upper()
+                    qty = int(t.get("tradedQuantity") or t.get("quantity") or 0)
+                    price = float(t.get("tradedPrice") or t.get("price") or 0)
+                    if tx_type == "BUY":
+                        buy_qty += qty
+                        buy_val += qty * price
+                    elif tx_type == "SELL":
+                        sell_qty += qty
+                        sell_val += qty * price
+
+                matched_qty = min(buy_qty, sell_qty)
+                if matched_qty > 0:
+                    avg_buy = buy_val / buy_qty if buy_qty > 0 else 0
+                    avg_sell = sell_val / sell_qty if sell_qty > 0 else 0
+                    pnl = (avg_sell - avg_buy) * matched_qty
+                    total_realized_pnl += pnl
+                    closed_trade_count += 1
+
+            self._analyser_realized_pnl = total_realized_pnl
+            self._analyser_closed_count = max(closed_trade_count, len(sorted_trades))
+            self._trade_cache_loaded = True
+            logger.info("Direct Dhan Trade Book Sync: Realized P&L = ₹%.2f from %d trades (%d closed matches)",
+                        total_realized_pnl, len(sorted_trades), closed_trade_count)
+        except Exception as e:
+            logger.warning("Direct Dhan trade sync exception: %s", e)
+
+    def _refresh_trade_cache(self, trigger="periodic"):
+        """
+        Fetch today's trades from trade-analyser or directly from Dhan API fallback.
         Triggers: 'startup', 'fill' (order fill detected), 'periodic' (60s fallback).
         """
         analyser = "http://localhost:5556"
+        analyser_ok = False
         try:
             req = urllib.request.Request(
                 f"{analyser}/api/import",
@@ -678,40 +731,38 @@ class PositionMonitor:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            urllib.request.urlopen(req, timeout=5)
+            urllib.request.urlopen(req, timeout=3)
+            analyser_ok = True
         except Exception as e:
-            logger.warning("Trade-analyser import failed (%s): %s", trigger, e)
-            return
+            logger.debug("Trade-analyser import offline (%s): %s. Falling back to direct Dhan API sync.", trigger, e)
 
-        try:
-            from datetime import timezone as _tz, timedelta as _td
-            ist = _tz((_td(hours=5, minutes=30)))
-            today = datetime.now(ist).strftime("%Y-%m-%d")
-            with urllib.request.urlopen(f"{analyser}/api/trades?date={today}", timeout=5) as resp:
-                trades = json.loads(resp.read())
+        if analyser_ok:
+            try:
+                from datetime import timezone as _tz, timedelta as _td
+                ist = _tz((_td(hours=5, minutes=30)))
+                today = datetime.now(ist).strftime("%Y-%m-%d")
+                with urllib.request.urlopen(f"{analyser}/api/trades?date={today}", timeout=3) as resp:
+                    trades = json.loads(resp.read())
 
-            closed = [t for t in trades if t.get("status") == "CLOSED"]
-            open_t = [t for t in trades if t.get("status") == "OPEN"]
+                closed = [t for t in trades if t.get("status") == "CLOSED"]
+                open_t = [t for t in trades if t.get("status") == "OPEN"]
 
-            new_pnl = sum(t.get("pnl", 0) or 0 for t in closed)
-            new_count = len(closed)
+                new_pnl = sum(t.get("pnl", 0) or 0 for t in closed)
+                new_count = len(closed)
 
-            # Prevent overwriting with stale/lagged data if trade count dropped
-            if new_count >= self._analyser_closed_count:
-                self._analyser_realized_pnl = new_pnl
-                self._analyser_closed_count = new_count
-                self._analyser_open_trades = open_t
-                self._trade_cache_loaded = True
-                logger.info("Trade cache refreshed (%s): realized=₹%.0f closed=%d open=%d",
-                            trigger, self._analyser_realized_pnl, len(closed), len(open_t))
-            else:
-                logger.warning(
-                    "Stale trade cache response ignored: new_closed=%d < prev_closed=%d. "
-                    "This indicates sync lag; keeping previous realized P&L ₹%.0f.",
-                    new_count, self._analyser_closed_count, self._analyser_realized_pnl
-                )
-        except Exception as e:
-            logger.warning("Trade-analyser fetch failed (%s): %s", trigger, e)
+                if new_count >= self._analyser_closed_count:
+                    self._analyser_realized_pnl = new_pnl
+                    self._analyser_closed_count = new_count
+                    self._analyser_open_trades = open_t
+                    self._trade_cache_loaded = True
+                    logger.info("Trade cache refreshed (%s): realized=₹%.0f closed=%d open=%d",
+                                trigger, self._analyser_realized_pnl, len(closed), len(open_t))
+                    return
+            except Exception as e:
+                logger.warning("Trade-analyser fetch failed (%s): %s", trigger, e)
+
+        # Fallback: Sync directly from Dhan API trade book
+        self._sync_trades_from_dhan()
 
     def _calc_unrealized(self) -> float:
         """
