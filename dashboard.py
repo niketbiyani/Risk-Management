@@ -9227,7 +9227,7 @@ def api_token_status():
         resp = _monitor.api.get_fund_limits()
         if isinstance(resp, dict):
             status = str(resp.get("status", "")).lower()
-            if status == "success" or "data" in resp:
+            if status == "success":
                 data = resp.get("data", {})
                 balance = data.get("availabelBalance") or data.get("availableBalance") if isinstance(data, dict) else None
                 return jsonify({"valid": True, "balance": balance})
