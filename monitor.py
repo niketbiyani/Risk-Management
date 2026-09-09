@@ -665,8 +665,6 @@ class PositionMonitor:
         except Exception as e:
             logger.error("Error in order update callback: %s", e)
 
-    def _refresh_trade_cache(self, trigger: str = "periodic"):
-        """
     def _sync_trades_from_dhan(self):
         """Fallback: Fetch trades directly from Dhan API when trade-analyser is offline."""
         try:
