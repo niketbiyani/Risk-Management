@@ -28,12 +28,18 @@ from dashboard import run_dashboard, emit_status_update, set_instrument_cache
 from instrument_cache import InstrumentCache
 from token_manager import refresh_token, is_token_refresh_configured
 
+from logging.handlers import RotatingFileHandler
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("platform.log"),
+        RotatingFileHandler(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "platform.log"),
+            maxBytes=10 * 1024 * 1024,  # 10 MB limit
+            backupCount=3,
+        ),
     ],
 )
 logger = logging.getLogger(__name__)

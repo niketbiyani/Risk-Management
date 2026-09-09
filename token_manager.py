@@ -219,13 +219,16 @@ def is_token_refresh_configured() -> bool:
 # Used by cron jobs and manual refresh.
 
 if __name__ == "__main__":
+    from logging.handlers import RotatingFileHandler
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler(
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "platform.log")
+            RotatingFileHandler(
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "platform.log"),
+                maxBytes=10 * 1024 * 1024,
+                backupCount=3,
             ),
         ],
     )
