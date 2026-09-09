@@ -67,10 +67,20 @@ def _update_env_token(new_token: str):
     else:
         content = content.rstrip() + f"\nDHAN_ACCESS_TOKEN={new_token}\n"
 
-    with open(ENV_FILE, "w") as f:
-        f.write(content)
-
-    logger.info("Updated access token in .env")
+    # Atomic write to temporary file first, then replace .env
+    tmp_file = ENV_FILE + ".tmp"
+    try:
+        with open(tmp_file, "w") as f:
+            f.write(content)
+        os.replace(tmp_file, ENV_FILE)
+        logger.info("Updated access token in .env")
+    except Exception as e:
+        logger.error("Failed to write updated access token to .env: %s", e)
+        if os.path.exists(tmp_file):
+            try:
+                os.remove(tmp_file)
+            except Exception:
+                pass
 
 
 def try_renew_token(client_id: str, current_token: str) -> str | None:
