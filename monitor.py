@@ -720,7 +720,7 @@ class PositionMonitor:
         Fetch today's trades from trade-analyser or directly from Dhan API fallback.
         Triggers: 'startup', 'fill' (order fill detected), 'periodic' (60s fallback).
         """
-        analyser = "http://localhost:5556"
+        analyser = os.getenv("TRADE_ANALYSER_URL", "http://localhost:5556")
         analyser_ok = False
         try:
             req = urllib.request.Request(

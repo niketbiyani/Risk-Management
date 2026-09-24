@@ -6262,7 +6262,7 @@ def api_journal_trades():
     return jsonify(_monitor.state.journal.get_trades(day=day, limit=limit))
 
 
-ANALYSER_URL = "http://localhost:5556"
+ANALYSER_URL = os.getenv("TRADE_ANALYSER_URL", "http://localhost:5556")
 
 
 def _analyser_import():
