@@ -124,7 +124,7 @@ def try_renew_token(client_id: str, current_token: str) -> str | None:
         return None
 
 
-def generate_fresh_token(client_id: str, pin: str, totp_secret: str, max_retries: int = 3) -> str | None:
+def generate_fresh_token(client_id: str, pin: str, totp_secret: str, max_retries: int = 5) -> str | None:
     """
     Generate a brand new token using PIN + TOTP. Fully headless, no browser needed.
     Retries on Dhan's rate limit ("Token can be generated once every 2 minutes").
@@ -151,8 +151,8 @@ def generate_fresh_token(client_id: str, pin: str, totp_secret: str, max_retries
                     msg = response.get("message", "")
                     if "once every" in msg.lower() or "2 minute" in msg.lower():
                         if attempt < max_retries:
-                            logger.warning("Rate limited by Dhan: %s. Waiting 130s before retry...", msg)
-                            time.sleep(130)
+                            logger.warning("Rate limited by Dhan: %s. Waiting 150s before retry...", msg)
+                            time.sleep(150)
                             continue
                         else:
                             logger.error("Rate limited by Dhan after %d attempts: %s", max_retries, msg)
